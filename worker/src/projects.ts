@@ -3,7 +3,7 @@ import { conflict, invalid, notFound, type AppError } from "./errors.js"
 import { randomToken, sha256Hex } from "./crypto.js"
 import { newId, nowIso } from "./ids.js"
 import { isLevel } from "./levels.js"
-import { Database } from "./services.js"
+import { CredentialCrypto, Database } from "./services.js"
 import type { Level, ProjectRow, ProjectView } from "./types.js"
 
 export interface CreateProjectInput {
@@ -58,7 +58,7 @@ export const findProjectRow = (id: string): Effect.Effect<ProjectRow, AppError, 
 export const getProject = (id: string): Effect.Effect<ProjectView, AppError, Database> =>
   Effect.map(findProjectRow(id), toView)
 
-export const authenticateProject = (apiKey: string): Effect.Effect<ProjectRow, AppError, Database> =>
+export const authenticateProject = (apiKey: string): Effect.Effect<ProjectRow, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const hash = yield* sha256Hex(apiKey)
@@ -69,7 +69,7 @@ export const authenticateProject = (apiKey: string): Effect.Effect<ProjectRow, A
 
 export const createProject = (
   input: CreateProjectInput
-): Effect.Effect<ProjectView & { readonly api_key: string }, AppError, Database> =>
+): Effect.Effect<ProjectView & { readonly api_key: string }, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const name = input.name?.trim()
@@ -77,9 +77,9 @@ export const createProject = (
       return yield* Effect.fail(invalid("project name is required and must be at most 120 characters"))
     }
 
-    const id = newId("prj")
+    const id = yield* newId("prj")
     const createdAt = nowIso()
-    const apiKey = `ops_proj_${randomToken(32)}`
+    const apiKey = `ops_proj_${yield* randomToken(32)}`
     const apiKeyHash = yield* sha256Hex(apiKey)
     const baseSlug = slugify(name)
     let slug = baseSlug
@@ -136,11 +136,11 @@ export const deleteProject = (id: string): Effect.Effect<void, AppError, Databas
 
 export const rotateProjectKey = (
   id: string
-): Effect.Effect<ProjectView & { readonly api_key: string }, AppError, Database> =>
+): Effect.Effect<ProjectView & { readonly api_key: string }, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* findProjectRow(id)
-    const apiKey = `ops_proj_${randomToken(32)}`
+    const apiKey = `ops_proj_${yield* randomToken(32)}`
     const hash = yield* sha256Hex(apiKey)
     yield* db.run("UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, nowIso(), id])
     const project = yield* getProject(id)

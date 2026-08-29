@@ -1,444 +1,359 @@
-import { Effect } from "effect"
-import { SESSION_COOKIE, isAdmin, requireAdmin, requireProject } from "./auth.js"
-import { randomToken, sha256Hex, verifyPasswordHash } from "./crypto.js"
-import { appError, forbidden, invalid, notFound, unauthorized, type AppError } from "./errors.js"
+import { Effect, Layer, Schema } from "effect"
+import { HttpServerRequest } from "effect/unstable/http"
 import {
-  createEventForProject,
-  eventDeliveries,
-  getEvent,
-  listEvents,
-  unsilenceEvent,
-  type CreateEventInput
-} from "./events.js"
+  HttpApi,
+  HttpApiBuilder,
+  HttpApiEndpoint,
+  HttpApiGroup,
+  HttpApiSchema,
+  OpenApi
+} from "effect/unstable/httpapi"
 import {
-  errorResponse,
-  jsonResponse,
-  matchPath,
-  noContent,
-  parseCookies,
-  readJson,
-  serializeCookie
-} from "./http.js"
-import { nowIso } from "./ids.js"
+  AuthLoginInput,
+  AuthState,
+  AuthStateWithCookie,
+  CommonErrors,
+  CreateEventInput,
+  CreateProjectInput,
+  CreateSilenceInput,
+  Deliveries,
+  Event,
+  EventCreated,
+  EventListQuery,
+  EventPage,
+  Health,
+  LogoutWithCookie,
+  Project,
+  ProjectCreated,
+  ProjectIcons,
+  Projects as ProjectsResponse,
+  PushPublicKey,
+  PushSubscription,
+  PushSubscriptions,
+  RegisterSubscriptionInput,
+  Settings as SettingsResponse,
+  Silence,
+  Silences as SilencesResponse,
+  Status,
+  TestNotificationInput,
+  TestNotificationResult,
+  Unsilenced,
+  UpdateProjectInput,
+  UpdateSettingsInput,
+  UpdateSubscriptionInput
+} from "./api-models.js"
 import {
-  createProject,
-  deleteProject,
-  findProjectRow,
-  getProject,
-  listProjects,
-  rotateProjectKey,
-  updateProject,
-  type CreateProjectInput,
-  type UpdateProjectInput
-} from "./projects.js"
+  Auth,
+  Events,
+  Projects,
+  Settings,
+  Silences,
+  Subscriptions,
+  System
+} from "./application.js"
 import {
-  createSilence,
-  deleteSilence,
-  getSilence,
-  listSilences,
-  type CreateSilenceInput
-} from "./silences.js"
-import { AppConfig, Database, PushQueue } from "./services.js"
-import { getSettings, updateSettings } from "./settings.js"
-import {
-  deleteSubscription,
-  listSubscriptions,
-  registerSubscription,
-  updateSubscription,
-  type RegisterSubscriptionInput
-} from "./subscriptions.js"
-import type { DeliveryRow, ProjectRow, SettingsView } from "./types.js"
+  AdminAuthorization,
+  CurrentProject,
+  ProjectAuthorization,
+  SameOrigin
+} from "./middleware.js"
 
-export type ApiServices = Database | AppConfig | PushQueue
+// Kept as a named schema so path codecs remain explicit and reusable.
+const SchemaString = Schema.String
 
-const requireSameOrigin = (request: Request): Effect.Effect<void, AppError> => {
-  const origin = request.headers.get("origin")
-  if (!origin) return Effect.void
-  if (origin !== new URL(request.url).origin) {
-    return Effect.fail(forbidden("cross-origin administrative requests are not allowed"))
-  }
-  return Effect.void
-}
 
-const guardAdmin = (
-  request: Request,
-  mutation = false
-): Effect.Effect<void, AppError, Database | AppConfig> =>
-  Effect.gen(function*() {
-    yield* requireAdmin(request)
-    if (mutation) yield* requireSameOrigin(request)
-  })
-
-const sessionCookie = (request: Request, token: string, maxAge: number): string =>
-  serializeCookie(SESSION_COOKIE, token, {
-    maxAge,
-    httpOnly: true,
-    sameSite: "Lax",
-    secure: new URL(request.url).protocol === "https:"
-  })
-
-const authMe = (request: Request): Effect.Effect<Response, AppError, Database | AppConfig> =>
-  Effect.map(isAdmin(request), (authenticated) =>
-    jsonResponse({ auth_required: true, authenticated })
+export class HealthApiGroup extends HttpApiGroup.make("health")
+  .add(
+    HttpApiEndpoint.get("health", "/health", {
+      success: Health,
+      error: CommonErrors
+    })
   )
+{}
 
-const authLogin = (request: Request): Effect.Effect<Response, AppError, Database | AppConfig> =>
-  Effect.gen(function*() {
-    yield* requireSameOrigin(request)
-    const input = yield* readJson<{ readonly username?: string; readonly password?: string }>(request)
-    const config = yield* AppConfig
-    const validInput = typeof input.username === "string" && input.username.length <= 120 &&
-      typeof input.password === "string" && input.password.length <= 1_024
-    const validPassword = validInput
-      ? yield* verifyPasswordHash(input.password!, config.adminPasswordHash)
-      : false
-    if (input.username !== config.adminUser || !validPassword) {
-      return yield* Effect.fail(appError(401, "bad_credentials", "wrong username or password"))
-    }
-
-    const db = yield* Database
-    const token = randomToken(32)
-    const tokenHash = yield* sha256Hex(token)
-    const now = nowIso()
-    const expires = new Date(Date.now() + 30 * 86_400_000).toISOString()
-    yield* db.run(
-      "INSERT INTO admin_sessions (token_hash, expires_at, created_at) VALUES (?, ?, ?)",
-      [tokenHash, expires, now]
-    )
-
-    return jsonResponse(
-      { auth_required: true, authenticated: true },
-      200,
-      { "set-cookie": sessionCookie(request, token, 30 * 86_400) }
-    )
-  })
-
-const authLogout = (request: Request): Effect.Effect<Response, AppError, Database> =>
-  Effect.gen(function*() {
-    yield* requireSameOrigin(request)
-    const token = parseCookies(request)[SESSION_COOKIE]
-    if (token) {
-      const db = yield* Database
-      const hash = yield* sha256Hex(token)
-      yield* db.run("DELETE FROM admin_sessions WHERE token_hash = ?", [hash])
-    }
-    return noContent({
-      "set-cookie": serializeCookie(SESSION_COOKIE, "", {
-        maxAge: 0,
-        expires: new Date(0),
-        secure: new URL(request.url).protocol === "https:"
-      })
+export class PublicApiGroup extends HttpApiGroup.make("public")
+  .add(
+    HttpApiEndpoint.get("authMe", "/auth/me", {
+      success: AuthState,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("authLogin", "/auth/login", {
+      payload: AuthLoginInput,
+      success: AuthStateWithCookie,
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.post("authLogout", "/auth/logout", {
+      success: LogoutWithCookie,
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.get("pushPublicKey", "/push/public-key", {
+      success: PushPublicKey,
+      error: CommonErrors
     })
-  })
+  )
+  .prefix("/api/v1")
+{}
 
-const health = (): Effect.Effect<Response, AppError, Database> =>
-  Effect.gen(function*() {
-    const db = yield* Database
-    yield* db.first<{ readonly ok: number }>("SELECT 1 AS ok")
-    return jsonResponse({ status: "ok" })
-  })
-
-const status = (request: Request): Effect.Effect<Response, AppError, Database | AppConfig> =>
-  Effect.gen(function*() {
-    yield* guardAdmin(request)
-    const db = yield* Database
-    const config = yield* AppConfig
-    const counts = yield* db.first<{
-      readonly projects: number
-      readonly events: number
-      readonly subscriptions: number
-      readonly enabled_subscriptions: number
-    }>(
-      `SELECT
-         (SELECT COUNT(*) FROM projects) AS projects,
-         (SELECT COUNT(*) FROM events) AS events,
-         (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
-         (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions`
-    )
-    const lastPush = yield* db.first<DeliveryRow>(
-      `SELECT d.id, d.event_id, d.subscription_id,
-              COALESCE(s.name, '') AS subscription_name,
-              d.status, d.response_status, d.error, d.attempted_at
-       FROM deliveries d
-       LEFT JOIN push_subscriptions s ON s.id = d.subscription_id
-       ORDER BY d.attempted_at DESC LIMIT 1`
-    )
-    const settings = yield* getSettings
-
-    return jsonResponse({
-      version: "0.1.0",
-      server: "ops-context/effect-v4/cloudflare-workers",
-      database: "Cloudflare D1",
-      base_url: config.baseUrl ?? new URL(request.url).origin,
-      uptime_seconds: null,
-      web_push: {
-        configured: Boolean(config.vapidPublicKey && config.vapidPrivateJwk && config.vapidSubject),
-        subject: config.vapidSubject
-      },
-      projects: counts?.projects ?? 0,
-      events: counts?.events ?? 0,
-      subscriptions: counts?.subscriptions ?? 0,
-      enabled_subscriptions: counts?.enabled_subscriptions ?? 0,
-      last_push: lastPush,
-      retention_days: settings.retention_days,
-      setup_completed: settings.setup_completed,
-      admin_auth: true
+export class IngestApiGroup extends HttpApiGroup.make("ingest")
+  .add(
+    HttpApiEndpoint.post("createEvent", "/events", {
+      payload: CreateEventInput,
+      success: EventCreated.pipe(HttpApiSchema.status(201)),
+      error: CommonErrors
     })
-  })
+  )
+  .middleware(ProjectAuthorization)
+  .prefix("/api/v1")
+{}
 
-const listSilencesResponse = (request: Request): Effect.Effect<Response, AppError, Database | AppConfig> =>
-  Effect.gen(function*() {
-    yield* guardAdmin(request)
-    const db = yield* Database
-    const silences = yield* listSilences
-    const count = yield* db.first<{ readonly count: number }>(
-      "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL"
-    )
-    return jsonResponse({
-      silences,
-      fields: ["fingerprint", "title", "source"],
-      silenced_events: count?.count ?? 0
-    })
-  })
+export class AdminApiGroup extends HttpApiGroup.make("admin")
+  .add(
+    HttpApiEndpoint.get("listEvents", "/events", {
+      query: EventListQuery,
+      success: EventPage,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.get("getEvent", "/events/:id", {
+      params: { id: SchemaString },
+      success: Event,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.get("eventDeliveries", "/events/:id/deliveries", {
+      params: { id: SchemaString },
+      success: Deliveries,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("unsilenceEvent", "/events/:id/unsilence", {
+      params: { id: SchemaString },
+      success: Unsilenced,
+      error: CommonErrors
+    }).middleware(SameOrigin),
 
-const testNotification = (request: Request): Effect.Effect<Response, AppError, ApiServices> =>
-  Effect.gen(function*() {
-    yield* guardAdmin(request, true)
-    const input = yield* readJson<{ readonly project_id?: string }>(request, { optional: true })
-    const db = yield* Database
-    const config = yield* AppConfig
-    const selected: ProjectRow | null = input.project_id
-      ? yield* findProjectRow(input.project_id)
-      : yield* db.first<ProjectRow>("SELECT * FROM projects ORDER BY created_at LIMIT 1")
-    if (!selected) return yield* Effect.fail(notFound("create a project before sending a test notification"))
+    HttpApiEndpoint.get("listProjects", "/projects", {
+      success: ProjectsResponse,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.get("projectIcons", "/projects/icons", {
+      success: ProjectIcons,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("createProject", "/projects", {
+      payload: CreateProjectInput,
+      success: ProjectCreated.pipe(HttpApiSchema.status(201)),
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.get("getProject", "/projects/:id", {
+      params: { id: SchemaString },
+      success: Project,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.patch("updateProject", "/projects/:id", {
+      params: { id: SchemaString },
+      payload: UpdateProjectInput,
+      success: Project,
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.delete("deleteProject", "/projects/:id", {
+      params: { id: SchemaString },
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.post("rotateProjectKey", "/projects/:id/rotate-key", {
+      params: { id: SchemaString },
+      success: ProjectCreated,
+      error: CommonErrors
+    }).middleware(SameOrigin),
 
-    const event = yield* createEventForProject(selected, {
-      title: "Ops Context is connected",
-      body: "Web Push delivery is working.",
-      level: "success",
-      source: "ops-context",
-      type: "test",
-      fingerprint: "ops-context-test",
-      data: { test: true }
-    })
-    return jsonResponse({ event, web_push_configured: Boolean(config.vapidPublicKey && config.vapidPrivateJwk && config.vapidSubject) }, 201)
-  })
+    HttpApiEndpoint.get("listSubscriptions", "/push/subscriptions", {
+      success: PushSubscriptions,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("registerSubscription", "/push/subscriptions", {
+      payload: RegisterSubscriptionInput,
+      success: PushSubscription.pipe(HttpApiSchema.status(201)),
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.patch("updateSubscription", "/push/subscriptions/:id", {
+      params: { id: SchemaString },
+      payload: UpdateSubscriptionInput,
+      success: PushSubscription,
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.delete("deleteSubscription", "/push/subscriptions/:id", {
+      params: { id: SchemaString },
+      error: CommonErrors
+    }).middleware(SameOrigin),
 
-const routeNotFound = (): Effect.Effect<Response, AppError> =>
-  Effect.fail(notFound("no such endpoint"))
+    HttpApiEndpoint.get("listSilences", "/silences", {
+      success: SilencesResponse,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("createSilence", "/silences", {
+      payload: CreateSilenceInput,
+      success: Silence.pipe(HttpApiSchema.status(201)),
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.get("getSilence", "/silences/:id", {
+      params: { id: SchemaString },
+      success: Silence,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.delete("deleteSilence", "/silences/:id", {
+      params: { id: SchemaString },
+      error: CommonErrors
+    }).middleware(SameOrigin),
 
-export const handleApi = (request: Request): Effect.Effect<Response, AppError, ApiServices> => {
-  const url = new URL(request.url)
-  const method = request.method.toUpperCase()
-  const path = url.pathname
+    HttpApiEndpoint.get("getSettings", "/settings", {
+      success: SettingsResponse,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.patch("updateSettings", "/settings", {
+      payload: UpdateSettingsInput,
+      success: SettingsResponse,
+      error: CommonErrors
+    }).middleware(SameOrigin),
+    HttpApiEndpoint.get("status", "/status", {
+      success: Status,
+      error: CommonErrors
+    }),
+    HttpApiEndpoint.post("testNotification", "/test", {
+      payload: TestNotificationInput,
+      success: TestNotificationResult.pipe(HttpApiSchema.status(201)),
+      error: CommonErrors
+    }).middleware(SameOrigin)
+  )
+  .middleware(AdminAuthorization)
+  .prefix("/api/v1")
+{}
 
-  if (method === "GET" && path === "/health") return health()
-  if (method === "GET" && path === "/api/v1/auth/me") return authMe(request)
-  if (method === "POST" && path === "/api/v1/auth/login") return authLogin(request)
-  if (method === "POST" && path === "/api/v1/auth/logout") return authLogout(request)
+export class OpsApi extends HttpApi.make("ops-context")
+  .add(HealthApiGroup)
+  .add(PublicApiGroup)
+  .add(IngestApiGroup)
+  .add(AdminApiGroup)
+  .annotateMerge(OpenApi.annotations({
+    title: "Ops Context API",
+    version: "0.2.0",
+    description: "Operational events, browser push subscriptions, silences, and administration."
+  }))
+{}
 
-  if (method === "GET" && path === "/api/v1/push/public-key") {
-    return Effect.gen(function*() {
-      const config = yield* AppConfig
-      if (!config.vapidPublicKey) {
-        return yield* Effect.fail(appError(503, "push_not_configured", "Web Push is not configured"))
-      }
-      return jsonResponse({ public_key: config.vapidPublicKey })
-    })
-  }
-
-  if (method === "POST" && path === "/api/v1/events") {
-    return Effect.gen(function*() {
-      const project = yield* requireProject(request)
-      const input = yield* readJson<CreateEventInput>(request)
-      const event = yield* createEventForProject(project, input)
-      return jsonResponse({ id: event.id, created_at: event.created_at }, 201)
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/events") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      const project = url.searchParams.get("project")
-      const level = url.searchParams.get("level")
-      const source = url.searchParams.get("source")
-      const silenced = url.searchParams.get("silenced")
-      const before = url.searchParams.get("before")
-      const limit = url.searchParams.get("limit")
-      const page = yield* listEvents({
-        ...(project ? { project } : {}),
-        ...(level ? { level } : {}),
-        ...(source ? { source } : {}),
-        ...(silenced ? { silenced } : {}),
-        ...(before ? { before } : {}),
-        ...(limit ? { limit } : {})
-      })
-      return jsonResponse(page)
-    })
-  }
-
-  const deliveriesMatch = matchPath("/api/v1/events/:id/deliveries", path)
-  if (method === "GET" && deliveriesMatch) {
-    const eventId = deliveriesMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse({ deliveries: yield* eventDeliveries(eventId) })
-    })
-  }
-
-  const unsilenceMatch = matchPath("/api/v1/events/:id/unsilence", path)
-  if (method === "POST" && unsilenceMatch) {
-    const eventId = unsilenceMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      return jsonResponse(yield* unsilenceEvent(eventId))
-    })
-  }
-
-  const eventMatch = matchPath("/api/v1/events/:id", path)
-  if (method === "GET" && eventMatch) {
-    const eventId = eventMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse(yield* getEvent(eventId))
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/projects") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse({ projects: yield* listProjects })
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/projects/icons") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse({ icons: ["", "🚀", "🗄️", "💳", "🛡️", "📦", "⚙️", "🧪", "📈", "🔔"] })
-    })
-  }
-
-  if (method === "POST" && path === "/api/v1/projects") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const input = yield* readJson<CreateProjectInput>(request)
-      return jsonResponse(yield* createProject(input), 201)
-    })
-  }
-
-  const rotateProjectMatch = matchPath("/api/v1/projects/:id/rotate-key", path)
-  if (method === "POST" && rotateProjectMatch) {
-    const projectId = rotateProjectMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      return jsonResponse(yield* rotateProjectKey(projectId))
-    })
-  }
-
-  const projectMatch = matchPath("/api/v1/projects/:id", path)
-  if (projectMatch && method === "GET") {
-    const projectId = projectMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse(yield* getProject(projectId))
-    })
-  }
-  if (projectMatch && method === "PATCH") {
-    const projectId = projectMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const patch = yield* readJson<UpdateProjectInput>(request)
-      return jsonResponse(yield* updateProject(projectId, patch))
-    })
-  }
-  if (projectMatch && method === "DELETE") {
-    const projectId = projectMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      yield* deleteProject(projectId)
-      return noContent()
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/push/subscriptions") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse({ subscriptions: yield* listSubscriptions })
-    })
-  }
-
-  if (method === "POST" && path === "/api/v1/push/subscriptions") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const input = yield* readJson<RegisterSubscriptionInput>(request)
-      const subscription = yield* registerSubscription(input, request.headers.get("user-agent") ?? "")
-      return jsonResponse(subscription, 201)
-    })
-  }
-
-  const subscriptionMatch = matchPath("/api/v1/push/subscriptions/:id", path)
-  if (subscriptionMatch && method === "PATCH") {
-    const subscriptionId = subscriptionMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const patch = yield* readJson<{ readonly name?: string; readonly enabled?: boolean }>(request)
-      return jsonResponse(yield* updateSubscription(subscriptionId, patch))
-    })
-  }
-  if (subscriptionMatch && method === "DELETE") {
-    const subscriptionId = subscriptionMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      yield* deleteSubscription(subscriptionId)
-      return noContent()
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/silences") return listSilencesResponse(request)
-  if (method === "POST" && path === "/api/v1/silences") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const input = yield* readJson<CreateSilenceInput>(request)
-      return jsonResponse(yield* createSilence(input), 201)
-    })
-  }
-
-  const silenceMatch = matchPath("/api/v1/silences/:id", path)
-  if (silenceMatch && method === "GET") {
-    const silenceId = silenceMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse(yield* getSilence(silenceId))
-    })
-  }
-  if (silenceMatch && method === "DELETE") {
-    const silenceId = silenceMatch.params.id!
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      yield* deleteSilence(silenceId)
-      return noContent()
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/settings") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request)
-      return jsonResponse(yield* getSettings)
-    })
-  }
-  if (method === "PATCH" && path === "/api/v1/settings") {
-    return Effect.gen(function*() {
-      yield* guardAdmin(request, true)
-      const patch = yield* readJson<Partial<SettingsView>>(request)
-      return jsonResponse(yield* updateSettings(patch))
-    })
-  }
-
-  if (method === "GET" && path === "/api/v1/status") return status(request)
-  if (method === "POST" && path === "/api/v1/test") return testNotification(request)
-
-  return routeNotFound()
+const requestOrigin = (request: HttpServerRequest.HttpServerRequest): string => {
+  const protocol = request.headers["x-forwarded-proto"] ?? "https"
+  const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? "localhost"
+  return `${protocol}://${host}`
 }
 
-export const handleApiSafely = (request: Request): Effect.Effect<Response, never, ApiServices> =>
-  handleApi(request).pipe(Effect.catch((error) => Effect.succeed(errorResponse(error))))
+export const HealthHandlers = HttpApiBuilder.group(
+  OpsApi,
+  "health",
+  Effect.fn(function*(handlers) {
+    const system = yield* System
+    return handlers.handle("health", () => system.health)
+  })
+)
+
+export const PublicHandlers = HttpApiBuilder.group(
+  OpsApi,
+  "public",
+  Effect.fn(function*(handlers) {
+    const auth = yield* Auth
+    const system = yield* System
+
+    return handlers.handleAll({
+      authMe: Effect.fn(function*() {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* auth.me(request)
+      }),
+      authLogin: Effect.fn(function*({ payload }) {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const result = yield* auth.login(request, payload)
+        return HttpApiSchema.withHeaders({
+          body: result.state,
+          headers: { "set-cookie": result.cookie }
+        })
+      }),
+      authLogout: Effect.fn(function*() {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const cookie = yield* auth.logout(request)
+        return HttpApiSchema.withHeaders({
+          body: undefined,
+          headers: { "set-cookie": cookie }
+        })
+      }),
+      pushPublicKey: () => system.publicKey
+    })
+  })
+)
+
+export const IngestHandlers = HttpApiBuilder.group(
+  OpsApi,
+  "ingest",
+  Effect.fn(function*(handlers) {
+    const events = yield* Events
+    return handlers.handle("createEvent", ({ payload }) =>
+      Effect.gen(function*() {
+        const project = yield* CurrentProject
+        const event = yield* events.create(project, payload)
+        return { id: event.id, created_at: event.created_at }
+      }))
+  })
+)
+
+export const AdminHandlers = HttpApiBuilder.group(
+  OpsApi,
+  "admin",
+  Effect.fn(function*(handlers) {
+    const events = yield* Events
+    const projects = yield* Projects
+    const subscriptions = yield* Subscriptions
+    const silences = yield* Silences
+    const settings = yield* Settings
+    const system = yield* System
+
+    return handlers.handleAll({
+      listEvents: ({ query }) => events.list(query),
+      getEvent: ({ params }) => events.get(params.id),
+      eventDeliveries: ({ params }) =>
+        Effect.map(events.deliveries(params.id), (deliveries) => ({ deliveries })),
+      unsilenceEvent: ({ params }) => events.unsilence(params.id),
+
+      listProjects: () => Effect.map(projects.list, (projects) => ({ projects })),
+      projectIcons: () => Effect.succeed({
+        icons: ["", "🚀", "🗄️", "💳", "🛡️", "📦", "⚙️", "🧪", "📈", "🔔"]
+      }),
+      createProject: ({ payload }) => projects.create(payload),
+      getProject: ({ params }) => projects.get(params.id),
+      updateProject: ({ params, payload }) => projects.update(params.id, payload),
+      deleteProject: ({ params }) => projects.delete(params.id),
+      rotateProjectKey: ({ params }) => projects.rotateKey(params.id),
+
+      listSubscriptions: () => Effect.map(subscriptions.list, (subscriptions) => ({ subscriptions })),
+      registerSubscription: Effect.fn(function*({ payload }) {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* subscriptions.register(payload, request.headers["user-agent"] ?? "")
+      }),
+      updateSubscription: ({ params, payload }) => subscriptions.update(params.id, payload),
+      deleteSubscription: ({ params }) => subscriptions.delete(params.id),
+
+      listSilences: () => silences.listSummary,
+      createSilence: ({ payload }) => silences.create(payload),
+      getSilence: ({ params }) => silences.get(params.id),
+      deleteSilence: ({ params }) => silences.delete(params.id),
+
+      getSettings: () => settings.get,
+      updateSettings: ({ payload }) => settings.update(payload),
+      status: Effect.fn(function*() {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* system.status(requestOrigin(request))
+      }),
+      testNotification: ({ payload }) => system.testNotification(payload.project_id)
+    })
+  })
+)
+
+export const ApiHandlers = Layer.mergeAll(
+  HealthHandlers,
+  PublicHandlers,
+  IngestHandlers,
+  AdminHandlers
+)

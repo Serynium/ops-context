@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { invalid, notFound, type AppError } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { Database } from "./services.js"
+import { CredentialCrypto, Database } from "./services.js"
 import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
 
 export interface BrowserPushSubscription {
@@ -78,7 +78,7 @@ export const findSubscriptionRow = (
 export const registerSubscription = (
   input: RegisterSubscriptionInput,
   userAgent: string
-): Effect.Effect<PushSubscriptionView, AppError, Database> =>
+): Effect.Effect<PushSubscriptionView, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* Effect.try({
@@ -94,7 +94,7 @@ export const registerSubscription = (
       "SELECT * FROM push_subscriptions WHERE endpoint = ?",
       [input.subscription.endpoint]
     )
-    const id = existing?.id ?? newId("sub")
+    const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
 
     yield* db.run(

@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { invalid, notFound, type AppError } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { Database } from "./services.js"
+import { CredentialCrypto, Database } from "./services.js"
 import type { SilenceRow } from "./types.js"
 
 export type SilenceField = "fingerprint" | "title" | "source"
@@ -42,7 +42,7 @@ export const getSilence = (id: string): Effect.Effect<SilenceRow, AppError, Data
 
 export const createSilence = (
   input: CreateSilenceInput
-): Effect.Effect<SilenceRow, AppError, Database> =>
+): Effect.Effect<SilenceRow, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     if (!fields.has(input.field)) return yield* Effect.fail(invalid("silence field is invalid"))
@@ -56,7 +56,7 @@ export const createSilence = (
       if (!project) return yield* Effect.fail(notFound("project not found"))
     }
 
-    const id = newId("sil")
+    const id = yield* newId("sil")
     yield* db.run(
       "INSERT INTO silences (id, project_id, field, value, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       [id, input.project_id ?? null, input.field, value, input.note?.trim().slice(0, 1000) ?? "", nowIso()]

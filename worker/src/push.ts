@@ -1,8 +1,7 @@
-import { buildPushHTTPRequest } from "@pushforge/builder"
 import { Effect } from "effect"
 import { internal, type AppError } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { AppConfig, Database } from "./services.js"
+import { CredentialCrypto, Database, WebPush } from "./services.js"
 import type { EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
 
 interface PushJobRow {
@@ -34,22 +33,23 @@ const recordAttempt = (
   status: "sent" | "failed" | "skipped",
   responseStatus: number | null,
   error: string
-): Effect.Effect<void, AppError, Database> =>
+): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const at = nowIso()
+    const deliveryId = yield* newId("dlv")
     yield* db.run(
       `INSERT INTO deliveries
        (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [newId("dlv"), message.eventId, message.subscriptionId, status, responseStatus, error.slice(0, 4_000), at, at]
+      [deliveryId, message.eventId, message.subscriptionId, status, responseStatus, error.slice(0, 4_000), at, at]
     )
   })
 
 const finalizeSuccess = (
   message: PushJobMessage,
   responseStatus: number
-): Effect.Effect<void, AppError, Database> =>
+): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* db.run(
@@ -66,10 +66,11 @@ const finalizePermanentFailure = (
   responseStatus: number | null,
   error: string,
   disableSubscription: boolean
-): Effect.Effect<void, AppError, Database> =>
+): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const now = nowIso()
+    const deliveryId = yield* newId("dlv")
     const statements = [
       {
         sql: `UPDATE push_jobs
@@ -82,7 +83,7 @@ const finalizePermanentFailure = (
               (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
               VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)`,
         params: [
-          newId("dlv"),
+          deliveryId,
           message.eventId,
           message.subscriptionId,
           responseStatus,
@@ -106,12 +107,13 @@ const scheduleRetry = (
   attempts: number,
   responseStatus: number | null,
   error: string
-): Effect.Effect<number, AppError, Database> =>
+): Effect.Effect<number, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const delaySeconds = Math.min(900, Math.max(15, 15 * 2 ** Math.min(attempts, 6)))
     const availableAt = new Date(Date.now() + delaySeconds * 1_000).toISOString()
     const now = nowIso()
+    const deliveryId = yield* newId("dlv")
     yield* db.batch([
       {
         sql: `UPDATE push_jobs
@@ -125,7 +127,7 @@ const scheduleRetry = (
               (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
               VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)`,
         params: [
-          newId("dlv"),
+          deliveryId,
           message.eventId,
           message.subscriptionId,
           responseStatus,
@@ -195,10 +197,10 @@ const claim = (message: PushJobMessage): Effect.Effect<boolean, AppError, Databa
 
 export const processPushMessage = (
   message: PushJobMessage
-): Effect.Effect<PushOutcome, AppError, Database | AppConfig> =>
+): Effect.Effect<PushOutcome, AppError, Database | WebPush | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
-    const config = yield* AppConfig
+    const webPush = yield* WebPush
 
     const before = yield* db.first<PushJobRow>(
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
@@ -225,54 +227,35 @@ export const processPushMessage = (
     const body = context.event.body || context.event.title
     const urgency = context.event.level === "critical" || context.event.level === "error" ? "high" : "normal"
 
-    const request = yield* Effect.tryPromise({
-      try: () =>
-        buildPushHTTPRequest({
-          privateJWK: config.vapidPrivateJwk,
-          subscription: {
-            endpoint: context.subscription.endpoint,
-            keys: {
-              p256dh: context.subscription.p256dh,
-              auth: context.subscription.auth
-            }
-          },
-          message: {
-            payload: {
-              title,
-              body,
-              icon: "/icons/icon-192.png",
-              badge: "/icons/badge-96.png",
-              tag: context.event.id,
-              data: {
-                url: `/?event=${encodeURIComponent(context.event.id)}`,
-                eventId: context.event.id,
-                projectId: context.event.project_id,
-                level: context.event.level
-              }
-            },
-            adminContact: config.vapidSubject,
-            options: {
-              ttl: 86_400,
-              urgency,
-              topic: topicFor(context.event.id)
-            }
+    const sent = yield* webPush.send(
+      {
+        endpoint: context.subscription.endpoint,
+        keys: {
+          p256dh: context.subscription.p256dh,
+          auth: context.subscription.auth
+        }
+      },
+      {
+        payload: {
+          title,
+          body,
+          icon: "/icons/icon-192.png",
+          badge: "/icons/badge-96.png",
+          tag: context.event.id,
+          data: {
+            url: `/?event=${encodeURIComponent(context.event.id)}`,
+            eventId: context.event.id,
+            projectId: context.event.project_id,
+            level: context.event.level
           }
-        }),
-      catch: (cause) => internal("failed to build Web Push request", cause)
-    }).pipe(
-      Effect.catch((error) =>
-        scheduleRetry(message, context.job.attempts, null, error.message).pipe(
-          Effect.map((delaySeconds) => ({ _tag: "Retry", delaySeconds } as PushOutcome))
-        )
-      )
-    )
-
-    if ("_tag" in request) return request
-
-    const sent = yield* Effect.tryPromise({
-      try: () => fetch(request.endpoint, { method: "POST", headers: request.headers, body: request.body }),
-      catch: (cause) => internal("Web Push transport failed", cause)
-    }).pipe(
+        },
+        options: {
+          ttl: 86_400,
+          urgency,
+          topic: topicFor(context.event.id)
+        }
+      }
+    ).pipe(
       Effect.catch((error) =>
         scheduleRetry(message, context.job.attempts, null, error.message).pipe(
           Effect.map((delaySeconds) => ({ _tag: "Retry", delaySeconds } as PushOutcome))
@@ -303,4 +286,4 @@ export const processPushMessage = (
 
     yield* finalizePermanentFailure(message, sent.status, details, false)
     return { _tag: "PermanentFailure" } as const
-  })
+  }).pipe(Effect.withSpan("PushDelivery.process", { attributes: { eventId: message.eventId } }))

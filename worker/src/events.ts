@@ -4,7 +4,7 @@ import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
 import { redactValue } from "./redact.js"
-import { AppConfig, Database, PushQueue } from "./services.js"
+import { AppConfig, CredentialCrypto, Database, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
@@ -130,7 +130,7 @@ const normalizeInput = (input: CreateEventInput, createdAt: string): CreateEvent
 export const createEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventView, AppError, Database | PushQueue | AppConfig> =>
+): Effect.Effect<EventView, AppError, Database | PushQueue | AppConfig | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const queue = yield* PushQueue
@@ -163,7 +163,7 @@ export const createEventForProject = (
       ["source", normalized.source ?? ""]
     ])
 
-    const eventId = newId("evt")
+    const eventId = yield* newId("evt")
     const shouldNotify = project.notify === 1 && atLeast(normalized.level ?? "info", project.min_level) && !silenceId
     const subscriptions = shouldNotify ? yield* listEnabledSubscriptionRows : []
     const messages: ReadonlyArray<PushJobMessage> = subscriptions.map((subscription) => ({
