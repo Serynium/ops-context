@@ -38,8 +38,7 @@ jobs:
               file.write_text(text)
 
           events = Path("worker/src/events.ts")
-          text = events.read_text().replace("Effect.catchAll(", "Effect.catch(")
-          events.write_text(text)
+          events.write_text(events.read_text().replace("Effect.catchAll(", "Effect.catch("))
 
           subscriptions = Path("worker/src/subscriptions.ts")
           text = subscriptions.read_text()
@@ -72,15 +71,36 @@ jobs:
           }""",
           )
           index.write_text(text)
+
+          web = Path("web/src/main.ts")
+          text = web.read_text()
+          old = """const urlBase64ToBytes = (value: string): Uint8Array => {
+            const normalized = value.replaceAll("-", "+").replaceAll("_", "/")
+            const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
+            const binary = atob(padded)
+            return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+          }"""
+          new = """const urlBase64ToBytes = (value: string): ArrayBuffer => {
+            const normalized = value.replaceAll("-", "+").replaceAll("_", "/")
+            const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
+            const binary = atob(padded)
+            const bytes = new Uint8Array(binary.length)
+            for (let index = 0; index < binary.length; index += 1) {
+              bytes[index] = binary.charCodeAt(index)
+            }
+            return bytes.buffer as ArrayBuffer
+          }"""
+          text = text.replace(old, new)
+          web.write_text(text)
           PY
       - name: Commit fixes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add worker/src
+          git add worker/src web/src/main.ts
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "Normalize Effect v4 boundary types [skip effect-fix]"
+          git commit -m "Fix Web Push BufferSource typing [skip effect-fix]"
           git push origin HEAD:refactor/effect-v4-architecture
