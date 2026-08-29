@@ -1,0 +1,137 @@
+name: Fix Effect refactor type contracts
+
+on:
+  push:
+    branches:
+      - refactor/effect-v4-architecture
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[skip effect-fix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/effect-v4-architecture
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply exact Effect boundary fixes
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"pattern not found in {path}: {old!r}")
+              file.write_text(text.replace(old, new))
+
+          replace(
+              "worker/src/api-models.ts",
+              "Schema.Record({ key: Schema.String, value: Schema.Unknown })",
+              "Schema.Record(Schema.String, Schema.Unknown)"
+          )
+
+          replacements = {
+              "worker/src/events.ts": [
+                  ("readonly external_id?: string", "readonly external_id?: string | undefined"),
+                  ("readonly source?: string", "readonly source?: string | undefined"),
+                  ("readonly type?: string", "readonly type?: string | undefined"),
+                  ("readonly level?: Level", "readonly level?: Level | undefined"),
+                  ("readonly body?: string", "readonly body?: string | undefined"),
+                  ("readonly fingerprint?: string", "readonly fingerprint?: string | undefined"),
+                  ("readonly occurred_at?: string", "readonly occurred_at?: string | undefined"),
+                  ("readonly data?: unknown", "readonly data?: unknown | undefined"),
+                  ("readonly next_cursor?: string", "readonly next_cursor?: string | undefined"),
+                  ("readonly project?: string", "readonly project?: string | undefined"),
+                  ("readonly level?: string", "readonly level?: string | undefined"),
+                  ("readonly silenced?: string", "readonly silenced?: string | undefined"),
+                  ("readonly before?: string", "readonly before?: string | undefined"),
+                  ("readonly limit?: string", "readonly limit?: string | undefined"),
+                  ("Effect.catch(() => Effect.succeed(false))", "Effect.catchAll(() => Effect.succeed(false))")
+              ],
+              "worker/src/projects.ts": [
+                  ("readonly icon?: string", "readonly icon?: string | undefined"),
+                  ("readonly name?: string", "readonly name?: string | undefined"),
+                  ("readonly notify?: boolean", "readonly notify?: boolean | undefined"),
+                  ("readonly min_level?: Level", "readonly min_level?: Level | undefined")
+              ],
+              "worker/src/subscriptions.ts": [
+                  ("readonly expirationTime?: number | null", "readonly expirationTime?: number | null | undefined"),
+                  ("readonly name?: string", "readonly name?: string | undefined"),
+                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }")
+              ],
+              "worker/src/silences.ts": [
+                  ("readonly project_id?: string", "readonly project_id?: string | undefined"),
+                  ("readonly note?: string", "readonly note?: string | undefined")
+              ],
+              "worker/src/application.ts": [
+                  ("import { getSettings, updateSettings } from \"./settings.js\"", "import { getSettings, updateSettings, type SettingsPatch } from \"./settings.js\""),
+                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }"),
+                  ("patch: { readonly name?: string; readonly enabled?: boolean }) =>", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }) =>"),
+                  ("readonly update: (patch: Partial<SettingsView>)", "readonly update: (patch: SettingsPatch)"),
+                  ("((patch: Partial<SettingsView>) =>", "((patch: SettingsPatch) =>")
+              ]
+          }
+
+          for path, pairs in replacements.items():
+              text = Path(path).read_text()
+              for old, new in pairs:
+                  if old in text:
+                      text = text.replace(old, new)
+              Path(path).write_text(text)
+
+          settings = Path("worker/src/settings.ts")
+          text = settings.read_text()
+          marker = "export const updateSettings = (patch: Partial<SettingsView>)"
+          replacement = """export interface SettingsPatch {
+            readonly retention_days?: number | undefined
+            readonly redact_keys?: ReadonlyArray<string> | undefined
+            readonly setup_completed?: boolean | undefined
+          }
+
+          export const updateSettings = (patch: SettingsPatch)"""
+          if marker not in text:
+              raise SystemExit("settings patch marker not found")
+          settings.write_text(text.replace(marker, replacement))
+
+          index = Path("worker/src/index.ts")
+          text = index.read_text()
+          old = """interface IsolateRuntime {
+            readonly db: D1Database
+            readonly queue: Queue<PushJobMessage>
+            readonly http: ReturnType<typeof HttpRouter.toWebHandler>
+            readonly background: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
+          }"""
+          new = """interface WebHandler {
+            readonly handler: (request: Request) => Promise<Response>
+            readonly dispose: () => Promise<void>
+          }
+
+          interface IsolateRuntime {
+            readonly db: D1Database
+            readonly queue: Queue<PushJobMessage>
+            readonly http: WebHandler
+            readonly background: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
+          }"""
+          if old not in text:
+              raise SystemExit("index runtime marker not found")
+          index.write_text(text.replace(old, new))
+          PY
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker/src
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Fix Effect v4 schema boundary types [skip effect-fix]"
+          git push origin HEAD:refactor/effect-v4-architecture
