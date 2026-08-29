@@ -349,11 +349,15 @@ const renderProjects = async (): Promise<void> => {
   }
 }
 
-const urlBase64ToBytes = (value: string): Uint8Array => {
+const urlBase64ToBytes = (value: string): ArrayBuffer => {
   const normalized = value.replaceAll("-", "+").replaceAll("_", "/")
   const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
   const binary = atob(padded)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes.buffer as ArrayBuffer
 }
 
 const isStandalone = (): boolean =>
