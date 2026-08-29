@@ -21,20 +21,20 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
 export interface CreateEventInput {
-  readonly external_id?: string | undefined | undefined | undefined
-  readonly source?: string | undefined | undefined | undefined
-  readonly type?: string | undefined | undefined | undefined
-  readonly level?: Level | undefined | undefined | undefined
+  readonly external_id?: string | undefined
+  readonly source?: string | undefined
+  readonly type?: string | undefined
+  readonly level?: Level | undefined
   readonly title: string
-  readonly body?: string | undefined | undefined | undefined
-  readonly fingerprint?: string | undefined | undefined | undefined
-  readonly occurred_at?: string | undefined | undefined | undefined
-  readonly data?: unknown | undefined | undefined | undefined
+  readonly body?: string | undefined
+  readonly fingerprint?: string | undefined
+  readonly occurred_at?: string | undefined
+  readonly data?: unknown | undefined
 }
 
 export interface EventPage {
   readonly events: ReadonlyArray<EventView>
-  readonly next_cursor?: string | undefined | undefined | undefined
+  readonly next_cursor?: string | undefined
 }
 
 const truncate = (value: unknown, max: number): string =>
@@ -205,7 +205,7 @@ export const createEventForProject = (
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
         Effect.map(() => true),
-        Effect.catchAll(() => Effect.succeed(false))
+        Effect.catch(() => Effect.succeed(false))
       )
       if (published) {
         const queuedAt = nowIso()
@@ -239,12 +239,12 @@ const decodeCursor = (value: string): Cursor | null => {
 }
 
 export interface ListEventsInput {
-  readonly project?: string | undefined | undefined | undefined
-  readonly level?: string | undefined | undefined | undefined
-  readonly source?: string | undefined | undefined | undefined
-  readonly silenced?: string | undefined | undefined | undefined
-  readonly before?: string | undefined | undefined | undefined
-  readonly limit?: string | undefined | undefined | undefined
+  readonly project?: string | undefined
+  readonly level?: string | undefined
+  readonly source?: string | undefined
+  readonly silenced?: string | undefined
+  readonly before?: string | undefined
+  readonly limit?: string | undefined
 }
 
 export const listEvents = (
@@ -359,7 +359,7 @@ export const unsilenceEvent = (
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
         Effect.map(() => true),
-        Effect.catchAll(() => Effect.succeed(false))
+        Effect.catch(() => Effect.succeed(false))
       )
       if (published) {
         const queuedAt = nowIso()

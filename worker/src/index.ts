@@ -4,10 +4,15 @@ import { Maintenance, PushDelivery } from "./application.js"
 import { makeLayers } from "./layers.js"
 import type { Env, PushJobMessage } from "./types.js"
 
+interface WebHandler {
+  readonly handler: (request: Request) => Promise<Response>
+  readonly dispose: () => Promise<void>
+}
+
 interface IsolateRuntime {
   readonly db: D1Database
   readonly queue: Queue<PushJobMessage>
-  readonly http: ReturnType<typeof HttpRouter.toWebHandler>
+  readonly http: WebHandler
   readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
 }
 
