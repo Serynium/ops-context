@@ -2,18 +2,18 @@ import { describe, expect, it } from "vitest"
 import { redactValue } from "../src/redact.js"
 
 describe("redactValue", () => {
-  it("redacts default and configured keys recursively", () => {
+  it("redacts normalized default and configured keys recursively", () => {
     expect(redactValue({
       password: "secret",
       nested: {
-        apiKey: "visible because normalization is exact",
+        apiKey: "hidden after key normalization",
         "api-key": "hidden",
         customer_reference: "hidden too"
       }
     }, ["customer_reference"])).toEqual({
       password: "[REDACTED]",
       nested: {
-        apiKey: "visible because normalization is exact",
+        apiKey: "[REDACTED]",
         "api-key": "[REDACTED]",
         customer_reference: "[REDACTED]"
       }
