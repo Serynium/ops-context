@@ -21,20 +21,20 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
 export interface CreateEventInput {
-  readonly external_id?: string | undefined
-  readonly source?: string | undefined
-  readonly type?: string | undefined
-  readonly level?: Level | undefined
+  readonly external_id?: string | undefined | undefined
+  readonly source?: string | undefined | undefined
+  readonly type?: string | undefined | undefined
+  readonly level?: Level | undefined | undefined
   readonly title: string
-  readonly body?: string | undefined
-  readonly fingerprint?: string | undefined
-  readonly occurred_at?: string | undefined
-  readonly data?: unknown | undefined
+  readonly body?: string | undefined | undefined
+  readonly fingerprint?: string | undefined | undefined
+  readonly occurred_at?: string | undefined | undefined
+  readonly data?: unknown | undefined | undefined
 }
 
 export interface EventPage {
   readonly events: ReadonlyArray<EventView>
-  readonly next_cursor?: string | undefined
+  readonly next_cursor?: string | undefined | undefined
 }
 
 const truncate = (value: unknown, max: number): string =>
@@ -239,12 +239,12 @@ const decodeCursor = (value: string): Cursor | null => {
 }
 
 export interface ListEventsInput {
-  readonly project?: string | undefined
-  readonly level?: string | undefined
-  readonly source?: string | undefined
-  readonly silenced?: string | undefined
-  readonly before?: string | undefined
-  readonly limit?: string | undefined
+  readonly project?: string | undefined | undefined
+  readonly level?: string | undefined | undefined
+  readonly source?: string | undefined | undefined
+  readonly silenced?: string | undefined | undefined
+  readonly before?: string | undefined | undefined
+  readonly limit?: string | undefined | undefined
 }
 
 export const listEvents = (
