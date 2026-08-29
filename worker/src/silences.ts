@@ -7,10 +7,10 @@ import type { SilenceRow } from "./types.js"
 export type SilenceField = "fingerprint" | "title" | "source"
 
 export interface CreateSilenceInput {
-  readonly project_id?: string | undefined | undefined
+  readonly project_id?: string | undefined | undefined | undefined
   readonly field: SilenceField
   readonly value: string
-  readonly note?: string | undefined | undefined
+  readonly note?: string | undefined | undefined | undefined
 }
 
 const fields = new Set<SilenceField>(["fingerprint", "title", "source"])
