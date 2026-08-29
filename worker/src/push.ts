@@ -260,7 +260,7 @@ export const processPushMessage = (
         }),
       catch: (cause) => internal("failed to build Web Push request", cause)
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         scheduleRetry(message, context.job.attempts, null, error.message).pipe(
           Effect.map((delaySeconds) => ({ _tag: "Retry", delaySeconds } as PushOutcome))
         )
@@ -273,7 +273,7 @@ export const processPushMessage = (
       try: () => fetch(request.endpoint, { method: "POST", headers: request.headers, body: request.body }),
       catch: (cause) => internal("Web Push transport failed", cause)
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         scheduleRetry(message, context.job.attempts, null, error.message).pipe(
           Effect.map((delaySeconds) => ({ _tag: "Retry", delaySeconds } as PushOutcome))
         )

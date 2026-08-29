@@ -13,7 +13,7 @@ export const requireProject = (request: Request): Effect.Effect<ProjectRow, AppE
     const key = getBearer(request)
     if (!key) return yield* Effect.fail(unauthorized("a project API key is required"))
     return yield* authenticateProject(key).pipe(
-      Effect.catchAll(() => Effect.fail(unauthorized("invalid project API key")))
+      Effect.catch(() => Effect.fail(unauthorized("invalid project API key")))
     )
   })
 

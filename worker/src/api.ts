@@ -441,4 +441,4 @@ export const handleApi = (request: Request): Effect.Effect<Response, AppError, A
 }
 
 export const handleApiSafely = (request: Request): Effect.Effect<Response, never, ApiServices> =>
-  handleApi(request).pipe(Effect.catchAll((error) => Effect.succeed(errorResponse(error))))
+  handleApi(request).pipe(Effect.catch((error) => Effect.succeed(errorResponse(error))))

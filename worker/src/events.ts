@@ -205,7 +205,7 @@ export const createEventForProject = (
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
         Effect.map(() => true),
-        Effect.catchAll(() => Effect.succeed(false))
+        Effect.catch(() => Effect.succeed(false))
       )
       if (published) {
         const queuedAt = nowIso()
@@ -359,7 +359,7 @@ export const unsilenceEvent = (
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
         Effect.map(() => true),
-        Effect.catchAll(() => Effect.succeed(false))
+        Effect.catch(() => Effect.succeed(false))
       )
       if (published) {
         const queuedAt = nowIso()
