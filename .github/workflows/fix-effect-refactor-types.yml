@@ -16,102 +16,50 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/effect-v4-architecture
-      - name: Apply exact Effect boundary fixes
+      - name: Normalize Effect boundary types
         shell: bash
         run: |
           python <<'PY'
           from pathlib import Path
           import re
 
-          def rewrite(path: str, transform) -> None:
+          targets = [
+              "worker/src/events.ts",
+              "worker/src/projects.ts",
+              "worker/src/subscriptions.ts",
+              "worker/src/silences.ts",
+              "worker/src/settings.ts",
+              "worker/src/application.ts",
+          ]
+          for path in targets:
               file = Path(path)
-              before = file.read_text()
-              after = transform(before)
-              file.write_text(after)
+              text = file.read_text()
+              text = re.sub(r"(?: \| undefined){2,}", " | undefined", text)
+              file.write_text(text)
 
-          rewrite(
-              "worker/src/api-models.ts",
-              lambda text: re.sub(
-                  r"Schema\.Record\(\{\s*key:\s*Schema\.String,\s*value:\s*Schema\.Unknown\s*\}\)",
-                  "Schema.Record(Schema.String, Schema.Unknown)",
-                  text,
-                  flags=re.S,
-              ),
+          events = Path("worker/src/events.ts")
+          text = events.read_text().replace("Effect.catchAll(", "Effect.catch(")
+          events.write_text(text)
+
+          subscriptions = Path("worker/src/subscriptions.ts")
+          text = subscriptions.read_text()
+          text = re.sub(
+              r"patch: \{ readonly name\?: string \| undefined; readonly enabled\?: boolean(?: \| undefined)? \}",
+              "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }",
+              text,
           )
-
-          replacements = {
-              "worker/src/events.ts": [
-                  ("readonly external_id?: string", "readonly external_id?: string | undefined"),
-                  ("readonly source?: string", "readonly source?: string | undefined"),
-                  ("readonly type?: string", "readonly type?: string | undefined"),
-                  ("readonly level?: Level", "readonly level?: Level | undefined"),
-                  ("readonly body?: string", "readonly body?: string | undefined"),
-                  ("readonly fingerprint?: string", "readonly fingerprint?: string | undefined"),
-                  ("readonly occurred_at?: string", "readonly occurred_at?: string | undefined"),
-                  ("readonly data?: unknown", "readonly data?: unknown | undefined"),
-                  ("readonly next_cursor?: string", "readonly next_cursor?: string | undefined"),
-                  ("readonly project?: string", "readonly project?: string | undefined"),
-                  ("readonly level?: string", "readonly level?: string | undefined"),
-                  ("readonly silenced?: string", "readonly silenced?: string | undefined"),
-                  ("readonly before?: string", "readonly before?: string | undefined"),
-                  ("readonly limit?: string", "readonly limit?: string | undefined"),
-                  ("Effect.catch(() => Effect.succeed(false))", "Effect.catchAll(() => Effect.succeed(false))"),
-              ],
-              "worker/src/projects.ts": [
-                  ("readonly icon?: string", "readonly icon?: string | undefined"),
-                  ("readonly name?: string", "readonly name?: string | undefined"),
-                  ("readonly notify?: boolean", "readonly notify?: boolean | undefined"),
-                  ("readonly min_level?: Level", "readonly min_level?: Level | undefined"),
-              ],
-              "worker/src/subscriptions.ts": [
-                  ("readonly expirationTime?: number | null", "readonly expirationTime?: number | null | undefined"),
-                  ("readonly name?: string", "readonly name?: string | undefined"),
-                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }"),
-              ],
-              "worker/src/silences.ts": [
-                  ("readonly project_id?: string", "readonly project_id?: string | undefined"),
-                  ("readonly note?: string", "readonly note?: string | undefined"),
-              ],
-              "worker/src/application.ts": [
-                  ("import { getSettings, updateSettings } from \"./settings.js\"", "import { getSettings, updateSettings, type SettingsPatch } from \"./settings.js\""),
-                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }"),
-                  ("readonly update: (patch: Partial<SettingsView>)", "readonly update: (patch: SettingsPatch)"),
-                  ("((patch: Partial<SettingsView>) =>", "((patch: SettingsPatch) =>"),
-              ],
-          }
-
-          for path, pairs in replacements.items():
-              def transform(text: str, pairs=pairs) -> str:
-                  for old, new in pairs:
-                      text = text.replace(old, new)
-                  return text
-              rewrite(path, transform)
-
-          settings = Path("worker/src/settings.ts")
-          text = settings.read_text()
-          marker = "export const updateSettings = (patch: Partial<SettingsView>)"
-          if marker in text:
-              text = text.replace(
-                  marker,
-                  """export interface SettingsPatch {
-            readonly retention_days?: number | undefined
-            readonly redact_keys?: ReadonlyArray<string> | undefined
-            readonly setup_completed?: boolean | undefined
-          }
-
-          export const updateSettings = (patch: SettingsPatch)""",
-              )
-          settings.write_text(text)
+          subscriptions.write_text(text)
 
           index = Path("worker/src/index.ts")
           text = index.read_text()
-          old = """interface IsolateRuntime {
+          text = text.replace(
+              """interface IsolateRuntime {
             readonly db: D1Database
             readonly queue: Queue<PushJobMessage>
             readonly http: ReturnType<typeof HttpRouter.toWebHandler>
-            readonly background: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
-          }"""
-          new = """interface WebHandler {
+            readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
+          }""",
+              """interface WebHandler {
             readonly handler: (request: Request) => Promise<Response>
             readonly dispose: () => Promise<void>
           }
@@ -120,9 +68,9 @@ jobs:
             readonly db: D1Database
             readonly queue: Queue<PushJobMessage>
             readonly http: WebHandler
-            readonly background: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
-          }"""
-          text = text.replace(old, new)
+            readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
+          }""",
+          )
           index.write_text(text)
           PY
       - name: Commit fixes
@@ -134,5 +82,5 @@ jobs:
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "Fix Effect v4 schema boundary types [skip effect-fix]"
+          git commit -m "Normalize Effect v4 boundary types [skip effect-fix]"
           git push origin HEAD:refactor/effect-v4-architecture
