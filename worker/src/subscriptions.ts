@@ -6,7 +6,7 @@ import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
 
 export interface BrowserPushSubscription {
   readonly endpoint: string
-  readonly expirationTime?: number | null
+  readonly expirationTime?: number | null | undefined
   readonly keys: {
     readonly p256dh: string
     readonly auth: string
@@ -14,7 +14,7 @@ export interface BrowserPushSubscription {
 }
 
 export interface RegisterSubscriptionInput {
-  readonly name?: string
+  readonly name?: string | undefined
   readonly subscription: BrowserPushSubscription
 }
 
@@ -132,7 +132,7 @@ export const registerSubscription = (
 
 export const updateSubscription = (
   id: string,
-  patch: { readonly name?: string; readonly enabled?: boolean }
+  patch: { readonly name?: string | undefined; readonly enabled?: boolean }
 ): Effect.Effect<PushSubscriptionView, AppError, Database> =>
   Effect.gen(function*() {
     const db = yield* Database

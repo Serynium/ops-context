@@ -43,7 +43,7 @@ import {
   listSilences,
   type CreateSilenceInput
 } from "./silences.js"
-import { getSettings, updateSettings } from "./settings.js"
+import { getSettings, updateSettings, type SettingsPatch } from "./settings.js"
 import {
   deleteSubscription,
   listSubscriptions,
@@ -160,7 +160,7 @@ export class Subscriptions extends Context.Service<Subscriptions, {
   readonly register: (input: RegisterSubscriptionInput, userAgent: string) => Effect.Effect<PushSubscriptionView, ApiFailure>
   readonly update: (
     id: string,
-    patch: { readonly name?: string; readonly enabled?: boolean }
+    patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
   ) => Effect.Effect<PushSubscriptionView, ApiFailure>
   readonly delete: (id: string) => Effect.Effect<void, ApiFailure>
 }>()("ops-context/Subscriptions") {
@@ -173,7 +173,7 @@ export class Subscriptions extends Context.Service<Subscriptions, {
         list: mapAppError(Effect.provideService(listSubscriptions, Database, database)),
         register: Effect.fn("Subscriptions.register")((input: RegisterSubscriptionInput, userAgent: string) =>
           mapAppError(provideAll(registerSubscription(input, userAgent), context))),
-        update: Effect.fn("Subscriptions.update")((id: string, patch: { readonly name?: string; readonly enabled?: boolean }) =>
+        update: Effect.fn("Subscriptions.update")((id: string, patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }) =>
           mapAppError(Effect.provideService(updateSubscription(id, patch), Database, database))),
         delete: Effect.fn("Subscriptions.delete")((id: string) =>
           mapAppError(Effect.provideService(deleteSubscription(id), Database, database)))
@@ -225,7 +225,7 @@ export class Silences extends Context.Service<Silences, {
 
 export class Settings extends Context.Service<Settings, {
   readonly get: Effect.Effect<SettingsView, ApiFailure>
-  readonly update: (patch: Partial<SettingsView>) => Effect.Effect<SettingsView, ApiFailure>
+  readonly update: (patch: SettingsPatch) => Effect.Effect<SettingsView, ApiFailure>
 }>()("ops-context/Settings") {
   static readonly layer = Layer.effect(
     Settings,
@@ -233,7 +233,7 @@ export class Settings extends Context.Service<Settings, {
       const context = yield* Effect.context<Database | AppConfig>()
       return Settings.of({
         get: mapAppError(provideAll(getSettings, context)).pipe(Effect.withSpan("Settings.get")),
-        update: Effect.fn("Settings.update")((patch: Partial<SettingsView>) =>
+        update: Effect.fn("Settings.update")((patch: SettingsPatch) =>
           mapAppError(provideAll(updateSettings(patch), context)))
       })
     })

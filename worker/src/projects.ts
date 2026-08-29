@@ -8,14 +8,14 @@ import type { Level, ProjectRow, ProjectView } from "./types.js"
 
 export interface CreateProjectInput {
   readonly name: string
-  readonly icon?: string
+  readonly icon?: string | undefined
 }
 
 export interface UpdateProjectInput {
-  readonly name?: string
-  readonly icon?: string
-  readonly notify?: boolean
-  readonly min_level?: Level
+  readonly name?: string | undefined
+  readonly icon?: string | undefined
+  readonly notify?: boolean | undefined
+  readonly min_level?: Level | undefined
 }
 
 const toView = (row: ProjectRow): ProjectView => ({

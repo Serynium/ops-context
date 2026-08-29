@@ -52,7 +52,13 @@ export const getSettings: Effect.Effect<SettingsView, AppError, Database | AppCo
     }
   })
 
-export const updateSettings = (patch: Partial<SettingsView>): Effect.Effect<SettingsView, AppError, Database | AppConfig> =>
+export interface SettingsPatch {
+  readonly retention_days?: number | undefined
+  readonly redact_keys?: ReadonlyArray<string> | undefined
+  readonly setup_completed?: boolean | undefined
+}
+
+export const updateSettings = (patch: SettingsPatch): Effect.Effect<SettingsView, AppError, Database | AppConfig> =>
   Effect.gen(function*() {
     if (patch.retention_days !== undefined) {
       if (!Number.isInteger(patch.retention_days) || patch.retention_days < 0 || patch.retention_days > 3650) {

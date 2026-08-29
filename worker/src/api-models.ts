@@ -8,10 +8,7 @@ export type Level = typeof Level.Type
 export const SilenceField = Schema.Literals(["fingerprint", "title", "source"])
 export type SilenceField = typeof SilenceField.Type
 
-export const JsonObject = Schema.Record({
-  key: Schema.String,
-  value: Schema.Unknown
-})
+export const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
 
 export const Project = Schema.Struct({
   id: Schema.String,
