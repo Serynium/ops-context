@@ -1,0 +1,34 @@
+{
+  "name": "ops-context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A tiny operational event inbox and PWA Web Push service on Cloudflare, built with Effect v4.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "typecheck": "tsc -p worker/tsconfig.json && tsc -p web/tsconfig.json",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test && pnpm build:web",
+    "deploy": "pnpm build:web && wrangler deploy",
+    "cf:types": "wrangler types worker-configuration.d.ts",
+    "secrets": "node scripts/generate-secrets.mjs"
+  },
+  "dependencies": {
+    "@pushforge/builder": "2.0.5",
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260827.1",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.127.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.23.0"
+}

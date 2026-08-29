@@ -1,0 +1,23 @@
+{
+  "name": "Ops Context",
+  "short_name": "Ops Context",
+  "description": "A tiny operational event inbox with native Web Push notifications.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080b12",
+  "theme_color": "#0b1020",
+  "categories": ["productivity", "utilities", "business"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Inbox", "short_name": "Inbox", "url": "/" },
+    { "name": "Projects", "short_name": "Projects", "url": "/?view=projects" },
+    { "name": "Push devices", "short_name": "Push", "url": "/?view=push" }
+  ]
+}
