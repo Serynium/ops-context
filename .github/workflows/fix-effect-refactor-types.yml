@@ -16,26 +16,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/effect-v4-architecture
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - name: Apply exact Effect boundary fixes
         shell: bash
         run: |
           python <<'PY'
           from pathlib import Path
+          import re
 
-          def replace(path: str, old: str, new: str) -> None:
+          def rewrite(path: str, transform) -> None:
               file = Path(path)
-              text = file.read_text()
-              if old not in text:
-                  raise SystemExit(f"pattern not found in {path}: {old!r}")
-              file.write_text(text.replace(old, new))
+              before = file.read_text()
+              after = transform(before)
+              file.write_text(after)
 
-          replace(
+          rewrite(
               "worker/src/api-models.ts",
-              "Schema.Record({ key: Schema.String, value: Schema.Unknown })",
-              "Schema.Record(Schema.String, Schema.Unknown)"
+              lambda text: re.sub(
+                  r"Schema\.Record\(\{\s*key:\s*Schema\.String,\s*value:\s*Schema\.Unknown\s*\}\)",
+                  "Schema.Record(Schema.String, Schema.Unknown)",
+                  text,
+                  flags=re.S,
+              ),
           )
 
           replacements = {
@@ -54,52 +55,53 @@ jobs:
                   ("readonly silenced?: string", "readonly silenced?: string | undefined"),
                   ("readonly before?: string", "readonly before?: string | undefined"),
                   ("readonly limit?: string", "readonly limit?: string | undefined"),
-                  ("Effect.catch(() => Effect.succeed(false))", "Effect.catchAll(() => Effect.succeed(false))")
+                  ("Effect.catch(() => Effect.succeed(false))", "Effect.catchAll(() => Effect.succeed(false))"),
               ],
               "worker/src/projects.ts": [
                   ("readonly icon?: string", "readonly icon?: string | undefined"),
                   ("readonly name?: string", "readonly name?: string | undefined"),
                   ("readonly notify?: boolean", "readonly notify?: boolean | undefined"),
-                  ("readonly min_level?: Level", "readonly min_level?: Level | undefined")
+                  ("readonly min_level?: Level", "readonly min_level?: Level | undefined"),
               ],
               "worker/src/subscriptions.ts": [
                   ("readonly expirationTime?: number | null", "readonly expirationTime?: number | null | undefined"),
                   ("readonly name?: string", "readonly name?: string | undefined"),
-                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }")
+                  ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }"),
               ],
               "worker/src/silences.ts": [
                   ("readonly project_id?: string", "readonly project_id?: string | undefined"),
-                  ("readonly note?: string", "readonly note?: string | undefined")
+                  ("readonly note?: string", "readonly note?: string | undefined"),
               ],
               "worker/src/application.ts": [
                   ("import { getSettings, updateSettings } from \"./settings.js\"", "import { getSettings, updateSettings, type SettingsPatch } from \"./settings.js\""),
                   ("patch: { readonly name?: string; readonly enabled?: boolean }", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }"),
-                  ("patch: { readonly name?: string; readonly enabled?: boolean }) =>", "patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }) =>"),
                   ("readonly update: (patch: Partial<SettingsView>)", "readonly update: (patch: SettingsPatch)"),
-                  ("((patch: Partial<SettingsView>) =>", "((patch: SettingsPatch) =>")
-              ]
+                  ("((patch: Partial<SettingsView>) =>", "((patch: SettingsPatch) =>"),
+              ],
           }
 
           for path, pairs in replacements.items():
-              text = Path(path).read_text()
-              for old, new in pairs:
-                  if old in text:
+              def transform(text: str, pairs=pairs) -> str:
+                  for old, new in pairs:
                       text = text.replace(old, new)
-              Path(path).write_text(text)
+                  return text
+              rewrite(path, transform)
 
           settings = Path("worker/src/settings.ts")
           text = settings.read_text()
           marker = "export const updateSettings = (patch: Partial<SettingsView>)"
-          replacement = """export interface SettingsPatch {
+          if marker in text:
+              text = text.replace(
+                  marker,
+                  """export interface SettingsPatch {
             readonly retention_days?: number | undefined
             readonly redact_keys?: ReadonlyArray<string> | undefined
             readonly setup_completed?: boolean | undefined
           }
 
-          export const updateSettings = (patch: SettingsPatch)"""
-          if marker not in text:
-              raise SystemExit("settings patch marker not found")
-          settings.write_text(text.replace(marker, replacement))
+          export const updateSettings = (patch: SettingsPatch)""",
+              )
+          settings.write_text(text)
 
           index = Path("worker/src/index.ts")
           text = index.read_text()
@@ -120,9 +122,8 @@ jobs:
             readonly http: WebHandler
             readonly background: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
           }"""
-          if old not in text:
-              raise SystemExit("index runtime marker not found")
-          index.write_text(text.replace(old, new))
+          text = text.replace(old, new)
+          index.write_text(text)
           PY
       - name: Commit fixes
         shell: bash
