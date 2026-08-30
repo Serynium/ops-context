@@ -10,6 +10,7 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 - Cloudflare D1 persistence through `@effect/sql-d1`, including atomic event and durable push-job batches.
 - Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
 - Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.
+- Drop-in Sentry SDK ingestion through the modern envelope endpoint, with compressed bodies, Sentry grouping fingerprints, and the same event creation and notification pipeline.
 - Up to three validated event actions, rendered in event details and encrypted Web Push notifications.
 - Fingerprint grouping scoped to each project, including occurrence count, first seen, last seen, and occurrence drill-down.
 - Cursor pagination and filters for project, level, source, fingerprint, search text, RFC 3339 time ranges, grouped state, and silenced state.
@@ -192,6 +193,22 @@ Levels are `info`, `success`, `warning`, `error`, and `critical`.
 
 Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
+### Sentry SDKs — drop-in DSN
+
+Ops Context accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Set the SDK DSN to the Ops Context origin and use a project API key as the DSN public key:
+
+```text
+SENTRY_DSN=https://ops_proj_REPLACE_ME@ops.example.com/1
+```
+
+The value before `@` is an Ops Context project key. The trailing project id is required by Sentry's DSN format but ignored; the key selects the project. The Worker accepts `POST /api/{id}/envelope/`, including gzip- and deflate-compressed envelopes.
+
+> **Keep this DSN server-side.** Unlike a normal Sentry DSN, it contains a write-capable Ops Context project key. Do not embed it in browser, mobile, or other untrusted client code.
+
+Exception events use `Type: value` titles, compact stack/context bodies, Sentry level mapping, `source: "sentry"`, and grouping fingerprints. Message events group on their unformatted templates. Curated context is stored in `data` and passes through the same redaction, silence, D1, durable push-job, and Queue pipeline as `/api/v1/events`. Transactions, sessions, attachments, and other non-error items are accepted and ignored.
+
+See [docs/sentry.md](docs/sentry.md) for authentication, mapping, limits, and a raw envelope example.
+
 ### Shell helper
 
 ```bash
@@ -268,6 +285,7 @@ All JSON errors have the form:
 |---|---|---|---|
 | GET | `/health` | none | D1 health check |
 | POST | `/api/v1/events` | project bearer key | Create an event, including optional actions |
+| POST | `/api/:id/envelope/` | Sentry DSN project key | Ingest Sentry SDK error envelopes |
 | GET | `/api/v1/events` | administrator | List, search, filter, paginate, or group events |
 | GET | `/api/v1/events/:id` | administrator | Read complete event context and actions |
 | GET | `/api/v1/events/:id/deliveries` | administrator | Delivery attempts |
@@ -291,6 +309,8 @@ The generated OpenAPI document is available at:
 /api/v1/openapi.json
 ```
 
+The Sentry compatibility route is handled at the Worker fetch boundary rather than by `HttpApi`, so it is documented here and in [docs/sentry.md](docs/sentry.md) instead of the generated OpenAPI document.
+
 Administrator authentication accepts the secure session cookie created by the PWA or HTTP Basic credentials. Project bearer keys are explicitly rejected on administrative and MCP routes.
 
 ## Effect v4 structure
@@ -299,9 +319,9 @@ The Worker boundary is a standard Cloudflare module handler. Inside that boundar
 
 - `HttpApi`, endpoint/group schemas, and `HttpApiMiddleware` define and validate the HTTP contract.
 - `Schema.TaggedError` values define declared API failures and status codes.
-- `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, and `McpEndpoint` are narrow Effect services.
+- `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
-- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, Cron, and MCP executions.
+- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, Cron, MCP, and Sentry envelope executions.
 - `@effect/sql-d1` provides the D1 SQL client, while a narrow `Database` service preserves native D1 batch behavior where atomic batches are required.
 - Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
@@ -311,6 +331,7 @@ Domain and application services expose typed Effect programs. Cloudflare binding
 ## Security model
 
 - Project, session, and MCP credentials are treated as high-entropy secrets. Project and session credentials are stored only as SHA-256 hashes.
+- Sentry DSNs contain a write-capable project key and must stay in trusted server-side configuration.
 - The administrator password is stored as a PBKDF2-SHA-256 hash with a per-installation salt and at least 310,000 iterations.
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS.
 - Browser administrative mutations are restricted to the configured same origin.
