@@ -1,6 +1,6 @@
 {
   "name": "ops-context",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "A tiny operational event inbox and PWA Web Push service on Cloudflare, built with Effect v4.",
@@ -19,8 +19,10 @@
   "dependencies": {
     "@effect/platform-browser": "4.0.0-rc.112",
     "@effect/sql-d1": "4.0.0-rc.112",
+    "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
-    "effect": "4.0.0-rc.112"
+    "effect": "4.0.0-rc.112",
+    "zod": "4.2.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260827.1",
