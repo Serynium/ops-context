@@ -19,10 +19,10 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 - Project CRUD, notification thresholds, enable/disable controls, API-key rotation, and test events.
 - Encrypted standards-based Web Push using VAPID and `@pushforge/builder`, compatible with Cloudflare Workers.
 - Installable PWA with an offline shell, push-subscription management, notification action buttons, tap-through, and iOS Home Screen guidance.
-- Durable push jobs, Cloudflare Queue fan-out, leases, bounded Queue-owned retries, terminal dead-letter outcomes, expired-subscription disabling, and narrow outbox reconciliation.
+- Queue-first event acceptance, durable push jobs, leases, bounded Queue-owned retries, terminal dead-letter outcomes, and expired-subscription disabling.
 - Silence rules by fingerprint, title, or source, including project-specific and global rules.
 - Optional read-only MCP Streamable HTTP endpoint using the official `@modelcontextprotocol/server` TypeScript SDK.
-- D1-backed administrator sessions, same-origin checks, PBKDF2 password verification, secure cookies, retention settings, and scheduled cleanup.
+- Cloudflare Access administrator identity, same-origin checks, retention settings, and optional daily retention.
 - Static PWA assets served through Workers Static Assets.
 
 The repository is production-oriented but remains pre-1.0. See [ROADMAP.md](ROADMAP.md) for remaining hardening work and [CHANGELOG.md](CHANGELOG.md) for release details.
@@ -43,22 +43,21 @@ Apps, CI, cron jobs                      MCP clients / agents
 │ Effect services + Layers + ManagedRuntime               │
 │ Admin API + PWA API + official MCP TypeScript SDK       │
 └───────────────────┬───────────────────────┬─────────────┘
-                    │                       │
-                    ▼                       ▼
-            ┌──────────────┐       ┌─────────────────┐
-            │ Cloudflare D1│       │ Cloudflare Queue│
-            │ events/jobs  │       │ push fan-out    │
-            └──────┬───────┘       └────────┬────────┘
-                   │                        │
-                   │                        ▼
-                   │                Browser push services
-                   │                FCM / Mozilla / Apple
-                   │                        │
-                   ▼                        ▼
-              PWA inbox          Installed PWA notification
+                    │ IngestEvent
+                    ▼
+            ┌─────────────────┐
+            │ Cloudflare Queue│── DeliverPush ──┐
+            └────────┬────────┘                 │
+                     ▼                          ▼
+             ┌──────────────┐          Browser push services
+             │ Cloudflare D1│          FCM / Mozilla / Apple
+             │ events/jobs  │                   │
+             └──────┬───────┘                   ▼
+                    ▼                  Installed PWA notification
+               PWA inbox
 ```
 
-The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so scheduled reconciliation is restricted to genuinely unpublished, lost, or lease-abandoned work. Cloudflare Queue owns ordinary delayed retries; D1 owns leases, attempt limits, and terminal `sent`/`dead` state. The dead-letter Queue is consumed into an operator-visible terminal record rather than starting a fresh retry cycle. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending. See [Web Push delivery lifecycle](docs/delivery.md).
+Cloudflare Queue is the durable acceptance boundary. The HTTP endpoint returns `202 Accepted` only after a schema-versioned `IngestEvent` command is accepted. Its consumer idempotently creates the event and jobs, then publishes `DeliverPush` commands before acknowledging. Queue redelivery resumes partial fan-out without a repair Cron. D1 owns delivery claims, attempt limits, and terminal `sent`/`dead` state; Queue owns retry timing. See [event ingestion](docs/event-ingestion.md) and [Web Push delivery lifecycle](docs/delivery.md).
 
 MCP, HTTP, Queue consumption, and scheduled maintenance intentionally remain one
 modular Worker deployment until production isolation or scaling evidence justifies the
@@ -124,7 +123,7 @@ pnpm exec wrangler queues create ops-context-push
 pnpm exec wrangler queues create ops-context-push-dlq
 ```
 
-Generate the administrator password hash, MCP token, and VAPID keys:
+Generate the VAPID keys:
 
 ```bash
 pnpm secrets -- --subject mailto:you@example.com
@@ -133,14 +132,12 @@ pnpm secrets -- --subject mailto:you@example.com
 Upload each generated value. Wrangler prompts for values without storing them in shell history:
 
 ```bash
-pnpm exec wrangler secret put ADMIN_PASSWORD_HASH
-pnpm exec wrangler secret put OPS_MCP_TOKEN
 pnpm exec wrangler secret put VAPID_PUBLIC_KEY
 pnpm exec wrangler secret put VAPID_PRIVATE_JWK
 pnpm exec wrangler secret put VAPID_SUBJECT
 ```
 
-Set `OPS_ADMIN_USER`, `OPS_BASE_URL`, and the default retention in `wrangler.jsonc`, then apply migrations and deploy:
+Configure the Cloudflare Access hostnames/audiences, `OPS_BASE_URL`, and default retention in `wrangler.jsonc`, then apply migrations and deploy:
 
 ```bash
 pnpm exec wrangler d1 migrations apply ops-context --remote
@@ -186,20 +183,23 @@ curl https://ops.example.com/api/v1/events \
   }'
 ```
 
-A successful request returns:
+A successful Queue acceptance returns HTTP `202 Accepted`:
 
 ```json
 {
   "id": "evt_...",
-  "created_at": "2026-08-30T12:00:00.000Z"
+  "accepted_at": "2026-08-31T12:00:00.000Z",
+  "status": "queued"
 }
 ```
+
+The event is eventually consistent: it may briefly return `404` from the administrator read API until the Queue consumer persists it. A Queue publication failure returns `503`, and the client should retry. Reusing `external_id` gives producer retries the same event id.
 
 Levels are `info`, `success`, `warning`, `error`, and `critical`.
 
 Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
-The raw event body is limited to **256 KiB**. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
+The raw HTTP body is limited to **256 KiB**, and the normalized event is limited to **120,000 encoded bytes** so its versioned command remains below Cloudflare Queue's 128,000-byte message ceiling. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
 
 ### Sentry SDKs — drop-in DSN
 
@@ -282,7 +282,7 @@ get_event
 get_event_group
 ```
 
-Configure `OPS_MCP_TOKEN`, then enable MCP from **Settings** in the PWA. Authentication accepts the dedicated MCP bearer token, an active administrator session, or administrator HTTP Basic credentials. Project ingestion keys are explicitly refused.
+Configure the MCP Cloudflare Access application and audience, then enable MCP from **Settings** in the PWA. Access user and service-token identities are accepted according to that policy; project ingestion keys are explicitly refused.
 
 See [docs/mcp.md](docs/mcp.md) for transport details, authentication, and example requests.
 
@@ -297,7 +297,7 @@ All JSON errors have the form:
 | Method | Path | Authentication | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | D1 health check |
-| POST | `/api/v1/events` | project bearer key | Create an event, including optional actions |
+| POST | `/api/v1/events` | project bearer key | Queue an event (`202 Accepted`) |
 | POST | `/api/:id/envelope/` | Sentry DSN project key | Ingest Sentry SDK error envelopes |
 | GET | `/api/v1/events` | administrator | List, search, filter, paginate, or group events |
 | GET | `/api/v1/events/:id` | administrator | Read complete event context and actions |
@@ -315,7 +315,7 @@ All JSON errors have the form:
 | GET/PATCH | `/api/v1/settings` | administrator | Retention, redaction, setup, and MCP enablement |
 | GET | `/api/v1/status` | administrator | Deployment status and counts |
 | POST | `/api/v1/test` | administrator | Create and push a test event |
-| POST | `/mcp` | MCP bearer or administrator | Read-only MCP Streamable HTTP endpoint |
+| POST | `/mcp` | Cloudflare Access | Read-only MCP Streamable HTTP endpoint |
 
 The generated OpenAPI document is available at:
 
@@ -325,7 +325,7 @@ The generated OpenAPI document is available at:
 
 The Sentry compatibility route is handled at the Worker fetch boundary rather than by `HttpApi`, so it is documented here and in [docs/sentry.md](docs/sentry.md) instead of the generated OpenAPI document.
 
-Administrator authentication accepts the secure session cookie created by the PWA or HTTP Basic credentials. Project bearer keys are explicitly rejected on administrative and MCP routes.
+Administrator and MCP authentication use Cloudflare Access only. Project bearer keys are explicitly rejected on administrative and MCP routes.
 
 ## Effect v4 structure
 
@@ -333,9 +333,9 @@ The Worker boundary is a standard Cloudflare module handler. Inside that boundar
 
 - `HttpApi`, endpoint/group schemas, and `HttpApiMiddleware` define and validate the HTTP contract.
 - Tagged domain and application errors are mapped to HTTP only by the API adapter; see [docs/errors.md](docs/errors.md).
-- `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
+- `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `EventIngestion`, `PushDelivery`, `Retention`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
-- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled maintenance, MCP, and Sentry envelope executions.
+- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled retention, MCP, and Sentry envelope executions.
 - A narrow `Database` service uses native D1 results to preserve atomic batches and capture per-query row and duration metadata.
 - Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
@@ -344,10 +344,9 @@ Domain and application services expose typed Effect programs. Cloudflare binding
 
 ## Security model
 
-- Project, session, and MCP credentials are treated as high-entropy secrets. Project and session credentials are stored only as SHA-256 hashes.
+- Project credentials are treated as high-entropy secrets and stored only as SHA-256 hashes.
 - Sentry DSNs contain a write-capable project key and must stay in trusted server-side configuration.
-- The administrator password is stored as a PBKDF2-SHA-256 hash with a per-installation salt and at least 310,000 iterations.
-- Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS.
+- Cloudflare Access is the only production administrator and MCP identity provider.
 - Browser administrative mutations are restricted to the configured same origin.
 - MCP checks the request host/origin before protocol dispatch and receives only a validated read-only principal.
 - Web Push payloads are encrypted according to the Web Push protocol before they are handed to browser push services.

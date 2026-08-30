@@ -358,13 +358,13 @@ describe("bounded push delivery lifecycle", () => {
     const renewedEndpoint = "https://push.example.test/renewed-subscription"
     const outcome = await Effect.runPromise(
       processPushMessage(message).pipe(
-        Effect.provide(runtimeLayer(new Response("gone", { status: 410 }), 6, () =>
-          env.DB.prepare(
+        Effect.provide(runtimeLayer(new Response("gone", { status: 410 }), 6, async () => {
+          await env.DB.prepare(
             `UPDATE push_subscriptions
              SET endpoint = ?, renewal_credential_hash = 'renewed-hash'
              WHERE id = ?`
           ).bind(renewedEndpoint, message.subscriptionId).run()
-        ))
+        }))
       )
     )
     const subscription = await env.DB.prepare(

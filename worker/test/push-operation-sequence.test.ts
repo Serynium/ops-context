@@ -6,9 +6,11 @@ import {
   type PushContext
 } from "../src/push-repository.js"
 import { AppConfig, WebPush, type ConfigService } from "../src/services.js"
-import type { PushJobMessage } from "../src/types.js"
+import { QUEUE_COMMAND_VERSION, type DeliverPushCommand } from "../src/queue-contract.js"
 
-const message: PushJobMessage = {
+const message: DeliverPushCommand = {
+  _tag: "DeliverPush",
+  version: QUEUE_COMMAND_VERSION,
   eventId: "evt_test",
   subscriptionId: "sub_test"
 }

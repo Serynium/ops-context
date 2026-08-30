@@ -124,7 +124,11 @@ export const AccessIdentity = Schema.Struct({
 export const Health = Schema.Struct({ status: Schema.String })
 export const EventGroupsRebuilt = Schema.Struct({ groups: Schema.Int })
 export const PushPublicKey = Schema.Struct({ public_key: Schema.String })
-export const EventCreated = Schema.Struct({ id: Schema.String, created_at: Schema.String })
+export const EventAccepted = Schema.Struct({
+  id: Schema.String,
+  accepted_at: Schema.String,
+  status: Schema.Literal("queued")
+})
 export const EventPage = Schema.Struct({
   events: Schema.Array(Event),
   next_cursor: Schema.optional(Schema.String)
@@ -155,6 +159,7 @@ export const Status = Schema.Struct({
   subscriptions: Schema.Int,
   enabled_subscriptions: Schema.Int,
   dead_jobs: Schema.Int,
+  failed_ingests: Schema.Int,
   last_push: Schema.NullOr(Delivery),
   retention_days: Schema.Int,
   setup_completed: Schema.Boolean,
@@ -163,7 +168,7 @@ export const Status = Schema.Struct({
 })
 
 export const TestNotificationResult = Schema.Struct({
-  event: Event,
+  event: EventAccepted,
   web_push_configured: Schema.Boolean
 })
 

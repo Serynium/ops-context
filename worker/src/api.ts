@@ -17,7 +17,7 @@ import {
   CreateSilenceInput,
   Deliveries,
   Event,
-  EventCreated,
+  EventAccepted,
   EventGroupsRebuilt,
   EventListQuery,
   EventPage,
@@ -96,7 +96,7 @@ export class IngestApiGroup extends HttpApiGroup.make("ingest")
   .add(
     HttpApiEndpoint.post("createEvent", "/events", {
       payload: CreateEventInput,
-      success: EventCreated.pipe(HttpApiSchema.status(201)),
+      success: EventAccepted.pipe(HttpApiSchema.status(202)),
       error: CommonErrors
     })
   )
@@ -223,7 +223,7 @@ export class AdminApiGroup extends HttpApiGroup.make("admin")
     }).middleware(SameOrigin),
     HttpApiEndpoint.post("testNotification", "/test", {
       payload: TestNotificationInput,
-      success: TestNotificationResult.pipe(HttpApiSchema.status(201)),
+      success: TestNotificationResult.pipe(HttpApiSchema.status(202)),
       error: CommonErrors
     }).middleware(SameOrigin)
   )
@@ -306,7 +306,7 @@ export const IngestHandlers = HttpApiBuilder.group(
         )
         const project = yield* CurrentProject
         const event = yield* toHttpFailure(events.create(project, payload))
-        return { id: event.id, created_at: event.created_at }
+        return event
       }))
   })
 )
