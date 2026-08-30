@@ -61,6 +61,7 @@ import {
   type RegisterSubscriptionInput
 } from "./subscriptions.js"
 import { runMaintenance, type MaintenanceResult } from "./maintenance.js"
+import { rebuildEventGroups } from "./event-groups.js"
 import {
   AppConfig,
   CredentialCrypto,
@@ -314,6 +315,7 @@ export class System extends Context.Service<System, {
     readonly event: EventView
     readonly web_push_configured: boolean
   }, SystemError>
+  readonly rebuildEventGroups: Effect.Effect<{ readonly groups: number }, RepositoryUnavailable>
 }>()("ops-context/System") {
   static readonly layer = Layer.effect(
     System,
@@ -410,7 +412,19 @@ export class System extends Context.Service<System, {
         }
       })
 
-      return System.of({ health, publicKey, status, testNotification })
+      const rebuildGroups = rebuildEventGroups.pipe(
+        Effect.provideService(Database, database),
+        Effect.map((groups) => ({ groups })),
+        Effect.withSpan("System.rebuildEventGroups")
+      )
+
+      return System.of({
+        health,
+        publicKey,
+        status,
+        testNotification,
+        rebuildEventGroups: rebuildGroups
+      })
     })
   )
 }
