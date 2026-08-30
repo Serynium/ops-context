@@ -112,6 +112,8 @@ export interface PushSubscriptionRow {
   readonly user_agent: string
   readonly enabled: number
   readonly last_seen_at: string | null
+  readonly renewal_credential_hash: string | null
+  readonly renewal_credential_issued_at: string | null
   readonly created_at: string
   readonly updated_at: string
 }

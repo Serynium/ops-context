@@ -89,6 +89,11 @@ export const PushSubscription = Schema.Struct({
   updated_at: Schema.String
 })
 
+export const PushSubscriptionCredential = Schema.Struct({
+  subscription: PushSubscription,
+  renewal_credential: Schema.String
+})
+
 export const Silence = Schema.Struct({
   id: Schema.String,
   project_id: Schema.NullOr(Schema.String),
@@ -200,6 +205,10 @@ export const BrowserPushSubscription = Schema.Struct({
 
 export const RegisterSubscriptionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
+  subscription: BrowserPushSubscription
+})
+
+export const RenewSubscriptionInput = Schema.Struct({
   subscription: BrowserPushSubscription
 })
 

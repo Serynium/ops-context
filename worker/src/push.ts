@@ -119,7 +119,10 @@ const finalizeDead = (
     ]
     if (disableSubscription) {
       statements.push({
-        sql: "UPDATE push_subscriptions SET enabled = 0, updated_at = ? WHERE id = ?",
+        sql: `UPDATE push_subscriptions
+              SET enabled = 0, renewal_credential_hash = NULL,
+                  renewal_credential_issued_at = NULL, updated_at = ?
+              WHERE id = ?`,
         params: [now, message.subscriptionId]
       })
     }

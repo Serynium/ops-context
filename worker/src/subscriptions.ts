@@ -1,5 +1,6 @@
 import { Effect } from "effect"
-import { invalid, notFound, type AppError } from "./errors.js"
+import { conflict, invalid, notFound, unauthorized, type AppError } from "./errors.js"
+import { randomToken, sha256Hex } from "./crypto.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database } from "./services.js"
 import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
@@ -17,6 +18,13 @@ export interface RegisterSubscriptionInput {
   readonly name?: string | undefined
   readonly subscription: BrowserPushSubscription
 }
+
+export interface SubscriptionCredentialResult {
+  readonly subscription: PushSubscriptionView
+  readonly renewal_credential: string
+}
+
+const RENEWAL_CREDENTIAL_PREFIX = "ops_pwa_"
 
 const endpointHost = (endpoint: string): string => {
   try {
@@ -53,6 +61,11 @@ const validateSubscription = (subscription: BrowserPushSubscription): void => {
   }
 }
 
+const issueRenewalCredential = Effect.gen(function*() {
+  const credential = `${RENEWAL_CREDENTIAL_PREFIX}${yield* randomToken(32)}`
+  return { credential, hash: yield* sha256Hex(credential) }
+})
+
 export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, AppError, Database> =
   Effect.gen(function*() {
     const db = yield* Database
@@ -78,7 +91,7 @@ export const findSubscriptionRow = (
 export const registerSubscription = (
   input: RegisterSubscriptionInput,
   userAgent: string
-): Effect.Effect<PushSubscriptionView, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<SubscriptionCredentialResult, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* Effect.try({
@@ -96,11 +109,13 @@ export const registerSubscription = (
     )
     const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
+    const renewal = yield* issueRenewalCredential
 
     yield* db.run(
       `INSERT INTO push_subscriptions
-       (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+       (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at,
+        renewal_credential_hash, renewal_credential_issued_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
        ON CONFLICT(endpoint) DO UPDATE SET
          name = excluded.name,
          p256dh = excluded.p256dh,
@@ -108,6 +123,8 @@ export const registerSubscription = (
          user_agent = excluded.user_agent,
          enabled = 1,
          last_seen_at = excluded.last_seen_at,
+         renewal_credential_hash = excluded.renewal_credential_hash,
+         renewal_credential_issued_at = excluded.renewal_credential_issued_at,
          updated_at = excluded.updated_at`,
       [
         id,
@@ -116,6 +133,8 @@ export const registerSubscription = (
         input.subscription.keys.p256dh,
         input.subscription.keys.auth,
         userAgent.slice(0, 512),
+        now,
+        renewal.hash,
         now,
         existing?.created_at ?? now,
         now
@@ -127,7 +146,65 @@ export const registerSubscription = (
       [input.subscription.endpoint]
     )
     if (!row) return yield* Effect.fail(notFound("push subscription could not be saved"))
-    return toSubscriptionView(row)
+    return { subscription: toSubscriptionView(row), renewal_credential: renewal.credential }
+  })
+
+export const renewSubscription = (
+  id: string,
+  credential: string,
+  subscription: BrowserPushSubscription,
+  userAgent: string
+): Effect.Effect<SubscriptionCredentialResult, AppError, Database | CredentialCrypto> =>
+  Effect.gen(function*() {
+    const db = yield* Database
+    yield* Effect.try({
+      try: () => validateSubscription(subscription),
+      catch: (cause) =>
+        typeof cause === "object" && cause !== null && (cause as { _tag?: unknown })._tag === "AppError"
+          ? (cause as AppError)
+          : invalid("push subscription is invalid")
+    })
+    if (!credential.startsWith(RENEWAL_CREDENTIAL_PREFIX) || credential.length < 50) {
+      return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+    }
+
+    const endpointOwner = yield* db.first<{ readonly id: string }>(
+      "SELECT id FROM push_subscriptions WHERE endpoint = ?",
+      [subscription.endpoint]
+    )
+    if (endpointOwner && endpointOwner.id !== id) {
+      return yield* Effect.fail(conflict("push endpoint belongs to another installation"))
+    }
+
+    const credentialHash = yield* sha256Hex(credential)
+    const next = yield* issueRenewalCredential
+    const now = nowIso()
+    const result = yield* db.run(
+      `UPDATE push_subscriptions
+       SET endpoint = ?, p256dh = ?, auth = ?, user_agent = ?, last_seen_at = ?,
+           renewal_credential_hash = ?, renewal_credential_issued_at = ?, updated_at = ?
+       WHERE id = ? AND enabled = 1 AND renewal_credential_hash = ?`,
+      [
+        subscription.endpoint,
+        subscription.keys.p256dh,
+        subscription.keys.auth,
+        userAgent.slice(0, 512),
+        now,
+        next.hash,
+        now,
+        now,
+        id,
+        credentialHash
+      ]
+    )
+    if ((result.meta.changes ?? 0) !== 1) {
+      return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+    }
+
+    return {
+      subscription: toSubscriptionView(yield* findSubscriptionRow(id)),
+      renewal_credential: next.credential
+    }
   })
 
 export const updateSubscription = (
@@ -141,8 +218,13 @@ export const updateSubscription = (
     if (!name) return yield* Effect.fail(invalid("subscription name cannot be empty"))
     const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
     yield* db.run(
-      "UPDATE push_subscriptions SET name = ?, enabled = ?, updated_at = ? WHERE id = ?",
-      [name, enabled, nowIso(), id]
+      `UPDATE push_subscriptions
+       SET name = ?, enabled = ?,
+           renewal_credential_hash = CASE WHEN ? = 1 THEN renewal_credential_hash ELSE NULL END,
+           renewal_credential_issued_at = CASE WHEN ? = 1 THEN renewal_credential_issued_at ELSE NULL END,
+           updated_at = ?
+       WHERE id = ?`,
+      [name, enabled, enabled, enabled, nowIso(), id]
     )
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })

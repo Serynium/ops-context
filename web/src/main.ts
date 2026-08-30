@@ -10,6 +10,7 @@ import {
   type PushDevice,
   type Silence
 } from "./api.js"
+import { clearPushRenewalCredential, storePushRenewalCredential } from "./push-renewal.js"
 
 type View = "inbox" | "projects" | "push" | "silences" | "settings"
 
@@ -602,7 +603,11 @@ const enablePush = async (): Promise<void> => {
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToBytes(public_key)
   })
-  await api.registerPush(defaultDeviceName(), subscription.toJSON())
+  const enrollment = await api.registerPush(defaultDeviceName(), subscription.toJSON())
+  await storePushRenewalCredential({
+    installation_id: enrollment.subscription.id,
+    credential: enrollment.renewal_credential
+  })
   notify("Push notifications enabled")
   pushButton.textContent = "Push enabled"
 }
@@ -647,9 +652,12 @@ const renderPush = async (): Promise<void> => {
           const name = window.prompt("Device name", button.dataset.pushName)
           if (name) await api.updatePush(id, { name })
         } else if (button.dataset.pushAction === "toggle") {
-          await api.updatePush(id, { enabled: button.dataset.pushEnabled !== "true" })
+          const enabled = button.dataset.pushEnabled !== "true"
+          await api.updatePush(id, { enabled })
+          if (!enabled) await clearPushRenewalCredential(id)
         } else if (button.dataset.pushAction === "delete" && window.confirm("Remove this push subscription?")) {
           await api.deletePush(id)
+          await clearPushRenewalCredential(id)
         }
         await renderPush()
       } catch (cause) { notify(errorMessage(cause)) }
@@ -821,6 +829,12 @@ window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault()
   installPrompt = event as BeforeInstallPromptEvent
   installButton.classList.remove("hidden")
+})
+
+navigator.serviceWorker?.addEventListener("message", (event) => {
+  if (event.data?.type === "push-renewal-failed") {
+    notify("Push renewal failed. Open Push devices and enable this device again.")
+  }
 })
 
 installButton.addEventListener("click", async () => {

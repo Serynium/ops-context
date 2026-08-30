@@ -58,6 +58,8 @@ Do not commit project API keys, D1 exports containing operational data, push-sub
 
 Web Push payloads are encrypted per subscription and signed through VAPID by `@pushforge/builder`. Treat subscription endpoints and their `p256dh`/`auth` values as sensitive credentials. Expired or permanently rejected subscriptions are disabled.
 
+PWA renewal credentials are installation-scoped bearer credentials stored raw only in same-origin IndexedDB; D1 stores their SHA-256 hashes. They can replace only the matching push-subscription row, rotate after every successful renewal, and are revoked when that row is disabled or removed. They never authorize administration, ingestion, or MCP. See [PWA push-subscription renewal](docs/push-renewal.md).
+
 ## Data handling
 
 Ops Context applies recursive sensitive-key redaction before storing event context. Redaction is defense in depth, not a substitute for avoiding secrets in event payloads.

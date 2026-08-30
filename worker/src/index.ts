@@ -118,12 +118,15 @@ const eventRequestExceedsLimit = async (
 }
 
 export default {
-  async fetch(request, env, context): Promise<Response> {
+  async fetch(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
     request = await attachCloudflareAccess(
       request,
       env,
-      context as ExecutionContextWithAccess
-    )
+      (context ?? {
+        waitUntil: () => undefined,
+        passThroughOnException: () => undefined
+      }) as ExecutionContextWithAccess
+    ) as typeof request
 
     const pathname = new URL(request.url).pathname
     if (pathname === "/mcp") {

@@ -11,6 +11,7 @@ import type { Env } from "../src/types.js"
 
 const config: ConfigService = {
   baseUrl: "https://ops.example.com",
+  appOrigin: "https://ops.example.com",
   appHost: "ops.example.com",
   mcpHost: "mcp.ops.example.com",
   accessAppAudience: "app-audience",

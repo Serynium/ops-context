@@ -44,8 +44,10 @@ import {
   deleteSubscription,
   listSubscriptions,
   registerSubscription,
+  renewSubscription,
   updateSubscription,
-  type RegisterSubscriptionInput
+  type RegisterSubscriptionInput,
+  type SubscriptionCredentialResult
 } from "./subscriptions.js"
 import { runMaintenance, type MaintenanceResult } from "./maintenance.js"
 import {
@@ -187,10 +189,16 @@ export class Subscriptions extends Context.Service<Subscriptions, {
   readonly register: (
     input: RegisterSubscriptionInput,
     userAgent: string
-  ) => Effect.Effect<PushSubscriptionView, ApiFailure>
+  ) => Effect.Effect<SubscriptionCredentialResult, ApiFailure>
+  readonly renew: (
+    id: string,
+    credential: string,
+    subscription: RegisterSubscriptionInput["subscription"],
+    userAgent: string
+  ) => Effect.Effect<SubscriptionCredentialResult, ApiFailure>
   readonly update: (
     id: string,
-    patch: { readonly name?: string; readonly enabled?: boolean }
+    patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
   ) => Effect.Effect<PushSubscriptionView, ApiFailure>
   readonly delete: (id: string) => Effect.Effect<void, ApiFailure>
 }>()("ops-context/Subscriptions") {
@@ -203,6 +211,9 @@ export class Subscriptions extends Context.Service<Subscriptions, {
         list: mapAppError(Effect.provideService(listSubscriptions, Database, database)),
         register: Effect.fn("Subscriptions.register")((input, userAgent) =>
           mapAppError(provideAll(registerSubscription(input, userAgent), context))
+        ),
+        renew: Effect.fn("Subscriptions.renew")((id, credential, subscription, userAgent) =>
+          mapAppError(provideAll(renewSubscription(id, credential, subscription, userAgent), context))
         ),
         update: Effect.fn("Subscriptions.update")((id, patch) =>
           mapAppError(Effect.provideService(updateSubscription(id, patch), Database, database))

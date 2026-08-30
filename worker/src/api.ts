@@ -27,8 +27,10 @@ import {
   Projects as ProjectsResponse,
   PushPublicKey,
   PushSubscription,
+  PushSubscriptionCredential,
   PushSubscriptions,
   RegisterSubscriptionInput,
+  RenewSubscriptionInput,
   Settings as SettingsResponse,
   Silence,
   Silences as SilencesResponse,
@@ -73,6 +75,14 @@ export class PublicApiGroup extends HttpApiGroup.make("public")
   .add(
     HttpApiEndpoint.get("pushPublicKey", "/push/public-key", {
       success: PushPublicKey,
+      error: CommonErrors
+    })
+  )
+  .add(
+    HttpApiEndpoint.post("renewSubscription", "/push/subscriptions/:id/renew", {
+      params: { id: SchemaString },
+      payload: RenewSubscriptionInput,
+      success: PushSubscriptionCredential,
       error: CommonErrors
     })
   )
@@ -158,7 +168,7 @@ export class AdminApiGroup extends HttpApiGroup.make("admin")
     }),
     HttpApiEndpoint.post("registerSubscription", "/push/subscriptions", {
       payload: RegisterSubscriptionInput,
-      success: PushSubscription.pipe(HttpApiSchema.status(201)),
+      success: PushSubscriptionCredential.pipe(HttpApiSchema.status(201)),
       error: CommonErrors
     }).middleware(SameOrigin),
     HttpApiEndpoint.patch("updateSubscription", "/push/subscriptions/:id", {
@@ -246,7 +256,23 @@ export const PublicHandlers = HttpApiBuilder.group(
   "public",
   Effect.fn(function*(handlers) {
     const system = yield* System
-    return handlers.handle("pushPublicKey", () => system.publicKey)
+    const subscriptions = yield* Subscriptions
+    return handlers.handleAll({
+      pushPublicKey: () => system.publicKey,
+      renewSubscription: Effect.fn(function*({ params, payload }) {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const authorization = request.headers.authorization ?? ""
+        const credential = authorization.startsWith("Bearer ")
+          ? authorization.slice("Bearer ".length).trim()
+          : ""
+        return yield* subscriptions.renew(
+          params.id,
+          credential,
+          payload.subscription,
+          request.headers["user-agent"] ?? ""
+        )
+      })
+    })
   })
 )
 

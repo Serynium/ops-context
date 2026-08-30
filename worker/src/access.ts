@@ -51,8 +51,10 @@ export interface CloudflareAccessContext {
   readonly getIdentity: () => Promise<CloudflareAccessIdentity | null>
 }
 
-export type ExecutionContextWithAccess = ExecutionContext & {
+export interface ExecutionContextWithAccess {
   readonly access?: CloudflareAccessContext
+  readonly waitUntil: (promise: Promise<unknown>) => void
+  readonly passThroughOnException: () => void
 }
 
 const normalizedHost = (value: string | undefined): string =>
@@ -130,6 +132,9 @@ export const attachCloudflareAccess = async (
   return recreateRequest(request, headers)
 }
 
+// Kept as the descriptive public name used by the identity boundary tests.
+export const attachAccessIdentity = attachCloudflareAccess
+
 interface HeaderView {
   readonly get: (name: string) => string | undefined
   readonly host: string
@@ -142,13 +147,14 @@ const fromHttpRequest = (request: HttpServerRequest): HeaderView => ({
   ...(request.headers.authorization ? { authorization: request.headers.authorization } : {})
 })
 
-const fromWebRequest = (request: Request): HeaderView => ({
-  get: (name) => request.headers.get(name) ?? undefined,
-  host: new URL(request.url).host.toLowerCase(),
-  ...(request.headers.get("authorization")
-    ? { authorization: request.headers.get("authorization") ?? undefined }
-    : {})
-})
+const fromWebRequest = (request: Request): HeaderView => {
+  const authorization = request.headers.get("authorization")
+  return {
+    get: (name) => request.headers.get(name) ?? undefined,
+    host: new URL(request.url).host.toLowerCase(),
+    ...(authorization ? { authorization } : {})
+  }
+}
 
 export interface AdministratorIdentityService {
   readonly authenticateHttp: (
@@ -183,6 +189,13 @@ export class AdministratorIdentity extends Context.Service<
           const subject = headers.get(ACCESS_SUBJECT)?.trim()
           const email = headers.get(ACCESS_EMAIL)?.trim()
           const name = headers.get(ACCESS_NAME)?.trim()
+
+          if (headers.authorization?.startsWith("Bearer ops_proj_")) {
+            return yield* new ForbiddenError({
+              error: "forbidden",
+              message: "project credentials cannot authorize private surfaces"
+            })
+          }
 
           if (!verified) {
             if (headers.authorization?.startsWith("Bearer ")) {
@@ -224,9 +237,11 @@ export class AdministratorIdentity extends Context.Service<
             })
           }
 
+          const principalKind: AccessPrincipalKind = kind
+
           return {
             subject,
-            kind,
+            kind: principalKind,
             audience,
             surface: requiredSurface,
             ...(email ? { email } : {}),

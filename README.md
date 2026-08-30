@@ -150,7 +150,7 @@ pnpm deploy
 5. Go to **Projects**, create a project, and copy its API key.
 6. Use **Test** on the project row to verify end-to-end Queue and Web Push delivery.
 
-Every browser installation gets its own Web Push subscription. The dashboard can rename, disable, or remove subscriptions.
+Every browser installation gets its own Web Push subscription and one-time, installation-scoped renewal credential. The raw credential stays in IndexedDB while only its hash is stored in D1. The dashboard can rename, disable, or remove subscriptions; disabling or removing one also revokes its renewal credential. See [PWA push-subscription renewal](docs/push-renewal.md).
 
 ## Send an event
 
@@ -298,6 +298,7 @@ All JSON errors have the form:
 | GET | `/api/v1/push/public-key` | none | VAPID public key |
 | GET/POST | `/api/v1/push/subscriptions` | administrator | List/enroll PWA installations |
 | PATCH/DELETE | `/api/v1/push/subscriptions/:id` | administrator | Manage PWA installation |
+| POST | `/api/v1/push/subscriptions/:id/renew` | installation renewal credential | Replace that installation's endpoint and rotate its credential |
 | GET/POST | `/api/v1/silences` | administrator | List/create silence rules |
 | GET/DELETE | `/api/v1/silences/:id` | administrator | Read/delete rule |
 | GET/PATCH | `/api/v1/settings` | administrator | Retention, redaction, setup, and MCP enablement |

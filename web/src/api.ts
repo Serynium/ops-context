@@ -64,6 +64,11 @@ export interface PushDevice {
   readonly updated_at: string
 }
 
+export interface PushCredentialResult {
+  readonly subscription: PushDevice
+  readonly renewal_credential: string
+}
+
 export interface Silence {
   readonly id: string
   readonly project_id: string | null
@@ -216,7 +221,7 @@ export const api = {
   publicKey: () => request<{ public_key: string }>("GET", "/api/v1/push/public-key"),
   pushDevices: () => request<{ subscriptions: ReadonlyArray<PushDevice> }>("GET", "/api/v1/push/subscriptions"),
   registerPush: (name: string, subscription: PushSubscriptionJSON) =>
-    request<PushDevice>("POST", "/api/v1/push/subscriptions", { name, subscription }),
+    request<PushCredentialResult>("POST", "/api/v1/push/subscriptions", { name, subscription }),
   updatePush: (id: string, patch: { name?: string; enabled?: boolean }) =>
     request<PushDevice>("PATCH", `/api/v1/push/subscriptions/${encodeURIComponent(id)}`, patch),
   deletePush: (id: string) => request<void>("DELETE", `/api/v1/push/subscriptions/${encodeURIComponent(id)}`, {}),
