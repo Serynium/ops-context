@@ -327,6 +327,10 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     await expect(Effect.runPromise(listSubscriptions.pipe(Effect.provide(database)))).resolves.not.toContainEqual(
       expect.objectContaining({ id })
     )
+    const visibleCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM push_subscriptions WHERE deleted_at IS NULL AND id = ?"
+    ).bind(id).first<{ readonly count: number }>()
+    expect(visibleCount?.count).toBe(0)
 
     const tombstone = await env.DB.prepare(
       `SELECT enabled, deleted_at, renewal_credential_hash

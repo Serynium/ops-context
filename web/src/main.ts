@@ -610,6 +610,7 @@ const enablePush = async (): Promise<void> => {
     applicationServerKey: urlBase64ToBytes(public_key)
   })
   const enrollmentKey = await beginPushEnrollment(true)
+  if (!enrollmentKey) throw new Error("explicit push enrollment could not be started")
   const enrollment = await api.registerPush(
     defaultDeviceName(),
     enrollmentKey,
@@ -632,6 +633,7 @@ const provisionExistingPushCredential = async (): Promise<void> => {
   if (!subscription || current?.credential || current?.revoked) return
 
   const enrollmentKey = await beginPushEnrollment(false)
+  if (!enrollmentKey) return
   let enrollment
   try {
     enrollment = await api.registerPush(

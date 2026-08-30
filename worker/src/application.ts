@@ -334,8 +334,9 @@ export class System extends Context.Service<System, {
           `SELECT
              (SELECT COUNT(*) FROM projects) AS projects,
              (SELECT COUNT(*) FROM events) AS events,
-             (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
-             (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
+             (SELECT COUNT(*) FROM push_subscriptions WHERE deleted_at IS NULL) AS subscriptions,
+             (SELECT COUNT(*) FROM push_subscriptions
+              WHERE enabled = 1 AND deleted_at IS NULL) AS enabled_subscriptions,
              (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`
         ).pipe(Effect.mapError(toApiFailure))
 

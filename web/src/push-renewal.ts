@@ -28,16 +28,17 @@ const randomEnrollmentKey = (): string => {
   return `ops_enroll_${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "")}`
 }
 
-export const beginPushEnrollment = async (force: boolean): Promise<string> => {
+export const beginPushEnrollment = async (force: boolean): Promise<string | undefined> => {
   const database = await openDatabase()
   try {
-    return await new Promise<string>((resolve, reject) => {
+    return await new Promise<string | undefined>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite")
       const store = transaction.objectStore(STORE_NAME)
       const request = store.get(RECORD_KEY)
-      let enrollmentKey = ""
+      let enrollmentKey: string | undefined
       request.onsuccess = () => {
         const current = request.result as PushRenewalCredential | undefined
+        if (!force && current?.pending && current.explicit === true) return
         if (
           current?.enrollment_key &&
           current.pending &&
