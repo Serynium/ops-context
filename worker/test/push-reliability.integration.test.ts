@@ -239,6 +239,27 @@ describe("bounded push delivery lifecycle", () => {
     expect((await getJob()).attempts).toBe(2)
   })
 
+  it("terminalizes a job from a prior enrollment generation without sending", async () => {
+    await seed()
+    await env.DB.prepare(
+      "UPDATE push_subscriptions SET enrollment_generation = 1 WHERE id = ?"
+    ).bind(message.subscriptionId).run()
+    let sends = 0
+
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response(null, { status: 201 }), 6, () => {
+          sends += 1
+        }))
+      )
+    )
+
+    expect(outcome._tag).toBe("PermanentFailure")
+    expect(sends).toBe(0)
+    expect((await getJob()).state).toBe("dead")
+    expect((await getJob()).last_error).toContain("no longer exists")
+  })
+
   it("prevents an expired claimant from finalizing over the reclaimed lease", async () => {
     await seed()
     const repositoryLayer = pushRepositoryLayer()

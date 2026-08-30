@@ -370,7 +370,9 @@ export class PushDeliveryRepository extends Context.Service<
            FROM push_jobs j
            JOIN events e ON e.id = j.event_id
            JOIN projects p ON p.id = e.project_id
-           JOIN push_subscriptions s ON s.id = j.subscription_id
+           JOIN push_subscriptions s
+             ON s.id = j.subscription_id
+            AND s.enrollment_generation = j.subscription_generation
            WHERE j.event_id = ? AND j.subscription_id = ?
              AND j.state = 'sending' AND j.lease_until = ?`,
           [claimed.message.eventId, claimed.message.subscriptionId, claimed.leaseUntil]
