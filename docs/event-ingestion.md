@@ -6,7 +6,7 @@ Ops Context rejects invalid values; it does not silently truncate identifiers, f
 
 ## Request limit
 
-The raw HTTP request body must be at most **262,144 bytes (256 KiB)**. The Worker checks the declared `Content-Length` when present and also measures a cloned request body so chunked requests cannot bypass the limit.
+The raw HTTP request body must be at most **262,144 bytes (256 KiB)**. The Worker checks the declared `Content-Length` when present. It also reads request streams incrementally and cancels both stream branches as soon as the measured body crosses the limit, so chunked requests cannot bypass the ceiling or force the isolate to buffer the complete body.
 
 An oversized body returns:
 
@@ -31,7 +31,7 @@ Content-Type: application/json
 | `source` | Optional, trimmed, up to 160 characters |
 | `type` | Optional, trimmed, up to 160 characters |
 | `fingerprint` | Optional, trimmed, up to 500 characters |
-| `external_id` | Optional, trimmed, up to 500 characters |
+| `external_id` | Optional; when supplied, trimmed and 1–500 characters |
 | `level` | `info`, `success`, `warning`, `error`, or `critical` |
 | `occurred_at` | Optional calendar-valid RFC 3339 timestamp with `Z` or a numeric offset |
 | `actions` | Optional array containing at most three actions |
@@ -70,7 +70,7 @@ Functions, symbols, `undefined`, non-finite numbers, class instances, and circul
 
 ## Validation response
 
-Application-level schema failures use a stable 422 response with optional field paths:
+Application-level schema failures use a stable 422 response with field paths:
 
 ```json
 {
@@ -85,4 +85,4 @@ Application-level schema failures use a stable 422 response with optional field 
 }
 ```
 
-Malformed JSON and transport-level decoding failures may be returned as a typed 400 response by the Effect HTTP boundary.
+The endpoint keeps the refined Effect Schema for OpenAPI and generated clients, but the server handler reads JSON explicitly and applies the contract inside the application error channel. This ensures field-level failures such as an overlong title or unsafe action URL are encoded through the declared 422 response instead of the framework's generic transport decode error. Malformed JSON is returned as the declared 400 response.
