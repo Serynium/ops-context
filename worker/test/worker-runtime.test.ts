@@ -1,4 +1,4 @@
-import { env, exports } from "cloudflare:workers"
+import { env } from "cloudflare:workers"
 import {
   createExecutionContext,
   createMessageBatch,
@@ -14,7 +14,7 @@ describe("Cloudflare Worker runtime", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
     ).all<{ readonly name: string }>()
 
-    expect(tables.results.map((row) => row.name)).toEqual(
+    expect(tables.results.map((row: { readonly name: string }) => row.name)).toEqual(
       expect.arrayContaining([
         "admin_sessions",
         "deliveries",
@@ -27,7 +27,10 @@ describe("Cloudflare Worker runtime", () => {
       ])
     )
 
-    const response = await exports.default.fetch("https://ops.example.com/health")
+    const response = await worker.fetch(
+      new Request("https://ops.example.com/health"),
+      env
+    )
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: "ok" })
   })
