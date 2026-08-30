@@ -101,7 +101,7 @@ const finalizeDead = (
   message: PushJobMessage,
   responseStatus: number | null,
   error: string,
-  disableSubscription: boolean
+  revokedEndpoint: string | null
 ): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
@@ -117,7 +117,7 @@ const finalizeDead = (
       },
       deliveryInsert(deliveryId, message, "failed", responseStatus, error, now)
     ]
-    if (disableSubscription) {
+    if (revokedEndpoint !== null) {
       statements.push({
         sql: `UPDATE push_subscriptions
               SET enabled = 0, renewal_credential_hash = NULL,
@@ -125,8 +125,8 @@ const finalizeDead = (
                   previous_renewal_credential_hash = NULL,
                   previous_renewal_credential_valid_until = NULL,
                   updated_at = ?
-              WHERE id = ?`,
-        params: [now, message.subscriptionId]
+              WHERE id = ? AND endpoint = ?`,
+        params: [now, message.subscriptionId, revokedEndpoint]
       })
     }
     yield* db.batch(statements)
@@ -150,7 +150,7 @@ const retryOrDead = (
         message,
         responseStatus,
         `delivery exhausted after ${attempts} attempts: ${error}`,
-        false
+        null
       )
       return { _tag: "PermanentFailure" } as const
     }
@@ -259,11 +259,11 @@ export const processPushMessage = (
     if (!(yield* claim(message))) return { _tag: "AlreadyProcessed" } as const
     const context = yield* loadContext(message)
     if (!context) {
-      yield* finalizeDead(message, null, "event or subscription no longer exists", false)
+      yield* finalizeDead(message, null, "event or subscription no longer exists", null)
       return { _tag: "PermanentFailure" } as const
     }
     if (context.subscription.enabled !== 1) {
-      yield* finalizeDead(message, null, "push subscription is disabled", false)
+      yield* finalizeDead(message, null, "push subscription is disabled", null)
       return { _tag: "PermanentFailure" } as const
     }
 
@@ -330,7 +330,12 @@ export const processPushMessage = (
     }).pipe(Effect.catch(() => Effect.succeed(`push service returned HTTP ${sent.status}`)))
 
     if (sent.status === 404 || sent.status === 410) {
-      yield* finalizeDead(message, sent.status, details || `push service returned HTTP ${sent.status}`, true)
+      yield* finalizeDead(
+        message,
+        sent.status,
+        details || `push service returned HTTP ${sent.status}`,
+        context.subscription.endpoint
+      )
       return { _tag: "PermanentFailure" } as const
     }
 
@@ -343,7 +348,7 @@ export const processPushMessage = (
       )
     }
 
-    yield* finalizeDead(message, sent.status, details || `push service returned HTTP ${sent.status}`, false)
+    yield* finalizeDead(message, sent.status, details || `push service returned HTTP ${sent.status}`, null)
     return { _tag: "PermanentFailure" } as const
   }).pipe(Effect.withSpan("PushDelivery.process", { attributes: { eventId: message.eventId } }))
 
@@ -360,6 +365,6 @@ export const processDeadLetterMessage = (
     if (!job || terminalStates.has(job.state)) {
       return { _tag: "AlreadyProcessed" } as const
     }
-    yield* finalizeDead(message, null, reason, false)
+    yield* finalizeDead(message, null, reason, null)
     return { _tag: "PermanentFailure" } as const
   }).pipe(Effect.withSpan("PushDelivery.deadLetter", { attributes: { eventId: message.eventId } }))

@@ -173,6 +173,45 @@ describe("bounded push delivery lifecycle", () => {
     expect(await deliveryCount()).toBe(1)
   })
 
+  it("does not revoke a renewed endpoint when an in-flight request rejects the old endpoint", async () => {
+    await seed()
+    const renewedEndpoint = "https://push.example.test/renewed-subscription"
+    const layer = Layer.mergeAll(
+      Database.layer(env.DB),
+      CredentialCrypto.layer,
+      Layer.succeed(AppConfig)(config()),
+      Layer.succeed(WebPush)({
+        send: () => Effect.tryPromise({
+          try: async () => {
+            await env.DB.prepare(
+              `UPDATE push_subscriptions
+               SET endpoint = ?, renewal_credential_hash = 'renewed-hash'
+               WHERE id = 'sub_test'`
+            ).bind(renewedEndpoint).run()
+            return new Response("gone", { status: 410 })
+          },
+          catch: (cause) => internal("could not simulate concurrent renewal", cause)
+        })
+      })
+    )
+
+    const outcome = await Effect.runPromise(processPushMessage(message).pipe(Effect.provide(layer)))
+    const row = await env.DB.prepare(
+      "SELECT endpoint, enabled, renewal_credential_hash FROM push_subscriptions WHERE id = 'sub_test'"
+    ).first<{
+      readonly endpoint: string
+      readonly enabled: number
+      readonly renewal_credential_hash: string | null
+    }>()
+
+    expect(outcome._tag).toBe("PermanentFailure")
+    expect(row).toMatchObject({
+      endpoint: renewedEndpoint,
+      enabled: 1,
+      renewal_credential_hash: "renewed-hash"
+    })
+  })
+
   it("lets Queue own ordinary delayed retries instead of immediate Cron republication", async () => {
     await seed()
     const outcome = await Effect.runPromise(
