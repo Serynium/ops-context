@@ -2,7 +2,7 @@ import { Effect } from "effect"
 import { type RepositoryUnavailable } from "./errors.js"
 import { Database } from "./services.js"
 
-const rebuildSql = `INSERT INTO event_groups (
+export const rebuildEventGroupsSql = `INSERT INTO event_groups (
   project_id, fingerprint, latest_event_id, occurrence_count, first_seen, last_seen
 )
 WITH ranked AS (
@@ -29,7 +29,7 @@ export const rebuildEventGroups: Effect.Effect<number, RepositoryUnavailable, Da
     const db = yield* Database
     yield* db.batch("event_groups.rebuild", [
       { name: "event_groups.clear", sql: "DELETE FROM event_groups" },
-      { name: "event_groups.backfill", sql: rebuildSql }
+      { name: "event_groups.backfill", sql: rebuildEventGroupsSql }
     ])
     const result = yield* db.first<{ readonly count: number }>(
       "event_groups.count_after_rebuild",

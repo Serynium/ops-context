@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { rebuildEventGroups } from "../src/event-groups.js"
 import { listEvents } from "../src/events.js"
+import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
 import { Database } from "../src/services.js"
 
 interface GroupRow {
@@ -47,8 +48,11 @@ const insertEvent = async (
   ).bind(id, projectId, level, id, fingerprint, createdAt, createdAt).run()
 }
 
-const run = <A>(effect: Effect.Effect<A, unknown, Database>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(Database.layer(env.DB))))
+const run = <A>(effect: Effect.Effect<A, unknown, Database | EventsRepository>) =>
+  Effect.runPromise(effect.pipe(
+    Effect.provide(D1RepositoriesLive(env.DB)),
+    Effect.provide(Database.layer(env.DB))
+  ))
 
 const groups = async (): Promise<ReadonlyArray<GroupRow>> => {
   const result = await env.DB.prepare(
@@ -89,17 +93,25 @@ describe("grouped-event read model", () => {
     ])
 
     const fast = await run(listEvents({ grouped: "true" }))
-    const dynamic = await run(listEvents({ grouped: "true", search: "" }))
+    const dynamic = await run(listEvents({ grouped: "true", since: "1970-01-01T00:00:00.000Z" }))
     expect(fast).toEqual(dynamic)
     expect(fast.events.map((event) => event.id)).toEqual(["evt_b2", "evt_b1", "evt_a3", "evt_a2"])
     expect(fast.events.find((event) => event.id === "evt_a2")?.group).toBeUndefined()
 
     const fastProject = await run(listEvents({ grouped: "true", project: "prj_a" }))
-    const dynamicProject = await run(listEvents({ grouped: "true", project: "prj_a", search: "" }))
+    const dynamicProject = await run(listEvents({
+      grouped: "true",
+      project: "prj_a",
+      since: "1970-01-01T00:00:00.000Z"
+    }))
     expect(fastProject).toEqual(dynamicProject)
 
     const fastFirst = await run(listEvents({ grouped: "true", limit: "2" }))
-    const dynamicFirst = await run(listEvents({ grouped: "true", search: "", limit: "2" }))
+    const dynamicFirst = await run(listEvents({
+      grouped: "true",
+      since: "1970-01-01T00:00:00.000Z",
+      limit: "2"
+    }))
     expect(fastFirst).toEqual(dynamicFirst)
     const fastSecond = await run(listEvents({
       grouped: "true",
@@ -108,7 +120,7 @@ describe("grouped-event read model", () => {
     }))
     const dynamicSecond = await run(listEvents({
       grouped: "true",
-      search: "",
+      since: "1970-01-01T00:00:00.000Z",
       before: dynamicFirst.next_cursor,
       limit: "2"
     }))

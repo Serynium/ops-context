@@ -10,6 +10,7 @@ import {
   type PushJobRow
 } from "../src/push.js"
 import { PushDeliveryRepository } from "../src/push-repository.js"
+import { D1RepositoriesLive } from "../src/repositories.js"
 import {
   AppConfig,
   CredentialCrypto,
@@ -92,7 +93,7 @@ const eventLayer = (
   published: PushJobMessage[],
   failPublication = false
 ) => Layer.mergeAll(
-  Database.layer(env.DB),
+  D1RepositoriesLive(env.DB),
   CredentialCrypto.layer,
   Layer.succeed(AppConfig)(config()),
   queueLayer(published, failPublication)
@@ -393,7 +394,7 @@ describe("bounded push delivery lifecycle", () => {
 
     const published: PushJobMessage[] = []
     const maintenanceLayer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config()),
       Layer.succeed(PushQueue)({
         send: (item) => Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
@@ -418,7 +419,7 @@ describe("bounded push delivery lifecycle", () => {
 
     const published: PushJobMessage[] = []
     const maintenanceLayer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config()),
       Layer.succeed(PushQueue)({
         send: (item) => Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
@@ -449,7 +450,7 @@ describe("bounded push delivery lifecycle", () => {
 
     const recovered: PushJobMessage[] = []
     const maintenanceLayer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config()),
       queueLayer(recovered)
     )
