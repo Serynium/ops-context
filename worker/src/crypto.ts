@@ -1,6 +1,6 @@
 import { Effect } from "effect"
-import { badRequest, type AppError } from "./errors.js"
-import { CredentialCrypto, PasswordHasher } from "./services.js"
+import { CredentialCrypto } from "./services.js"
+import type { AppError } from "./errors.js"
 
 export const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
@@ -23,25 +23,3 @@ export const sha256Hex = (value: string): Effect.Effect<string, AppError, Creden
 
 export const randomToken = (bytes = 32): Effect.Effect<string, AppError, CredentialCrypto> =>
   Effect.flatMap(CredentialCrypto, (service) => service.randomToken(bytes))
-
-export const verifyPasswordHash = (
-  password: string,
-  encoded: string
-): Effect.Effect<boolean, AppError, PasswordHasher> =>
-  Effect.flatMap(PasswordHasher, (service) => service.verify(password, encoded))
-
-export const parseBasicCredentials = (
-  header: string
-): Effect.Effect<{ readonly username: string; readonly password: string }, AppError> =>
-  Effect.try({
-    try: () => {
-      const decoded = atob(header.slice("Basic ".length))
-      const separator = decoded.indexOf(":")
-      if (separator < 0) throw new Error("missing separator")
-      return {
-        username: decoded.slice(0, separator),
-        password: decoded.slice(separator + 1)
-      }
-    },
-    catch: () => badRequest("invalid_authorization", "HTTP Basic credentials are malformed")
-  })
