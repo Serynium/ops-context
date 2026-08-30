@@ -25,6 +25,7 @@ export interface Env {
   readonly OPS_BASE_URL?: string
   readonly OPS_ADMIN_USER: string
   readonly OPS_RETENTION_DAYS?: string
+  readonly OPS_PUSH_MAX_ATTEMPTS?: string
   readonly OPS_MCP_TOKEN?: string
 
   readonly ADMIN_PASSWORD_HASH: string

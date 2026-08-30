@@ -39,15 +39,20 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, AppError, Database
     const jobs = yield* db.all<RecoverableJob>(
       `SELECT event_id, subscription_id
        FROM push_jobs
-       WHERE available_at <= ?
-         AND (
-           state = 'pending'
-           OR (state = 'queued' AND (queued_at IS NULL OR queued_at < ?))
-           OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?))
+       WHERE
+         (state = 'pending' AND available_at <= ?)
+         OR (
+           state = 'queued'
+           AND available_at <= ?
+           AND (queued_at IS NULL OR queued_at < ?)
+         )
+         OR (
+           state = 'sending'
+           AND (lease_until IS NULL OR lease_until < ?)
          )
        ORDER BY available_at
        LIMIT 100`,
-      [now, staleQueueTime, now]
+      [now, now, staleQueueTime, now]
     )
 
     const messages: ReadonlyArray<PushJobMessage> = jobs.map((job) => ({
@@ -61,8 +66,9 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, AppError, Database
       yield* db.batch(
         messages.map((message) => ({
           sql: `UPDATE push_jobs
-                SET state = 'queued', queued_at = ?, lease_until = NULL, updated_at = ?
-                WHERE event_id = ? AND subscription_id = ? AND state != 'sent' AND state != 'failed'`,
+                SET state = 'queued', queued_at = ?, lease_until = NULL, dead_at = NULL, updated_at = ?
+                WHERE event_id = ? AND subscription_id = ?
+                  AND state IN ('pending', 'queued', 'sending', 'retrying')`,
           params: [queuedAt, queuedAt, message.eventId, message.subscriptionId]
         }))
       )

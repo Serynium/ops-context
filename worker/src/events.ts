@@ -511,7 +511,7 @@ export const unsilenceEvent = (
           VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)
           ON CONFLICT(event_id, subscription_id) DO UPDATE SET
             state = 'pending', available_at = excluded.available_at, queued_at = NULL,
-            lease_until = NULL, last_error = '', updated_at = excluded.updated_at`,
+            lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
         params: [eventId, subscription.id, now, now]
       }))
     ])

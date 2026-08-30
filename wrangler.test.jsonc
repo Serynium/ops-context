@@ -35,6 +35,13 @@
         "max_retries": 5,
         "dead_letter_queue": "ops-context-push-dlq-test",
         "max_concurrency": 1
+      },
+      {
+        "queue": "ops-context-push-dlq-test",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "max_concurrency": 1
       }
     ]
   },
@@ -42,6 +49,7 @@
   "vars": {
     "OPS_ADMIN_USER": "admin",
     "OPS_RETENTION_DAYS": "90",
+    "OPS_PUSH_MAX_ATTEMPTS": "6",
     "OPS_BASE_URL": "https://ops.example.com"
   }
 }
