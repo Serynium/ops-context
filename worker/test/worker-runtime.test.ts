@@ -27,10 +27,10 @@ describe("Cloudflare Worker runtime", () => {
       ])
     )
 
-    const response = await worker.fetch(
-      new Request("https://ops.example.com/health"),
-      env
-    )
+    const request = new Request(
+      "https://ops.example.com/health"
+    ) as Parameters<typeof worker.fetch>[0]
+    const response = await worker.fetch(request, env)
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: "ok" })
   })
