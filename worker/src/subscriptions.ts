@@ -152,11 +152,12 @@ export const registerSubscription = (
     const credential = yield* deriveEnrollmentCredential(input.enrollment_key, input.subscription.endpoint)
     const credentialHash = yield* sha256Hex(credential)
 
-    yield* db.run(
+    const result = yield* db.run(
       `INSERT INTO push_subscriptions
        (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at,
-        renewal_credential_hash, renewal_credential_issued_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+        renewal_credential_hash, renewal_credential_issued_at, explicitly_enrolled,
+        created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(endpoint) DO UPDATE SET
          name = excluded.name,
          p256dh = excluded.p256dh,
@@ -168,9 +169,14 @@ export const registerSubscription = (
          renewal_credential_issued_at = excluded.renewal_credential_issued_at,
          previous_renewal_credential_hash = NULL,
          previous_renewal_credential_valid_until = NULL,
+         explicitly_enrolled = MAX(
+           push_subscriptions.explicitly_enrolled,
+           excluded.explicitly_enrolled
+         ),
          deleted_at = NULL,
          updated_at = excluded.updated_at
-       WHERE push_subscriptions.enabled = 1 OR ? = 1`,
+       WHERE excluded.explicitly_enrolled = 1
+          OR (push_subscriptions.enabled = 1 AND push_subscriptions.explicitly_enrolled = 0)`,
       [
         id,
         name,
@@ -181,9 +187,9 @@ export const registerSubscription = (
         now,
         credentialHash,
         now,
+        input.reactivate === true ? 1 : 0,
         existing?.created_at ?? now,
-        now,
-        input.reactivate === true ? 1 : 0
+        now
       ]
     )
 
@@ -196,6 +202,12 @@ export const registerSubscription = (
       return yield* Effect.fail(badRequest(
         "subscription_disabled",
         "this push installation is disabled and requires explicit re-enrollment"
+      ))
+    }
+    if ((result.meta.changes ?? 0) !== 1) {
+      return yield* Effect.fail(badRequest(
+        "subscription_enrollment_superseded",
+        "explicit push enrollment superseded this silent enrollment"
       ))
     }
     return { subscription: toSubscriptionView(row), renewal_credential: credential }
@@ -348,18 +360,25 @@ export const deleteSubscription = (id: string): Effect.Effect<void, AppError, Da
     const db = yield* Database
     yield* findSubscriptionRow(id)
     const now = nowIso()
-    yield* db.run(
-      `UPDATE push_subscriptions
-       SET enabled = 0,
-           renewal_credential_hash = NULL,
-           renewal_credential_issued_at = NULL,
-           previous_renewal_credential_hash = NULL,
-           previous_renewal_credential_valid_until = NULL,
-           deleted_at = ?,
-           updated_at = ?
-       WHERE id = ?`,
-      [now, now, id]
-    )
+    yield* db.batch([
+      {
+        sql: `UPDATE push_subscriptions
+              SET enabled = 0,
+                  renewal_credential_hash = NULL,
+                  renewal_credential_issued_at = NULL,
+                  previous_renewal_credential_hash = NULL,
+                  previous_renewal_credential_valid_until = NULL,
+                  deleted_at = ?,
+                  updated_at = ?
+              WHERE id = ?`,
+        params: [now, now, id]
+      },
+      {
+        sql: `DELETE FROM push_jobs
+              WHERE subscription_id = ? AND state NOT IN ('sent', 'dead')`,
+        params: [id]
+      }
+    ])
   })
 
 export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, AppError, Database> =

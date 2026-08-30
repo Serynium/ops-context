@@ -641,7 +641,10 @@ const provisionExistingPushCredential = async (): Promise<void> => {
       false
     )
   } catch (cause) {
-    if (cause instanceof ApiError && cause.code === "subscription_disabled") {
+    if (
+      cause instanceof ApiError &&
+      (cause.code === "subscription_disabled" || cause.code === "subscription_enrollment_superseded")
+    ) {
       await markPushEnrollmentRevoked(enrollmentKey)
       return
     }

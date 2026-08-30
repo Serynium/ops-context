@@ -95,6 +95,36 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     expect(JSON.stringify(row)).not.toContain(result.renewal_credential)
   })
 
+  it("does not let delayed silent enrollment supersede explicit enrollment", async () => {
+    const endpoint = "https://push.example.test/explicit-wins"
+    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const explicit = await Effect.runPromise(registerSubscription({
+      enrollment_key: `ops_enroll_${"v".repeat(43)}`,
+      reactivate: true,
+      subscription: subscription(endpoint)
+    }, "test agent").pipe(Effect.provide(layer)))
+
+    await expect(Effect.runPromise(registerSubscription({
+      enrollment_key: `ops_enroll_${"w".repeat(43)}`,
+      reactivate: false,
+      subscription: subscription(endpoint)
+    }, "test agent").pipe(Effect.provide(layer)))).rejects.toMatchObject({
+      code: "subscription_enrollment_superseded",
+      status: 400
+    })
+
+    const row = await env.DB.prepare(
+      "SELECT explicitly_enrolled, renewal_credential_hash FROM push_subscriptions WHERE id = ?"
+    ).bind(explicit.subscription.id).first<{
+      readonly explicitly_enrolled: number
+      readonly renewal_credential_hash: string | null
+    }>()
+    expect(row).toMatchObject({
+      explicitly_enrolled: 1,
+      renewal_credential_hash: await sha256Hex(explicit.renewal_credential)
+    })
+  })
+
   it("renews without administrator identity and replaces the endpoint and credential", async () => {
     const credential = `ops_pwa_${"a".repeat(43)}`
     await seed("sub_renewal_valid", credential, "https://push.example.test/old")
@@ -268,6 +298,27 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       enrollment_key: `ops_enroll_${"x".repeat(43)}`,
       subscription: subscription(endpoint)
     }
+    const now = new Date().toISOString()
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO projects
+         (id, name, slug, icon, api_key_hash, notify, min_level, created_at, updated_at)
+         VALUES ('prj_renewal_removed', 'Removed', 'renewal-removed', '',
+                 'renewal-removed-hash', 1, 'info', ?, ?)`
+      ).bind(now, now),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO events
+         (id, project_id, source, type, level, title, body, fingerprint,
+          payload_json, actions_json, occurred_at, created_at)
+         VALUES ('evt_renewal_removed', 'prj_renewal_removed', 'test', 'test', 'info',
+                 'Queued before removal', '', 'renewal-removed', '{}', '[]', ?, ?)`
+      ).bind(now, now),
+      env.DB.prepare(
+        `INSERT INTO push_jobs
+         (event_id, subscription_id, state, attempts, available_at, last_error, updated_at)
+         VALUES ('evt_renewal_removed', ?, 'queued', 0, ?, '', ?)`
+      ).bind(id, now, now)
+    ])
 
     await Effect.runPromise(deleteSubscription(id).pipe(Effect.provide(database)))
     await expect(Effect.runPromise(
@@ -290,6 +341,10 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       renewal_credential_hash: null
     })
     expect(tombstone?.deleted_at).not.toBeNull()
+    const queuedJob = await env.DB.prepare(
+      "SELECT state FROM push_jobs WHERE event_id = 'evt_renewal_removed' AND subscription_id = ?"
+    ).bind(id).first<{ readonly state: string }>()
+    expect(queuedJob).toBeNull()
 
     const reenrolled = await Effect.runPromise(
       registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
