@@ -74,13 +74,18 @@ export interface Silence {
   readonly created_at: string
 }
 
-export interface Settings {
+interface SettingsWire {
   readonly retention_days: number
   readonly redact_keys: ReadonlyArray<string>
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
   readonly mcp_enabled: boolean
   readonly mcp_access_configured: boolean
+}
+
+export interface Settings extends SettingsWire {
+  /** @deprecated Temporary view compatibility; mirrors mcp_access_configured. */
+  readonly mcp_token_set: boolean
 }
 
 export interface AccessIdentity {
@@ -171,6 +176,11 @@ const accessState = async (): Promise<{ auth_required: true; authenticated: true
   return { auth_required: true, authenticated: true }
 }
 
+const settings = async (): Promise<Settings> => {
+  const value = await request<SettingsWire>("GET", "/api/v1/settings")
+  return { ...value, mcp_token_set: value.mcp_access_configured }
+}
+
 export const api = {
   accessIdentity: () => request<AccessIdentity>("GET", "/api/v1/access/me"),
 
@@ -216,8 +226,8 @@ export const api = {
     request<Silence>("POST", "/api/v1/silences", input),
   deleteSilence: (id: string) => request<void>("DELETE", `/api/v1/silences/${encodeURIComponent(id)}`, {}),
 
-  settings: () => request<Settings>("GET", "/api/v1/settings"),
-  updateSettings: (patch: Partial<Settings>) => request<Settings>("PATCH", "/api/v1/settings", patch),
+  settings,
+  updateSettings: (patch: Partial<SettingsWire>) => request<SettingsWire>("PATCH", "/api/v1/settings", patch),
   status: () => request<Status>("GET", "/api/v1/status"),
   test: (project_id?: string) => request<{ event: EventItem }>("POST", "/api/v1/test", project_id ? { project_id } : {})
 }
