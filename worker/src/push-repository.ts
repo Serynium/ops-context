@@ -460,6 +460,7 @@ export class PushDeliveryRepository extends Context.Service<
                     SELECT 1 FROM push_jobs
                     WHERE event_id = ? AND subscription_id = ?
                       AND state = 'sending' AND lease_until = ?
+                      AND subscription_generation = push_subscriptions.enrollment_generation
                   )`,
             params: [
               now,

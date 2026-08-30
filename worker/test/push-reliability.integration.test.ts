@@ -404,6 +404,39 @@ describe("bounded push delivery lifecycle", () => {
     })
   })
 
+  it("does not revoke the same endpoint re-enrolled during an in-flight delivery", async () => {
+    await seed()
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response("gone", { status: 410 }), 6, async () => {
+          await env.DB.prepare(
+            `UPDATE push_subscriptions
+             SET enrollment_generation = enrollment_generation + 1,
+                 renewal_credential_hash = 'reenrolled-hash'
+             WHERE id = ?`
+          ).bind(message.subscriptionId).run()
+        }))
+      )
+    )
+    const subscription = await env.DB.prepare(
+      `SELECT endpoint, enabled, enrollment_generation, renewal_credential_hash
+       FROM push_subscriptions WHERE id = ?`
+    ).bind(message.subscriptionId).first<{
+      readonly endpoint: string
+      readonly enabled: number
+      readonly enrollment_generation: number
+      readonly renewal_credential_hash: string | null
+    }>()
+
+    expect(outcome._tag, await stateSnapshot()).toBe("PermanentFailure")
+    expect(subscription).toMatchObject({
+      endpoint: "https://push.example.test/subscription",
+      enabled: 1,
+      enrollment_generation: 1,
+      renewal_credential_hash: "reenrolled-hash"
+    })
+  })
+
   it("lets Queue own ordinary delayed retries", async () => {
     await seed()
     const outcome = await Effect.runPromise(
