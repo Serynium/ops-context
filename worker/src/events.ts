@@ -184,6 +184,7 @@ export const enqueueEventForProject = (
     if (normalized.external_id) {
       const db = yield* Database
       const existing = yield* db.first<{ readonly id: string }>(
+        "events.get_legacy_external_id",
         "SELECT id FROM events WHERE project_id = ? AND external_id = ?",
         [project.id, normalized.external_id]
       ).pipe(

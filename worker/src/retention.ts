@@ -18,7 +18,11 @@ export const runRetention: Effect.Effect<RetentionResult, RepositoryUnavailable,
     let prunedEvents = 0
     if (settings.retention_days > 0) {
       const cutoff = new Date(Date.now() - settings.retention_days * 86_400_000).toISOString()
-      const pruned = yield* db.run("DELETE FROM events WHERE created_at < ?", [cutoff])
+      const pruned = yield* db.run(
+        "events.prune_retention",
+        "DELETE FROM events WHERE created_at < ?",
+        [cutoff]
+      )
       prunedEvents = changes(pruned)
     }
 

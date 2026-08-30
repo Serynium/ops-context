@@ -148,7 +148,6 @@ describe("Queue-first event ingestion", () => {
 
     const failure = () => repositoryUnavailable("simulated D1 outage")
     const failedDatabase: DatabaseService = {
-      namedAll: () => Effect.fail(failure()),
       first: () => Effect.fail(failure()),
       all: () => Effect.fail(failure()),
       run: () => Effect.fail(failure()),
