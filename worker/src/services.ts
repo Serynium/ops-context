@@ -12,6 +12,11 @@ export interface SqlStatement {
 }
 
 export interface DatabaseService {
+  readonly namedAll: <A extends object>(
+    name: string,
+    sql: string,
+    params?: ReadonlyArray<unknown>
+  ) => Effect.Effect<ReadonlyArray<A>, AppError>
   readonly first: <A extends object>(
     sql: string,
     params?: ReadonlyArray<unknown>
@@ -36,6 +41,31 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
 
       const sqlFailure = (operation: string) =>
         Effect.mapError((cause: unknown) => internal(`database ${operation} failed`, cause))
+
+      const namedAll: DatabaseService["namedAll"] = <A extends object>(
+        name: string,
+        statement: string,
+        params: ReadonlyArray<unknown> = []
+      ) =>
+        Effect.tryPromise({
+          try: async () => {
+            const startedAt = performance.now()
+            const result = await d1.config.db.prepare(statement).bind(...params).all<A>()
+            if (!result.success) throw new Error(result.error ?? "D1 query failed")
+
+            console.info(JSON.stringify({
+              event: "d1_query",
+              query: name,
+              duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+              rows_returned: result.results.length,
+              rows_read: result.meta.rows_read ?? null,
+              rows_written: result.meta.rows_written ?? null
+            }))
+
+            return result.results
+          },
+          catch: (cause) => internal(`database query ${name} failed`, cause)
+        })
 
       const first: DatabaseService["first"] = <A extends object>(
         statement: string,
@@ -77,7 +107,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         )
       }
 
-      return Database.of({ first, all, run, batch })
+      return Database.of({ namedAll, first, all, run, batch })
     })
   )
 

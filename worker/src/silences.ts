@@ -77,16 +77,28 @@ export const matchSilence = (
 ): Effect.Effect<string | null, AppError, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
-    for (const [field, value] of candidates) {
-      if (!value) continue
-      const row = yield* db.first<{ readonly id: string }>(
-        `SELECT id FROM silences
-         WHERE field = ? AND value = ? AND (project_id IS NULL OR project_id = ?)
-         ORDER BY CASE WHEN project_id IS NULL THEN 1 ELSE 0 END
-         LIMIT 1`,
-        [field, value, projectId]
-      )
-      if (row) return row.id
-    }
-    return null
+    const nonEmpty = candidates.filter((candidate) => candidate[1] !== "")
+    if (nonEmpty.length === 0) return null
+
+    const params: Array<string | number> = []
+    const candidateRows = nonEmpty.map(([field, value], priority) => {
+      params.push(field, value, priority)
+      return "(?, ?, ?)"
+    })
+    params.push(projectId, projectId)
+
+    const rows = yield* db.namedAll<{ readonly id: string }>(
+      "silences.match",
+      `WITH candidates(field, value, priority) AS (
+         VALUES ${candidateRows.join(", ")}
+       )
+       SELECT s.id
+       FROM candidates c
+       JOIN silences s ON s.field = c.field AND s.value = c.value
+       WHERE s.project_id IS NULL OR s.project_id = ?
+       ORDER BY c.priority, CASE WHEN s.project_id = ? THEN 0 ELSE 1 END
+       LIMIT 1`,
+      params
+    )
+    return rows[0]?.id ?? null
   })
