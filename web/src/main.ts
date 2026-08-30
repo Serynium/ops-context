@@ -1,4 +1,5 @@
 import "./styles.css"
+import "./v12.css"
 import {
   ApiError,
   api,
@@ -33,6 +34,8 @@ const toast = document.querySelector<HTMLElement>("#toast")!
 let currentView: View = "inbox"
 let installPrompt: BeforeInstallPromptEvent | undefined
 let toastTimer: number | undefined
+let groupRepeats = localStorage.getItem("ops-context-group-repeats") !== "false"
+let inboxFilters: Record<string, string | undefined> = { limit: "50" }
 
 const escapeHtml = (value: unknown): string =>
   String(value ?? "")
@@ -48,6 +51,11 @@ const formatDate = (value: string): string => {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date)
+}
+
+const formatRelativeGroup = (event: EventItem): string => {
+  if (!event.group) return ""
+  return `${event.group.count} occurrence${event.group.count === 1 ? "" : "s"} · First ${formatDate(event.group.first_seen)} · Last ${formatDate(event.group.last_seen)}`
 }
 
 const notify = (message: string): void => {
@@ -84,7 +92,88 @@ const empty = (title: string, body: string): string =>
   `<div class="empty"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(body)}</p></div>`
 
 const levelBadge = (level: Level): string =>
-  `<span class="badge ${level}">${escapeHtml(level)}</span>`
+  `<span class="badge level-badge ${level}">${escapeHtml(level)}</span>`
+
+const safeActionUrl = (value: string): string | undefined => {
+  try {
+    const url = new URL(value)
+    return ["javascript:", "data:", "file:"].includes(url.protocol.toLowerCase()) ? undefined : url.href
+  } catch {
+    return undefined
+  }
+}
+
+const eventPlainText = (event: EventItem): string => {
+  const lines = [
+    event.title,
+    event.body,
+    `Project: ${event.project_name}`,
+    `Level: ${event.level}`,
+    event.source ? `Source: ${event.source}` : "",
+    event.type ? `Type: ${event.type}` : "",
+    event.fingerprint ? `Fingerprint: ${event.fingerprint}` : "",
+    `Occurred: ${event.occurred_at}`,
+    event.group ? `Occurrences: ${event.group.count} (${event.group.first_seen} — ${event.group.last_seen})` : "",
+    "",
+    "Context:",
+    JSON.stringify(event.data, null, 2),
+    event.actions.length > 0 ? "\nLinks:" : "",
+    ...event.actions.map((action) => `${action.label}: ${action.url}`)
+  ]
+  return lines.filter((line, index) => line !== "" || index === 1 || index === 9).join("\n").trim()
+}
+
+const markdownJsonSection = (title: string, value: unknown): ReadonlyArray<string> => {
+  if (value === undefined || value === null) return []
+  if (typeof value === "object" && !Array.isArray(value) && Object.keys(value as object).length === 0) return []
+  return [`## ${title}`, "", "```json", JSON.stringify(value, null, 2), "```", ""]
+}
+
+const eventMarkdown = (event: EventItem): string => {
+  const data = event.data
+  const stack = data.stack_trace ?? data.stacktrace ?? data.stack
+  const exception = data.exception ?? data.error
+  const environment = data.environment ?? data.env
+  const context = data.context
+  const breadcrumbs = data.breadcrumbs
+  const reserved = new Set(["stack_trace", "stacktrace", "stack", "exception", "error", "environment", "env", "context", "breadcrumbs"])
+  const remaining = Object.fromEntries(Object.entries(data).filter(([key]) => !reserved.has(key)))
+
+  const lines: Array<string> = [
+    `# ${event.title}`,
+    "",
+    `- **Project:** ${event.project_name}`,
+    `- **Level:** ${event.level}`,
+    `- **Occurred:** ${event.occurred_at}`,
+    ...(event.source ? [`- **Source:** ${event.source}`] : []),
+    ...(event.type ? [`- **Type:** ${event.type}`] : []),
+    ...(event.fingerprint ? [`- **Fingerprint:** \`${event.fingerprint}\``] : []),
+    ...(event.group ? [`- **Occurrences:** ${event.group.count} (${event.group.first_seen} — ${event.group.last_seen})`] : []),
+    ""
+  ]
+
+  if (event.body) lines.push("## Message", "", event.body, "")
+  lines.push(...markdownJsonSection("Exception", exception))
+  lines.push(...markdownJsonSection("Environment", environment))
+  if (stack !== undefined && stack !== null) {
+    lines.push("## Stack trace", "", "```text", typeof stack === "string" ? stack : JSON.stringify(stack, null, 2), "```", "")
+  }
+  lines.push(...markdownJsonSection("Context", context))
+  lines.push(...markdownJsonSection("Breadcrumbs", breadcrumbs))
+  lines.push(...markdownJsonSection("Data", remaining))
+  if (event.actions.length > 0) {
+    lines.push("## Links", "", ...event.actions.map((action) => `- [${action.label}](${action.url})`), "")
+  }
+  return lines.join("\n").trim()
+}
+
+const actionLinksMarkup = (event: EventItem): string => {
+  const links = event.actions.flatMap((action) => {
+    const url = safeActionUrl(action.url)
+    return url ? [`<a class="button small primary action-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(action.label)}</a>`] : []
+  })
+  return links.length > 0 ? `<div class="event-link-actions">${links.join("")}</div>` : ""
+}
 
 const eventMarkup = (event: EventItem): string => {
   const usefulSilenceField = event.fingerprint
@@ -92,33 +181,51 @@ const eventMarkup = (event: EventItem): string => {
     : event.source
       ? ["source", event.source]
       : ["title", event.title]
+  const group = event.group && event.group.count > 1
+    ? `<div class="group-summary"><strong>×${event.group.count}</strong><span>${escapeHtml(formatRelativeGroup(event))}</span></div>`
+    : ""
+
   return `
     <article class="event" id="event-${escapeHtml(event.id)}">
       <div class="event-head">
         <div class="event-title">
           <span class="project-icon">${escapeHtml(event.project_icon || "🔔")}</span>
-          <div>
+          <div class="event-copy">
             <h2>${escapeHtml(event.title)}</h2>
             ${event.body ? `<p>${escapeHtml(event.body)}</p>` : ""}
           </div>
         </div>
-        <div>${levelBadge(event.level)} ${event.silenced ? '<span class="badge silenced">silenced</span>' : ""}</div>
+        <div class="event-badges">${levelBadge(event.level)} ${event.silenced ? '<span class="badge silenced">silenced</span>' : ""}</div>
       </div>
+      ${group}
       <div class="meta">
         <span>${escapeHtml(event.project_name)}</span>
         ${event.source ? `<span>· ${escapeHtml(event.source)}</span>` : ""}
         <span>· ${escapeHtml(formatDate(event.occurred_at))}</span>
       </div>
+      ${actionLinksMarkup(event)}
       <details>
         <summary>Context</summary>
         <pre>${escapeHtml(JSON.stringify(event.data, null, 2))}</pre>
       </details>
-      <div class="event-actions">
+      <div class="event-actions event-actions-wrap">
+        ${event.group && event.group.count > 1
+          ? `<button class="button small secondary" data-action="open-group" data-project-id="${escapeHtml(event.project_id)}" data-fingerprint="${escapeHtml(event.fingerprint)}">View ${event.group.count} occurrences</button>`
+          : ""}
+        <button class="button small ghost" data-action="copy-event" data-event-id="${escapeHtml(event.id)}">Copy</button>
+        <button class="button small ghost" data-action="copy-markdown" data-event-id="${escapeHtml(event.id)}">Copy as Markdown</button>
+        <button class="button small ghost" data-action="share-event" data-event-id="${escapeHtml(event.id)}">Share</button>
         ${event.silenced
           ? `<button class="button small secondary" data-action="unsilence" data-event-id="${escapeHtml(event.id)}">Unsilence and push</button>`
           : `<button class="button small ghost" data-action="silence-event" data-event-id="${escapeHtml(event.id)}" data-project-id="${escapeHtml(event.project_id)}" data-field="${escapeHtml(usefulSilenceField[0])}" data-value="${escapeHtml(usefulSilenceField[1])}">Silence similar</button>`}
       </div>
     </article>`
+}
+
+const eventsById = new Map<string, EventItem>()
+
+const rememberEvents = (events: ReadonlyArray<EventItem>): void => {
+  for (const event of events) eventsById.set(event.id, event)
 }
 
 const attachEventActions = (root: ParentNode = document): void => {
@@ -159,38 +266,134 @@ const attachEventActions = (root: ParentNode = document): void => {
       }
     })
   }
+
+  for (const button of root.querySelectorAll<HTMLButtonElement>("[data-action='copy-event']")) {
+    button.addEventListener("click", async () => {
+      const event = eventsById.get(button.dataset.eventId ?? "")
+      if (!event) return
+      await navigator.clipboard.writeText(eventPlainText(event))
+      notify("Event copied")
+    })
+  }
+
+  for (const button of root.querySelectorAll<HTMLButtonElement>("[data-action='copy-markdown']")) {
+    button.addEventListener("click", async () => {
+      const event = eventsById.get(button.dataset.eventId ?? "")
+      if (!event) return
+      await navigator.clipboard.writeText(eventMarkdown(event))
+      notify("Markdown copied for your agent")
+    })
+  }
+
+  for (const button of root.querySelectorAll<HTMLButtonElement>("[data-action='share-event']")) {
+    button.addEventListener("click", async () => {
+      const event = eventsById.get(button.dataset.eventId ?? "")
+      if (!event) return
+      const text = eventMarkdown(event)
+      if (navigator.share) {
+        await navigator.share({ title: event.title, text, url: `${location.origin}/?event=${encodeURIComponent(event.id)}` })
+      } else {
+        await navigator.clipboard.writeText(text)
+        notify("Sharing is unavailable, so Markdown was copied")
+      }
+    })
+  }
+
+  for (const button of root.querySelectorAll<HTMLButtonElement>("[data-action='open-group']")) {
+    button.addEventListener("click", () => {
+      const projectId = button.dataset.projectId
+      const fingerprint = button.dataset.fingerprint
+      if (projectId && fingerprint) void renderEventGroup(projectId, fingerprint)
+    })
+  }
+}
+
+const datetimeValue = (value: string | undefined): string => value ? value.slice(0, 16) : ""
+
+const toRfc3339 = (value: FormDataEntryValue | null): string | undefined => {
+  const text = String(value ?? "").trim()
+  if (!text) return undefined
+  const date = new Date(text)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+const renderEventGroup = async (projectId: string, fingerprint: string): Promise<void> => {
+  loading()
+  const page = await api.eventGroup(projectId, fingerprint, {
+    since: inboxFilters.since,
+    until: inboxFilters.until,
+    level: inboxFilters.level,
+    source: inboxFilters.source,
+    silenced: inboxFilters.silenced,
+    limit: "100"
+  })
+  rememberEvents(page.events)
+  const url = new URL(location.href)
+  url.searchParams.set("view", "inbox")
+  url.searchParams.set("project", projectId)
+  url.searchParams.set("group", fingerprint)
+  url.searchParams.delete("event")
+  history.replaceState(null, "", `${url.pathname}?${url.searchParams}`)
+  app.innerHTML = `
+    <div class="page-head">
+      <div><h1>Fingerprint group</h1><p><code>${escapeHtml(fingerprint)}</code> · ${page.events.length} loaded occurrence${page.events.length === 1 ? "" : "s"}</p></div>
+      <div class="page-actions"><button id="back-to-inbox" class="button secondary">Back to inbox</button></div>
+    </div>
+    <section class="panel">
+      <div class="event-list">${page.events.length ? page.events.map(eventMarkup).join("") : empty("No occurrences", "The current filters exclude every occurrence in this group.")}</div>
+    </section>`
+  attachEventActions(app)
+  document.querySelector<HTMLButtonElement>("#back-to-inbox")?.addEventListener("click", () => {
+    history.replaceState(null, "", "/")
+    void renderInbox()
+  })
 }
 
 const renderInbox = async (): Promise<void> => {
+  const requestedUrl = new URL(location.href)
+  const requestedGroup = requestedUrl.searchParams.get("group")
+  const requestedProject = requestedUrl.searchParams.get("project")
+  if (requestedGroup && requestedProject) return renderEventGroup(requestedProject, requestedGroup)
+
   loading()
-  const [{ projects }, page] = await Promise.all([api.projects(), api.events({ limit: "50" })])
+  const query = { ...inboxFilters, grouped: String(groupRepeats), limit: "50" }
+  const [{ projects }, page] = await Promise.all([api.projects(), api.events(query)])
+  rememberEvents(page.events)
   app.innerHTML = `
     <div class="page-head">
       <div><h1>Inbox</h1><p>Everything your systems decided was worth knowing about.</p></div>
-      <div class="page-actions"><button id="refresh-inbox" class="button secondary">Refresh</button></div>
+      <div class="page-actions">
+        <label class="toggle-label"><input id="group-repeats" type="checkbox" ${groupRepeats ? "checked" : ""} /> Group repeats</label>
+        <button id="refresh-inbox" class="button secondary">Refresh</button>
+      </div>
     </div>
     <section class="panel">
-      <form id="event-filters" class="form-row">
+      <form id="event-filters" class="filter-grid">
         <label>Project
           <select name="project">
             <option value="">All projects</option>
-            ${projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join("")}
+            ${projects.map((project) => `<option value="${escapeHtml(project.id)}" ${inboxFilters.project === project.id ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("")}
           </select>
         </label>
         <label>Level
           <select name="level">
             <option value="">All levels</option>
-            ${["info", "success", "warning", "error", "critical"].map((level) => `<option>${level}</option>`).join("")}
+            ${["info", "success", "warning", "error", "critical"].map((level) => `<option value="${level}" ${inboxFilters.level === level ? "selected" : ""}>${level}</option>`).join("")}
           </select>
         </label>
+        <label>Source <input name="source" value="${escapeHtml(inboxFilters.source ?? "")}" /></label>
+        <label>Fingerprint <input name="fingerprint" value="${escapeHtml(inboxFilters.fingerprint ?? "")}" /></label>
+        <label>Search <input name="search" value="${escapeHtml(inboxFilters.search ?? "")}" placeholder="Title, body, context…" /></label>
         <label>Visibility
           <select name="silenced">
             <option value="">All events</option>
-            <option value="false">Not silenced</option>
-            <option value="true">Silenced</option>
+            <option value="false" ${inboxFilters.silenced === "false" ? "selected" : ""}>Not silenced</option>
+            <option value="true" ${inboxFilters.silenced === "true" ? "selected" : ""}>Silenced</option>
           </select>
         </label>
-        <button class="button primary" type="submit">Apply</button>
+        <label>Since <input name="since" type="datetime-local" value="${escapeHtml(datetimeValue(inboxFilters.since))}" /></label>
+        <label>Until <input name="until" type="datetime-local" value="${escapeHtml(datetimeValue(inboxFilters.until))}" /></label>
+        <div class="filter-actions"><button class="button primary" type="submit">Apply</button><button id="clear-filters" class="button ghost" type="button">Clear</button></div>
       </form>
     </section>
     <section class="panel">
@@ -202,29 +405,45 @@ const renderInbox = async (): Promise<void> => {
 
   attachEventActions(app)
   document.querySelector<HTMLButtonElement>("#refresh-inbox")?.addEventListener("click", () => void renderInbox())
+  document.querySelector<HTMLInputElement>("#group-repeats")?.addEventListener("change", (event) => {
+    groupRepeats = (event.currentTarget as HTMLInputElement).checked
+    localStorage.setItem("ops-context-group-repeats", String(groupRepeats))
+    void renderInbox()
+  })
+  document.querySelector<HTMLButtonElement>("#clear-filters")?.addEventListener("click", () => {
+    inboxFilters = { limit: "50" }
+    void renderInbox()
+  })
 
-  document.querySelector<HTMLFormElement>("#event-filters")?.addEventListener("submit", async (event) => {
+  document.querySelector<HTMLFormElement>("#event-filters")?.addEventListener("submit", (event) => {
     event.preventDefault()
     const form = new FormData(event.currentTarget as HTMLFormElement)
-    const filtered = await api.events({
-      project: String(form.get("project") ?? "") || undefined,
-      level: String(form.get("level") ?? "") || undefined,
-      silenced: String(form.get("silenced") ?? "") || undefined,
+    const value = (key: string): string | undefined => String(form.get(key) ?? "").trim() || undefined
+    inboxFilters = {
+      project: value("project"),
+      level: value("level"),
+      source: value("source"),
+      fingerprint: value("fingerprint"),
+      search: value("search"),
+      silenced: value("silenced"),
+      since: toRfc3339(form.get("since")),
+      until: toRfc3339(form.get("until")),
       limit: "50"
-    })
-    const list = document.querySelector<HTMLElement>("#event-list")!
-    list.innerHTML = filtered.events.length
-      ? filtered.events.map(eventMarkup).join("")
-      : empty("Nothing matched", "Try a different project or level filter.")
-    attachEventActions(list)
-    document.querySelector<HTMLButtonElement>("#load-more")?.remove()
+    }
+    void renderInbox()
   })
 
   document.querySelector<HTMLButtonElement>("#load-more")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement
     button.disabled = true
     try {
-      const next = await api.events({ before: button.dataset.cursor, limit: "50" })
+      const next = await api.events({
+        ...inboxFilters,
+        grouped: String(groupRepeats),
+        before: button.dataset.cursor,
+        limit: "50"
+      })
+      rememberEvents(next.events)
       const list = document.querySelector<HTMLElement>("#event-list")!
       list.insertAdjacentHTML("beforeend", next.events.map(eventMarkup).join(""))
       attachEventActions(list)
@@ -240,18 +459,18 @@ const renderInbox = async (): Promise<void> => {
     }
   })
 
-  const requested = new URL(location.href).searchParams.get("event")
+  const requested = requestedUrl.searchParams.get("event")
   if (requested) document.querySelector(`#event-${CSS.escape(requested)}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
 }
 
 const projectCard = (project: Project): string => `
-  <article class="card" data-project-card="${escapeHtml(project.id)}">
-    <div class="card-head">
+  <article class="card compact-project" data-project-card="${escapeHtml(project.id)}">
+    <div class="compact-project-main">
       <div><h2>${escapeHtml(project.icon || "📦")} ${escapeHtml(project.name)}</h2><p>${escapeHtml(project.slug)}</p></div>
       <span class="badge ${project.notify ? "success" : "silenced"}">${project.notify ? "push on" : "push off"}</span>
     </div>
-    <div class="form-grid">
-      <label>Minimum push level
+    <div class="compact-project-settings">
+      <label>Minimum level
         <select data-project-level="${escapeHtml(project.id)}">
           ${["info", "success", "warning", "error", "critical"].map((level) => `<option ${project.min_level === level ? "selected" : ""}>${level}</option>`).join("")}
         </select>
@@ -262,12 +481,12 @@ const projectCard = (project: Project): string => `
           <option value="false" ${!project.notify ? "selected" : ""}>Disabled</option>
         </select>
       </label>
-    </div>
-    <div class="card-actions">
-      <button class="button small secondary" data-project-action="test" data-project-id="${escapeHtml(project.id)}">Send test</button>
-      <button class="button small ghost" data-project-action="rename" data-project-id="${escapeHtml(project.id)}" data-project-name="${escapeHtml(project.name)}">Rename</button>
-      <button class="button small ghost" data-project-action="rotate" data-project-id="${escapeHtml(project.id)}">Rotate key</button>
-      <button class="button small danger" data-project-action="delete" data-project-id="${escapeHtml(project.id)}">Delete</button>
+      <div class="card-actions">
+        <button class="button small secondary" data-project-action="test" data-project-id="${escapeHtml(project.id)}">Test</button>
+        <button class="button small ghost" data-project-action="rename" data-project-id="${escapeHtml(project.id)}" data-project-name="${escapeHtml(project.name)}">Rename</button>
+        <button class="button small ghost" data-project-action="rotate" data-project-id="${escapeHtml(project.id)}">Rotate key</button>
+        <button class="button small danger" data-project-action="delete" data-project-id="${escapeHtml(project.id)}">Delete</button>
+      </div>
     </div>
   </article>`
 
@@ -354,9 +573,7 @@ const urlBase64ToBytes = (value: string): ArrayBuffer => {
   const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
   const binary = atob(padded)
   const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
   return bytes.buffer as ArrayBuffer
 }
 
@@ -370,9 +587,7 @@ const defaultDeviceName = (): string => {
 }
 
 const enablePush = async (): Promise<void> => {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    throw new Error("This browser does not support Web Push")
-  }
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("This browser does not support Web Push")
   if (/iPhone|iPad|iPod/u.test(navigator.userAgent) && !isStandalone()) {
     throw new Error("On iPhone or iPad, install this PWA to the Home Screen before enabling push")
   }
@@ -416,21 +631,12 @@ const renderPush = async (): Promise<void> => {
       <div class="page-actions"><button id="enable-push-view" class="button primary">Enable this device</button></div>
     </div>
     ${iphone && !isStandalone() ? '<div class="callout warning">On iOS, open Share → Add to Home Screen, launch Ops Context from the icon, then enable push.</div>' : ""}
-    <section class="panel">
-      <div class="card-list">${subscriptions.length ? subscriptions.map(pushCard).join("") : empty("No push devices", "Install the PWA and enable notifications on this device.")}</div>
-    </section>`
+    <section class="panel"><div class="card-list">${subscriptions.length ? subscriptions.map(pushCard).join("") : empty("No push devices", "Install the PWA and enable notifications on this device.")}</div></section>`
 
   document.querySelector<HTMLButtonElement>("#enable-push-view")?.addEventListener("click", async (event) => {
     const button = event.currentTarget as HTMLButtonElement
     button.disabled = true
-    try {
-      await enablePush()
-      await renderPush()
-    } catch (cause) {
-      notify(errorMessage(cause))
-    } finally {
-      button.disabled = false
-    }
+    try { await enablePush(); await renderPush() } catch (cause) { notify(errorMessage(cause)) } finally { button.disabled = false }
   })
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-push-action]")) {
@@ -446,9 +652,7 @@ const renderPush = async (): Promise<void> => {
           await api.deletePush(id)
         }
         await renderPush()
-      } catch (cause) {
-        notify(errorMessage(cause))
-      }
+      } catch (cause) { notify(errorMessage(cause)) }
     })
   }
 }
@@ -469,12 +673,8 @@ const renderSilences = async (): Promise<void> => {
     <div class="page-head"><div><h1>Silences</h1><p>Stop matching events from creating push notifications. ${silenced_events} stored event${silenced_events === 1 ? " is" : "s are"} currently marked as silenced.</p></div></div>
     <section class="panel">
       <form id="create-silence" class="form-grid">
-        <label>Project
-          <select name="project_id"><option value="">All projects</option>${projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join("")}</select>
-        </label>
-        <label>Field
-          <select name="field"><option>fingerprint</option><option>source</option><option>title</option></select>
-        </label>
+        <label>Project <select name="project_id"><option value="">All projects</option>${projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join("")}</select></label>
+        <label>Field <select name="field"><option>fingerprint</option><option>source</option><option>title</option></select></label>
         <label>Exact value <input name="value" maxlength="500" required /></label>
         <label>Note <input name="note" maxlength="1000" /></label>
         <button class="button primary" type="submit">Create silence</button>
@@ -495,9 +695,7 @@ const renderSilences = async (): Promise<void> => {
       })
       notify("Silence rule created")
       await renderSilences()
-    } catch (cause) {
-      notify(errorMessage(cause))
-    }
+    } catch (cause) { notify(errorMessage(cause)) }
   })
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-delete-silence]")) {
@@ -513,7 +711,7 @@ const renderSettings = async (): Promise<void> => {
   loading()
   const [settings, status] = await Promise.all([api.settings(), api.status()])
   app.innerHTML = `
-    <div class="page-head"><div><h1>Settings</h1><p>Retention, redaction, and deployment status.</p></div></div>
+    <div class="page-head"><div><h1>Settings</h1><p>Retention, redaction, MCP, and deployment status.</p></div></div>
     <div class="stats">
       <div class="stat"><span>Projects</span><strong>${status.projects}</strong></div>
       <div class="stat"><span>Events</span><strong>${status.events}</strong></div>
@@ -528,8 +726,13 @@ const renderSettings = async (): Promise<void> => {
         </label>
         <label>Additional sensitive keys
           <textarea name="redact_keys" placeholder="One key per line">${escapeHtml(settings.redact_keys.join("\n"))}</textarea>
-          <small class="muted">Defaults already include password, tokens, cookies, API keys, and card fields.</small>
+          <small class="muted">Defaults already include passwords, tokens, cookies, API keys, and card fields.</small>
         </label>
+        <label class="setting-toggle"><input name="mcp_enabled" type="checkbox" ${settings.mcp_enabled ? "checked" : ""} /> Enable read-only MCP endpoint</label>
+        <div class="callout ${settings.mcp_enabled && !settings.mcp_token_set ? "warning" : ""}">
+          <strong>MCP Streamable HTTP:</strong> <code>${escapeHtml(`${status.base_url.replace(/\/$/u, "")}/mcp`)}</code><br />
+          Token: ${settings.mcp_token_set ? "configured" : "not configured — run wrangler secret put OPS_MCP_TOKEN"}
+        </div>
         <button class="button primary" type="submit">Save settings</button>
       </form>
     </section>
@@ -544,17 +747,18 @@ const renderSettings = async (): Promise<void> => {
 
   document.querySelector<HTMLFormElement>("#settings-form")?.addEventListener("submit", async (event) => {
     event.preventDefault()
-    const data = new FormData(event.currentTarget as HTMLFormElement)
+    const form = event.currentTarget as HTMLFormElement
+    const data = new FormData(form)
     try {
       await api.updateSettings({
         retention_days: Number.parseInt(String(data.get("retention_days") ?? "90"), 10),
         redact_keys: String(data.get("redact_keys") ?? "").split("\n").map((key) => key.trim()).filter(Boolean),
-        setup_completed: true
+        setup_completed: true,
+        mcp_enabled: (form.elements.namedItem("mcp_enabled") as HTMLInputElement).checked
       })
       notify("Settings saved")
-    } catch (cause) {
-      notify(errorMessage(cause))
-    }
+      await renderSettings()
+    } catch (cause) { notify(errorMessage(cause)) }
   })
 }
 
@@ -587,9 +791,7 @@ loginForm.addEventListener("submit", async (event) => {
     loginDialog.close()
     document.querySelector<HTMLInputElement>("#login-password")!.value = ""
     await renderCurrentView()
-  } catch (cause) {
-    loginError.textContent = errorMessage(cause)
-  }
+  } catch (cause) { loginError.textContent = errorMessage(cause) }
 })
 
 logoutButton.addEventListener("click", async () => {
@@ -611,13 +813,7 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(".nav [data-vi
 
 pushButton.addEventListener("click", async () => {
   pushButton.disabled = true
-  try {
-    await enablePush()
-  } catch (cause) {
-    notify(errorMessage(cause))
-  } finally {
-    pushButton.disabled = false
-  }
+  try { await enablePush() } catch (cause) { notify(errorMessage(cause)) } finally { pushButton.disabled = false }
 })
 
 window.addEventListener("beforeinstallprompt", (event) => {
