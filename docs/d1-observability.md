@@ -23,6 +23,10 @@ In Workers Logs, filter structured logs to `event = "d1.query"`. Create saved vi
 
 The read-amplification ratio is a useful index signal: a sustained increase means D1 scans more rows to return the same application result. Capture the same time window and traffic shape before and after performance changes so issues #11, #12, #13, #18, and #19 can compare these measures.
 
+The first measured index review, including its local baseline, rejected
+candidates, storage/write tradeoffs, and production rollout procedure, is
+recorded in [D1 index tuning baseline](d1-index-tuning.md).
+
 Batch spans use the logical batch name. Each successful statement also emits its own stable name and D1 row metadata, so repeated fan-out writes aggregate without creating per-row cardinality.
 
 Cloudflare observability is enabled in `wrangler.jsonc`. If production volume makes full query logging noisy, configure Cloudflare log sampling at deployment level; keep trace and log sampling aligned when comparing ratios.
