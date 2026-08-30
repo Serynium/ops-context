@@ -1,94 +1,120 @@
-# Model Context Protocol
+# Read-only MCP endpoint
 
-Ops Context exposes an optional read-only MCP endpoint at:
+Ops Context exposes an optional Model Context Protocol endpoint at:
 
 ```text
-https://your-ops-context.example/mcp
+https://mcp.ops.example.com/mcp
 ```
 
-The endpoint is implemented with the official `@modelcontextprotocol/server` TypeScript SDK and served directly through the Cloudflare Worker `Request`/`Response` boundary. It supports the current per-request MCP transport and the SDK's stateless 2025 Streamable HTTP fallback. Modern exchanges use JSON; compatible legacy clients may receive an SSE response, so clients should advertise both media types.
+It uses Streamable HTTP through the official `@modelcontextprotocol/server` TypeScript SDK. The MCP adapter is wrapped by an Effect service and reuses the same project, event, settings, and D1 capabilities as the HTTP API.
 
-No durable MCP session state is stored in a Worker isolate. Every tool reads authoritative state from D1 through the existing Effect services.
+## Enablement
 
-## Enable it
+MCP is disabled by default. Enable it from **Settings → Enable read-only MCP endpoint**.
 
-Generate or upload a high-entropy bearer token:
+The status response reports:
 
-```bash
-pnpm secrets
-pnpm exec wrangler secret put OPS_MCP_TOKEN
+```json
+{
+  "mcp_enabled": true,
+  "mcp_access_configured": true
+}
 ```
 
-Then enable **Settings → Read-only MCP endpoint** in the PWA. `GET /api/v1/settings` reports both `mcp_enabled` and `mcp_token_set` without exposing the token.
-
-The token must contain at least 16 characters. The generated value contains 256 bits of entropy.
+The compatibility field `mcp_token_set` mirrors `mcp_access_configured` during the transition from the former application bearer token.
 
 ## Authentication
 
-The endpoint accepts one of:
+MCP is protected only by Cloudflare Access.
 
-- `Authorization: Bearer <OPS_MCP_TOKEN>`
-- an active Ops Context administrator session cookie
-- the configured administrator HTTP Basic credentials
+Use a dedicated Access application for the MCP hostname and configure:
 
-Project API keys are explicitly detected and refused, so an event-ingestion credential never gains read access. Authenticated requests are forwarded to the official SDK with a validated read-only principal and the `events:read` scope.
+```text
+OPS_MCP_HOST=mcp.ops.example.com
+OPS_ACCESS_MCP_AUD=<MCP_ACCESS_AUDIENCE>
+```
 
-Requests carrying an `Origin` must be same-origin, and the request host must agree with the Worker URL before protocol handling begins.
+The policy may accept:
+
+- a human Access identity; or
+- a Cloudflare Access service token for an automated MCP client.
+
+The Worker verifies the native Access context, hostname, audience, and requested surface. It does not trust caller-provided identity headers.
+
+Project ingestion keys are explicitly rejected. They grant write-only event ingestion and are not administrator or MCP credentials.
+
+The previous `OPS_MCP_TOKEN`, HTTP Basic authentication, and administrator-session cookie paths have been removed.
+
+See [Cloudflare Access administration](cloudflare-access.md) for the complete hostname and policy design.
 
 ## Tools
 
-| Tool | Purpose |
-| --- | --- |
-| `list_projects` | List all projects. |
-| `list_events` | List events with project, level, source, fingerprint, time, silence, cursor, and grouping filters. |
-| `search_events` | Search titles, bodies, sources, fingerprints, and structured context. |
-| `get_event` | Retrieve one event, including structured context and actions. |
-| `get_event_group` | Retrieve aggregate metadata, the latest event, and paginated occurrences for a project and fingerprint. |
+### `list_projects`
 
-All tools advertise read-only, idempotent, closed-world annotations. MCP cannot create, mutate, unsilence, or delete operational data.
+Lists projects with identifiers, slugs, notification settings, and metadata.
 
-## Example initialization
+### `list_events`
 
-This request uses the SDK's stateless 2025 compatibility path. Current SDK clients negotiate the latest protocol automatically.
+Lists recent events newest first. Filters include:
 
-```bash
-curl https://your-ops-context.example/mcp \
-  -H 'Authorization: Bearer YOUR_TOKEN' \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  --data '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2025-06-18",
-      "capabilities": {},
-      "clientInfo": { "name": "curl", "version": "1" }
-    }
-  }'
-```
+- project ID or slug;
+- level;
+- source;
+- fingerprint;
+- `since` and `until` RFC 3339 timestamps;
+- silenced state;
+- grouped or individual occurrences;
+- cursor and limit.
 
-## Example tool call
+### `search_events`
 
-```bash
-curl https://your-ops-context.example/mcp \
-  -H 'Authorization: Bearer YOUR_TOKEN' \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  --data '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
-      "name": "search_events",
-      "arguments": {
-        "query": "timeout",
-        "level": "error",
-        "grouped": true,
-        "limit": 25
+Searches titles, bodies, sources, fingerprints, and structured event data while accepting the same filters as `list_events`.
+
+### `get_event`
+
+Returns one event with complete structured context, actions, project metadata, and silence state.
+
+### `get_event_group`
+
+Returns aggregate metadata, the latest event, and paginated individual occurrences for a project/fingerprint pair.
+
+All tools are annotated as read-only and idempotent.
+
+## Client configuration
+
+For an interactive client, open the MCP hostname and complete the Access login flow according to the client’s HTTP-authentication support.
+
+For a headless client, configure an Access service token and send the Cloudflare Access service-token headers required by your policy. Do not place those values in the MCP JSON payload or source control.
+
+Conceptual configuration:
+
+```json
+{
+  "mcpServers": {
+    "ops-context": {
+      "type": "streamable-http",
+      "url": "https://mcp.ops.example.com/mcp",
+      "headers": {
+        "CF-Access-Client-Id": "${OPS_CONTEXT_ACCESS_CLIENT_ID}",
+        "CF-Access-Client-Secret": "${OPS_CONTEXT_ACCESS_CLIENT_SECRET}"
       }
     }
-  }'
+  }
+}
 ```
 
-The Worker deliberately does not cache `/mcp` responses, and the endpoint is routed through Worker code before Static Assets.
+Use the exact environment-variable and header configuration supported by your MCP client.
+
+## Security behavior
+
+The endpoint:
+
+- accepts only `POST` and preflight `OPTIONS`;
+- requires the configured MCP hostname;
+- validates the MCP Access audience;
+- accepts users or service tokens according to the Access policy;
+- rejects project bearer keys;
+- returns no-store, `nosniff`, and same-origin referrer headers;
+- exposes read-only tools only.
+
+The Access application should block requests before Worker execution when possible. The Worker checks the trusted native Access context again to keep the application boundary explicit and testable.
