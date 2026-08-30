@@ -1,12 +1,15 @@
 import { Context, Effect, Layer } from "effect"
 import { Status as StatusSchema } from "./api-models.js"
 import {
-  createEventForProject,
+  enqueueEventForProject,
+  processIngestDeadLetter,
+  processIngestEvent,
   eventDeliveries,
   getEvent,
   listEvents,
   unsilenceEvent,
   type CreateEventInput,
+  type EventAccepted,
   type EventPage,
   type EventError,
   type ListEventsInput
@@ -60,12 +63,12 @@ import {
   updateSubscription,
   type RegisterSubscriptionInput
 } from "./subscriptions.js"
-import { runMaintenance, type MaintenanceResult } from "./maintenance.js"
+import { runRetention, type RetentionResult } from "./retention.js"
+import type { DeliverPushCommand, IngestEventCommand } from "./queue-contract.js"
 import {
   DeliveriesRepository,
   EventsRepository,
   ProjectsRepository,
-  PushJobsRepository,
   SettingsRepository,
   SilencesRepository,
   SubscriptionsRepository,
@@ -82,7 +85,6 @@ import type {
   EventView,
   ProjectRow,
   ProjectView,
-  PushJobMessage,
   PushSubscriptionView,
   SettingsView,
   SilenceRow
@@ -151,7 +153,7 @@ export class Events extends Context.Service<Events, {
   readonly create: (
     project: ProjectRow,
     input: CreateEventInput
-  ) => Effect.Effect<EventView, EventError>
+  ) => Effect.Effect<EventAccepted, EventError>
   readonly list: (input: ListEventsInput) => Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable>
   readonly get: (id: string) => Effect.Effect<EventView, EventNotFound | RepositoryUnavailable>
   readonly deliveries: (id: string) => Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable>
@@ -185,7 +187,7 @@ export class Events extends Context.Service<Events, {
 
       return Events.of({
         create: Effect.fn("Events.create")((project: ProjectRow, input: CreateEventInput) =>
-          provide(createEventForProject(project, input))
+          provide(enqueueEventForProject(project, input))
         ),
         list: Effect.fn("Events.list")((input: ListEventsInput) =>
           provide(listEvents(input))
@@ -320,7 +322,7 @@ export class System extends Context.Service<System, {
   readonly publicKey: Effect.Effect<{ readonly public_key: string }, PushNotConfigured>
   readonly status: (origin: string) => Effect.Effect<typeof StatusSchema.Type, RepositoryUnavailable>
   readonly testNotification: (projectId?: string) => Effect.Effect<{
-    readonly event: EventView
+    readonly event: EventAccepted
     readonly web_push_configured: boolean
   }, SystemError>
   readonly rebuildEventGroups: Effect.Effect<{ readonly groups: number }, RepositoryUnavailable>
@@ -366,6 +368,7 @@ export class System extends Context.Service<System, {
           subscriptions: counts.subscriptions,
           enabled_subscriptions: counts.enabled_subscriptions,
           dead_jobs: counts.dead_jobs,
+          failed_ingests: counts.failed_ingests,
           last_push: lastPush,
           retention_days: currentSettings.retention_days,
           setup_completed: currentSettings.setup_completed,
@@ -415,8 +418,8 @@ export class System extends Context.Service<System, {
 }
 
 export class PushDelivery extends Context.Service<PushDelivery, {
-  readonly process: (message: PushJobMessage) => Effect.Effect<PushOutcome, PushDeliveryError>
-  readonly deadLetter: (message: PushJobMessage) => Effect.Effect<PushOutcome, PushDeliveryError>
+  readonly process: (message: DeliverPushCommand) => Effect.Effect<PushOutcome, PushDeliveryError>
+  readonly deadLetter: (message: DeliverPushCommand) => Effect.Effect<PushOutcome, PushDeliveryError>
 }>()("ops-context/PushDelivery") {
   static readonly layer = Layer.effect(
     PushDelivery,
@@ -438,23 +441,50 @@ export class PushDelivery extends Context.Service<PushDelivery, {
   )
 }
 
-export class Maintenance extends Context.Service<Maintenance, {
-  readonly run: Effect.Effect<MaintenanceResult, RepositoryUnavailable | QueueUnavailable>
-}>()("ops-context/Maintenance") {
+export class EventIngestion extends Context.Service<EventIngestion, {
+  readonly process: (message: IngestEventCommand) => Effect.Effect<void, EventError>
+  readonly deadLetter: (message: IngestEventCommand) => Effect.Effect<void, EventError>
+}>()("ops-context/EventIngestion") {
   static readonly layer = Layer.effect(
-    Maintenance,
+    EventIngestion,
     Effect.gen(function*() {
       const eventsRepository = yield* EventsRepository
-      const pushJobsRepository = yield* PushJobsRepository
+      const projectsRepository = yield* ProjectsRepository
       const settingsRepository = yield* SettingsRepository
+      const silencesRepository = yield* SilencesRepository
+      const subscriptionsRepository = yield* SubscriptionsRepository
       const queue = yield* PushQueue
       const config = yield* AppConfig
-      return Maintenance.of({
-        run: runMaintenance.pipe(
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(ProjectsRepository, projectsRepository),
+        Effect.provideService(EventsRepository, eventsRepository),
+        Effect.provideService(SettingsRepository, settingsRepository),
+        Effect.provideService(SilencesRepository, silencesRepository),
+        Effect.provideService(SubscriptionsRepository, subscriptionsRepository),
+        Effect.provideService(PushQueue, queue),
+        Effect.provideService(AppConfig, config)
+      )
+      return EventIngestion.of({
+        process: (message) => provide(processIngestEvent(message)),
+        deadLetter: (message) => provide(processIngestDeadLetter(message))
+      })
+    })
+  )
+}
+
+export class Retention extends Context.Service<Retention, {
+  readonly run: Effect.Effect<RetentionResult, RepositoryUnavailable>
+}>()("ops-context/Retention") {
+  static readonly layer = Layer.effect(
+    Retention,
+    Effect.gen(function*() {
+      const eventsRepository = yield* EventsRepository
+      const settingsRepository = yield* SettingsRepository
+      const config = yield* AppConfig
+      return Retention.of({
+        run: runRetention.pipe(
           Effect.provideService(EventsRepository, eventsRepository),
-          Effect.provideService(PushJobsRepository, pushJobsRepository),
           Effect.provideService(SettingsRepository, settingsRepository),
-          Effect.provideService(PushQueue, queue),
           Effect.provideService(AppConfig, config)
         )
       })

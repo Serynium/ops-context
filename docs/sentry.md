@@ -31,11 +31,11 @@ The route must end at `envelope/`; additional path segments do not match. Authen
 
 The key is authenticated through the existing project-key service. The path project id is not used for authorization or project selection.
 
-The Worker accepts identity, gzip, and deflate request bodies. It limits the request to 2 MiB on the wire and 16 MiB after decompression. Unsupported encodings return `415`, oversized bodies return `413`, and missing or invalid project keys return `401`.
+The Worker accepts identity, gzip, and deflate request bodies. It limits the request to 2 MiB on the wire and 16 MiB after decompression. Unsupported encodings return `415`, oversized bodies return `413`, and missing or invalid project keys return `401`. If any valid event cannot reach the durable Queue because Queue, D1, or cryptography infrastructure is temporarily unavailable, the envelope returns retryable `503 Service Unavailable` with `Retry-After: 5`; already accepted items are safe to receive again because Sentry event IDs drive idempotency.
 
 ## Event mapping
 
-Each Sentry `event` envelope item becomes a normal Ops Context event and enters the same creation pipeline as `POST /api/v1/events`. This preserves recursive redaction, silence matching, fingerprint grouping, D1 persistence, durable push jobs, notification thresholds, and Queue delivery.
+Each Sentry `event` envelope item becomes a normal Ops Context event and enters the same Queue-first pipeline as `POST /api/v1/events`. Envelope acceptance therefore precedes eventual D1 visibility; the `IngestEvent` consumer preserves recursive redaction, silence matching, fingerprint grouping, durable push jobs, notification thresholds, and Queue delivery.
 
 | Sentry field | Ops Context field |
 |---|---|

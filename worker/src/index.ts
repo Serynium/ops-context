@@ -4,12 +4,13 @@ import {
   attachCloudflareAccess,
   type ExecutionContextWithAccess
 } from "./access.js"
-import { Maintenance, PushDelivery } from "./application.js"
-import { EVENT_PAYLOAD_MAX_BYTES } from "./event-contract.js"
+import { EventIngestion, PushDelivery, Retention } from "./application.js"
+import { EVENT_REQUEST_MAX_BYTES } from "./event-contract.js"
 import { makeLayers } from "./layers.js"
 import { McpEndpoint } from "./mcp.js"
+import { decodeQueueCommand, type QueueCommand } from "./queue-contract.js"
 import { isSentryEnvelopePath, SentryEndpoint } from "./sentry.js"
-import type { Env, PushJobMessage } from "./types.js"
+import type { Env } from "./types.js"
 
 interface WebHandler {
   readonly handler: (request: Request) => Promise<Response>
@@ -18,10 +19,10 @@ interface WebHandler {
 
 interface IsolateRuntime {
   readonly db: D1Database
-  readonly queue: Queue<PushJobMessage>
+  readonly queue: Queue<QueueCommand>
   readonly http: WebHandler
   readonly programs: ManagedRuntime.ManagedRuntime<
-    PushDelivery | Maintenance | McpEndpoint | SentryEndpoint,
+    PushDelivery | EventIngestion | Retention | McpEndpoint | SentryEndpoint,
     never
   >
 }
@@ -63,7 +64,7 @@ const eventPayloadLimitResponse = (): Response =>
   jsonErrorResponse(
     413,
     "payload_too_large",
-    `event request body must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes`
+    `event request body must not exceed ${EVENT_REQUEST_MAX_BYTES} bytes`
   )
 
 const cancelRequestBody = async (
@@ -87,7 +88,7 @@ const eventRequestExceedsLimit = async (
   const contentLength = request.headers.get("content-length")
   if (contentLength !== null) {
     const declaredBytes = Number(contentLength)
-    if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_PAYLOAD_MAX_BYTES) {
+    if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_REQUEST_MAX_BYTES) {
       await cancelRequestBody(request.body, "event request body too large")
       return true
     }
@@ -104,7 +105,7 @@ const eventRequestExceedsLimit = async (
       if (chunk.done) return false
 
       receivedBytes += chunk.value.byteLength
-      if (receivedBytes <= EVENT_PAYLOAD_MAX_BYTES) continue
+      if (receivedBytes <= EVENT_REQUEST_MAX_BYTES) continue
 
       await Promise.allSettled([
         reader.cancel("event request body too large"),
@@ -166,11 +167,20 @@ export default {
 
     for (const message of batch.messages) {
       try {
+        const command = await runtime.runPromise(decodeQueueCommand(message.body))
+        if (command._tag === "IngestEvent") {
+          await runtime.runPromise(
+            Effect.flatMap(EventIngestion, (ingestion) =>
+              deadLetterBatch ? ingestion.deadLetter(command) : ingestion.process(command)
+            )
+          )
+          message.ack()
+          continue
+        }
+
         const outcome = await runtime.runPromise(
           Effect.flatMap(PushDelivery, (delivery) =>
-            deadLetterBatch
-              ? delivery.deadLetter(message.body)
-              : delivery.process(message.body)
+            deadLetterBatch ? delivery.deadLetter(command) : delivery.process(command)
           )
         )
         if (!deadLetterBatch && outcome._tag === "Retry") {
@@ -188,9 +198,9 @@ export default {
   scheduled(_controller, env, context): void {
     const runtime = runtimeFor(env).programs
     context.waitUntil(
-      runtime.runPromise(Effect.flatMap(Maintenance, (_) => _.run))
-        .then((result) => console.log("maintenance completed", result))
-        .catch((cause) => console.error("maintenance failed", cause))
+      runtime.runPromise(Effect.flatMap(Retention, (_) => _.run))
+        .then((result) => console.log("retention completed", result))
+        .catch((cause) => console.error("retention failed", cause))
     )
   }
-} satisfies ExportedHandler<Env, PushJobMessage>
+} satisfies ExportedHandler<Env, QueueCommand>

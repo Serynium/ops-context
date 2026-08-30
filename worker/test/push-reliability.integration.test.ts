@@ -1,27 +1,25 @@
 import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
-import { createEventForProject } from "../src/events.js"
-import { deliveryTemporarilyUnavailable, queueUnavailable } from "../src/errors.js"
-import { runMaintenance } from "../src/maintenance.js"
+import { deliveryTemporarilyUnavailable } from "../src/errors.js"
 import {
   processDeadLetterMessage,
   processPushMessage,
   type PushJobRow
 } from "../src/push.js"
 import { PushDeliveryRepository } from "../src/push-repository.js"
-import { D1RepositoriesLive } from "../src/repositories.js"
 import {
   AppConfig,
   CredentialCrypto,
   Database,
-  PushQueue,
   WebPush,
   type ConfigService
 } from "../src/services.js"
-import type { ProjectRow, PushJobMessage } from "../src/types.js"
+import { QUEUE_COMMAND_VERSION, type DeliverPushCommand } from "../src/queue-contract.js"
 
-const message: PushJobMessage = {
+const message: DeliverPushCommand = {
+  _tag: "DeliverPush",
+  version: QUEUE_COMMAND_VERSION,
   eventId: "evt_test",
   subscriptionId: "sub_test"
 }
@@ -64,40 +62,6 @@ const pushRepositoryLayer = () =>
   PushDeliveryRepository.layer.pipe(
     Layer.provide(Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer))
   )
-
-const project: ProjectRow = {
-  id: "prj_test",
-  name: "Test",
-  slug: "test",
-  icon: "",
-  api_key_hash: "hash",
-  notify: 1,
-  min_level: "info",
-  created_at: new Date(0).toISOString(),
-  updated_at: new Date(0).toISOString()
-}
-
-const queueLayer = (
-  published: PushJobMessage[],
-  failPublication = false
-) => Layer.succeed(PushQueue)({
-  send: (item) => failPublication
-    ? Effect.fail(queueUnavailable("test Queue publication failed"))
-    : Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
-  sendMany: (items) => failPublication
-    ? Effect.fail(queueUnavailable("test Queue publication failed"))
-    : Effect.sync(() => published.push(...items)).pipe(Effect.asVoid)
-})
-
-const eventLayer = (
-  published: PushJobMessage[],
-  failPublication = false
-) => Layer.mergeAll(
-  D1RepositoriesLive(env.DB),
-  CredentialCrypto.layer,
-  Layer.succeed(AppConfig)(config()),
-  queueLayer(published, failPublication)
-)
 
 const reset = async (): Promise<void> => {
   await env.DB.prepare("DROP TRIGGER IF EXISTS fail_push_job_insert").run()
@@ -379,7 +343,7 @@ describe("bounded push delivery lifecycle", () => {
     expect(await deliveryCount(), await stateSnapshot()).toBe(1)
   })
 
-  it("lets Queue own ordinary delayed retries instead of immediate Cron republication", async () => {
+  it("lets Queue own ordinary delayed retries", async () => {
     await seed()
     const outcome = await Effect.runPromise(
       processPushMessage(message).pipe(
@@ -388,125 +352,9 @@ describe("bounded push delivery lifecycle", () => {
     )
     expect(outcome._tag).toBe("Retry")
 
-    await env.DB.prepare(
-      "UPDATE push_jobs SET available_at = ? WHERE event_id = ? AND subscription_id = ?"
-    ).bind(new Date(Date.now() - 1_000).toISOString(), message.eventId, message.subscriptionId).run()
-
-    const published: PushJobMessage[] = []
-    const maintenanceLayer = Layer.mergeAll(
-      D1RepositoriesLive(env.DB),
-      Layer.succeed(AppConfig)(config()),
-      Layer.succeed(PushQueue)({
-        send: (item) => Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
-        sendMany: (items) => Effect.sync(() => published.push(...items)).pipe(Effect.asVoid)
-      })
-    )
-    const result = await Effect.runPromise(runMaintenance.pipe(Effect.provide(maintenanceLayer)))
-
-    expect(result.recoveredJobs).toBe(0)
-    expect(published).toEqual([])
-    expect((await getJob()).state).toBe("retrying")
-  })
-
-  it("recovers an unpublished job while never resurrecting a dead job", async () => {
-    await seed({ state: "pending", queuedAt: null })
-    await seed({
-      eventId: "evt_dead",
-      state: "dead",
-      attempts: 6,
-      deadAt: new Date().toISOString()
-    })
-
-    const published: PushJobMessage[] = []
-    const maintenanceLayer = Layer.mergeAll(
-      D1RepositoriesLive(env.DB),
-      Layer.succeed(AppConfig)(config()),
-      Layer.succeed(PushQueue)({
-        send: (item) => Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
-        sendMany: (items) => Effect.sync(() => published.push(...items)).pipe(Effect.asVoid)
-      })
-    )
-    const result = await Effect.runPromise(runMaintenance.pipe(Effect.provide(maintenanceLayer)))
-
-    expect(result.recoveredJobs).toBe(1)
-    expect(published).toEqual([message])
-    expect((await getJob()).state).toBe("queued")
-    expect((await getJob("evt_dead")).state).toBe("dead")
-  })
-
-  it("recovers a Queue publication lost after the event and job commit", async () => {
-    await seedInfrastructure()
-    const dropped: PushJobMessage[] = []
-    const created = await Effect.runPromise(
-      createEventForProject(project, {
-        external_id: "lost-publication",
-        level: "error",
-        title: "Committed before Queue publication"
-      }).pipe(Effect.provide(eventLayer(dropped, true)))
-    )
-
-    expect(dropped).toEqual([])
-    expect((await getJob(created.id)).state, await stateSnapshot()).toBe("pending")
-
-    const recovered: PushJobMessage[] = []
-    const maintenanceLayer = Layer.mergeAll(
-      D1RepositoriesLive(env.DB),
-      Layer.succeed(AppConfig)(config()),
-      queueLayer(recovered)
-    )
-    const result = await Effect.runPromise(runMaintenance.pipe(Effect.provide(maintenanceLayer)))
-
-    expect(result.recoveredJobs, await stateSnapshot()).toBe(1)
-    expect(recovered).toEqual([{ eventId: created.id, subscriptionId: "sub_test" }])
-    expect((await getJob(created.id)).state, await stateSnapshot()).toBe("queued")
-  })
-
-  it("creates an event and all of its push jobs atomically", async () => {
-    await seedInfrastructure()
-    await env.DB.prepare(
-      `CREATE TRIGGER fail_push_job_insert
-       BEFORE INSERT ON push_jobs
-       BEGIN
-         SELECT RAISE(ABORT, 'forced push-job insert failure');
-       END`
-    ).run()
-
-    const published: PushJobMessage[] = []
-    await expect(Effect.runPromise(
-      createEventForProject(project, {
-        external_id: "atomic-event",
-        level: "error",
-        title: "Must roll back"
-      }).pipe(Effect.provide(eventLayer(published)))
-    )).rejects.toBeDefined()
-
-    expect(await tableCount("events"), await stateSnapshot()).toBe(0)
-    expect(await tableCount("push_jobs"), await stateSnapshot()).toBe(0)
-    expect(published).toEqual([])
-  })
-
-  it("treats duplicate external_id ingestion as one event and one job", async () => {
-    await seedInfrastructure()
-    const published: PushJobMessage[] = []
-    const layer = eventLayer(published)
-    const input = {
-      external_id: "provider-event-42",
-      level: "error" as const,
-      title: "Original title"
-    }
-
-    const first = await Effect.runPromise(
-      createEventForProject(project, input).pipe(Effect.provide(layer))
-    )
-    const duplicate = await Effect.runPromise(
-      createEventForProject(project, { ...input, title: "Duplicate title" }).pipe(Effect.provide(layer))
-    )
-
-    expect(duplicate.id).toBe(first.id)
-    expect(duplicate.title).toBe("Original title")
-    expect(await tableCount("events"), await stateSnapshot()).toBe(1)
-    expect(await tableCount("push_jobs"), await stateSnapshot()).toBe(1)
-    expect(published).toEqual([{ eventId: first.id, subscriptionId: "sub_test" }])
+    const job = await getJob()
+    expect(job.state).toBe("retrying")
+    expect(job.available_at > new Date().toISOString()).toBe(true)
   })
 
   it("cascades event deletion to push jobs and delivery history", async () => {
