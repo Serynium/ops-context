@@ -96,6 +96,7 @@ export interface ConfigService {
   readonly vapidPublicKey: string
   readonly vapidPrivateJwk: string
   readonly vapidSubject: string
+  readonly mcpToken?: string
 }
 
 export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-context/AppConfig") {
@@ -107,7 +108,8 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
       adminPasswordHash: env.ADMIN_PASSWORD_HASH,
       vapidPublicKey: env.VAPID_PUBLIC_KEY,
       vapidPrivateJwk: env.VAPID_PRIVATE_JWK,
-      vapidSubject: env.VAPID_SUBJECT
+      vapidSubject: env.VAPID_SUBJECT,
+      ...(env.OPS_MCP_TOKEN ? { mcpToken: env.OPS_MCP_TOKEN } : {})
     })
 }
 
