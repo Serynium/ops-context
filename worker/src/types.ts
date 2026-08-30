@@ -1,6 +1,17 @@
 export const LEVELS = ["info", "success", "warning", "error", "critical"] as const
 export type Level = (typeof LEVELS)[number]
 
+export interface EventAction {
+  readonly label: string
+  readonly url: string
+}
+
+export interface EventGroup {
+  readonly count: number
+  readonly first_seen: string
+  readonly last_seen: string
+}
+
 export interface PushJobMessage {
   readonly eventId: string
   readonly subscriptionId: string
@@ -14,6 +25,7 @@ export interface Env {
   readonly OPS_BASE_URL?: string
   readonly OPS_ADMIN_USER: string
   readonly OPS_RETENTION_DAYS?: string
+  readonly OPS_MCP_TOKEN?: string
 
   readonly ADMIN_PASSWORD_HASH: string
   readonly VAPID_PUBLIC_KEY: string
@@ -58,9 +70,13 @@ export interface EventRow {
   readonly body: string
   readonly fingerprint: string
   readonly payload_json: string
+  readonly actions_json: string
   readonly occurred_at: string
   readonly created_at: string
   readonly silence_id: string | null
+  readonly group_count?: number
+  readonly group_first_seen?: string
+  readonly group_last_seen?: string
 }
 
 export interface EventView {
@@ -77,10 +93,12 @@ export interface EventView {
   readonly body: string
   readonly fingerprint: string
   readonly data: Record<string, unknown>
+  readonly actions: ReadonlyArray<EventAction>
   readonly occurred_at: string
   readonly created_at: string
   readonly silenced: boolean
   readonly silence_id?: string
+  readonly group?: EventGroup
 }
 
 export interface PushSubscriptionRow {
@@ -133,4 +151,6 @@ export interface SettingsView {
   readonly redact_keys: ReadonlyArray<string>
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
+  readonly mcp_enabled: boolean
+  readonly mcp_token_set: boolean
 }
