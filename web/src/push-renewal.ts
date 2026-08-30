@@ -3,6 +3,7 @@ export interface PushRenewalCredential {
   readonly credential?: string
   readonly enrollment_key?: string
   readonly pending?: boolean
+  readonly explicit?: boolean
   readonly revoked?: boolean
 }
 
@@ -37,12 +38,20 @@ export const beginPushEnrollment = async (force: boolean): Promise<string> => {
       let enrollmentKey = ""
       request.onsuccess = () => {
         const current = request.result as PushRenewalCredential | undefined
-        if (current?.enrollment_key && (!force || current.pending)) {
+        if (
+          current?.enrollment_key &&
+          current.pending &&
+          current.explicit === force
+        ) {
+          enrollmentKey = current.enrollment_key
+          return
+        }
+        if (current?.enrollment_key && !force && !current.pending) {
           enrollmentKey = current.enrollment_key
           return
         }
         enrollmentKey = randomEnrollmentKey()
-        store.put({ enrollment_key: enrollmentKey, pending: true }, RECORD_KEY)
+        store.put({ enrollment_key: enrollmentKey, pending: true, explicit: force }, RECORD_KEY)
       }
       transaction.oncomplete = () => resolve(enrollmentKey)
       transaction.onerror = () => reject(transaction.error ?? new Error("could not store push credential"))
@@ -106,12 +115,23 @@ export const revokePushRenewalCredential = async (installationId: string): Promi
   }
 }
 
-export const markPushEnrollmentRevoked = async (): Promise<void> => {
+export const markPushEnrollmentRevoked = async (enrollmentKey: string): Promise<void> => {
   const database = await openDatabase()
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite")
-      transaction.objectStore(STORE_NAME).put({ revoked: true }, RECORD_KEY)
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.get(RECORD_KEY)
+      request.onsuccess = () => {
+        const current = request.result as PushRenewalCredential | undefined
+        if (
+          current?.enrollment_key === enrollmentKey &&
+          current.pending &&
+          current.explicit !== true
+        ) {
+          store.put({ revoked: true }, RECORD_KEY)
+        }
+      }
       transaction.oncomplete = () => resolve()
       transaction.onerror = () => reject(transaction.error ?? new Error("could not mark push enrollment revoked"))
     })

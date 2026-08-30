@@ -83,6 +83,20 @@ const deriveEnrollmentCredential = (
     (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
   )
 
+const isIdempotentRenewalRetry = (
+  row: PushSubscriptionRow,
+  credentialHash: string,
+  nextHash: string,
+  endpoint: string,
+  now: string
+): boolean =>
+  row.enabled === 1 &&
+  row.previous_renewal_credential_hash === credentialHash &&
+  row.previous_renewal_credential_valid_until !== null &&
+  row.previous_renewal_credential_valid_until >= now &&
+  row.endpoint === endpoint &&
+  row.renewal_credential_hash === nextHash
+
 export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, AppError, Database> =
   Effect.gen(function*() {
     const db = yield* Database
@@ -208,15 +222,16 @@ export const renewSubscription = (
     const credentialHash = yield* sha256Hex(credential)
     const now = nowIso()
 
-    if (
-      current.previous_renewal_credential_hash === credentialHash &&
-      current.previous_renewal_credential_valid_until !== null &&
-      current.previous_renewal_credential_valid_until >= now &&
-      current.endpoint === subscription.endpoint
-    ) {
+    if (current.previous_renewal_credential_hash === credentialHash) {
       const retryCredential = yield* deriveRenewalCredential(credential, id, subscription.endpoint)
       const retryHash = yield* sha256Hex(retryCredential)
-      if (current.renewal_credential_hash !== retryHash) {
+      if (!isIdempotentRenewalRetry(
+        current,
+        credentialHash,
+        retryHash,
+        subscription.endpoint,
+        now
+      )) {
         return yield* Effect.fail(unauthorized("invalid push renewal credential"))
       }
       return {
@@ -263,6 +278,22 @@ export const renewSubscription = (
       ]
     )
     if ((result.meta.changes ?? 0) !== 1) {
+      const committed = yield* db.first<PushSubscriptionRow>(
+        "SELECT * FROM push_subscriptions WHERE id = ?",
+        [id]
+      )
+      if (committed && isIdempotentRenewalRetry(
+        committed,
+        credentialHash,
+        nextHash,
+        subscription.endpoint,
+        now
+      )) {
+        return {
+          subscription: toSubscriptionView(committed),
+          renewal_credential: nextCredential
+        }
+      }
       return yield* Effect.fail(unauthorized("invalid push renewal credential"))
     }
 

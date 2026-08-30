@@ -145,6 +145,23 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     expect(row?.endpoint).toBe("https://push.example.test/second")
   })
 
+  it("returns the committed credential when concurrent renewal loses the update race", async () => {
+    const credential = `ops_pwa_${"h".repeat(43)}`
+    const endpoint = "https://push.example.test/concurrent-new"
+    await seed("sub_renewal_concurrent", credential, "https://push.example.test/concurrent-old")
+
+    const [first, second] = await Promise.all([
+      renew("sub_renewal_concurrent", credential, endpoint),
+      renew("sub_renewal_concurrent", credential, endpoint)
+    ])
+    expect([first.status, second.status]).toEqual([200, 200])
+    const [firstBody, secondBody] = await Promise.all([
+      first.json<{ readonly renewal_credential: string }>(),
+      second.json<{ readonly renewal_credential: string }>()
+    ])
+    expect(secondBody.renewal_credential).toBe(firstBody.renewal_credential)
+  })
+
   it("rejects a credential belonging to a disabled installation", async () => {
     const credential = `ops_pwa_${"d".repeat(43)}`
     await seed("sub_renewal_revoked", credential, "https://push.example.test/revoked", false)
