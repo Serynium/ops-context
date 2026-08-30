@@ -97,6 +97,22 @@ describe("grouped-event read model", () => {
     const fastProject = await run(listEvents({ grouped: "true", project: "prj_a" }))
     const dynamicProject = await run(listEvents({ grouped: "true", project: "prj_a", search: "" }))
     expect(fastProject).toEqual(dynamicProject)
+
+    const fastFirst = await run(listEvents({ grouped: "true", limit: "2" }))
+    const dynamicFirst = await run(listEvents({ grouped: "true", search: "", limit: "2" }))
+    expect(fastFirst).toEqual(dynamicFirst)
+    const fastSecond = await run(listEvents({
+      grouped: "true",
+      before: fastFirst.next_cursor,
+      limit: "2"
+    }))
+    const dynamicSecond = await run(listEvents({
+      grouped: "true",
+      search: "",
+      before: dynamicFirst.next_cursor,
+      limit: "2"
+    }))
+    expect(fastSecond).toEqual(dynamicSecond)
   })
 
   it("keeps counts and representatives correct after out-of-order inserts and retention deletes", async () => {
@@ -203,12 +219,27 @@ describe("grouped-event read model", () => {
     ORDER BY created_at DESC, id DESC
     LIMIT 51`
 
-    const fastSql = `SELECT
-      e.id, g.project_id, g.fingerprint, e.created_at,
-      g.occurrence_count AS group_count, g.first_seen, g.last_seen
-    FROM event_groups g
-    JOIN events e ON e.id = g.latest_event_id
-    ORDER BY g.last_seen DESC, g.latest_event_id DESC
+    const fastSql = `WITH grouped_representatives AS (
+      SELECT e.id, g.project_id, g.fingerprint, e.created_at,
+        g.occurrence_count AS group_count, g.first_seen, g.last_seen
+      FROM event_groups g
+      JOIN events e ON e.id = g.latest_event_id
+      ORDER BY g.last_seen DESC, g.latest_event_id DESC
+      LIMIT 51
+    ), ungrouped_representatives AS (
+      SELECT id, project_id, fingerprint, created_at,
+        1 AS group_count, created_at AS first_seen, created_at AS last_seen
+      FROM events INDEXED BY events_empty_fingerprint_created
+      WHERE fingerprint = ''
+      ORDER BY created_at DESC, id DESC
+      LIMIT 51
+    ), representatives AS (
+      SELECT * FROM grouped_representatives
+      UNION ALL
+      SELECT * FROM ungrouped_representatives
+    )
+    SELECT * FROM representatives
+    ORDER BY created_at DESC, id DESC
     LIMIT 51`
 
     const measure = async (sql: string): Promise<{
@@ -235,6 +266,8 @@ describe("grouped-event read model", () => {
     expect(fast.rowsRead).toBeLessThan(dynamic.rowsRead * 0.2)
     const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${fastSql}`)
       .all<{ readonly detail: string }>()
-    expect(plan.results.map((row) => row.detail).join("\n")).toContain("SCAN g USING INDEX event_groups_latest")
+    const planText = plan.results.map((row) => row.detail).join("\n")
+    expect(planText).toContain("SCAN g USING INDEX event_groups_latest")
+    expect(planText).toContain("events_empty_fingerprint_created")
   })
 })

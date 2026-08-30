@@ -7,7 +7,7 @@ All notable changes to Ops Context are recorded here.
 ### Added
 
 - A measured `event_groups` read model for default grouped inbox pages, with atomic insert/delete maintenance, retention-safe recomputation, project isolation, migration backfill, and an authenticated idempotent repair operation.
-- Grouped-inbox D1 measurements and integration coverage comparing the read model to the exact dynamic query. On the 10,000-event fixture, rows read fell from 51,502 to 102 and median local latency from 8 ms to below 1 ms.
+- Grouped-inbox D1 measurements and integration coverage comparing the read model to the exact dynamic query. On the 10,000-event fixture, rows read fell from 51,502 to 154 and median local latency from 8 ms to below 1 ms.
 - Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.
 - D1 observability guidance for read amplification, write volume, latency, failures, and before/after performance comparisons.
 - A measured D1 index baseline, query-plan integration guardrails, and safe rollout/rollback guidance for event listing, grouping, recovery, delivery history, project authentication, and silence matching.

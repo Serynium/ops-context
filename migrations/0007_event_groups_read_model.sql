@@ -12,6 +12,12 @@ CREATE INDEX event_groups_latest
   ON event_groups(last_seen DESC, latest_event_id DESC);
 CREATE INDEX event_groups_project_latest
   ON event_groups(project_id, last_seen DESC, latest_event_id DESC);
+CREATE INDEX events_empty_fingerprint_created
+  ON events(created_at DESC, id DESC)
+  WHERE fingerprint = '';
+CREATE INDEX events_project_empty_fingerprint_created
+  ON events(project_id, created_at DESC, id DESC)
+  WHERE fingerprint = '';
 
 CREATE TRIGGER event_groups_after_event_insert
 AFTER INSERT ON events

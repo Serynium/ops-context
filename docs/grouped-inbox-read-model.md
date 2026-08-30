@@ -28,9 +28,9 @@ and wall-clock latency around the same query execution.
 | Query | D1 rows read | Median latency | Rows returned |
 | --- | ---: | ---: | ---: |
 | Dynamic window query | 51,502 | 8 ms | 51 |
-| `event_groups` fast path | 102 | <1 ms | 51 |
+| `event_groups` fast path | 154 | <1 ms | 51 |
 
-The fast path reduced rows read by 99.8% and median local latency by more than
+The fast path reduced rows read by 99.7% and median local latency by more than
 87.5%. This exceeds the enablement threshold and addresses the highest-cost
 query identified in [the index-tuning baseline](d1-index-tuning.md). These are
 reproducible local D1 measurements, not production traffic claims. After

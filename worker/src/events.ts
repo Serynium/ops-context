@@ -346,22 +346,36 @@ export const listEvents = (
 
       if (supportsReadModel) {
         const queryParams: Array<unknown> = []
-        const groupProjectCondition = input.project ? "WHERE g.project_id = ?" : ""
-        const eventProjectCondition = input.project
-          ? "WHERE e.project_id = ? AND e.fingerprint = ''"
-          : "WHERE e.fingerprint = ''"
-        if (input.project) queryParams.push(input.project, input.project)
-
-        let outerCursor = ""
+        const groupConditions: Array<string> = []
+        const eventConditions = ["e.fingerprint = ''"]
+        const emptyFingerprintIndex = input.project
+          ? "events_project_empty_fingerprint_created"
+          : "events_empty_fingerprint_created"
+        if (input.project) {
+          groupConditions.push("g.project_id = ?")
+          queryParams.push(input.project)
+        }
         if (cursor) {
-          outerCursor = "AND (created_at < ? OR (created_at = ? AND id < ?))"
+          groupConditions.push(
+            "(g.last_seen < ? OR (g.last_seen = ? AND g.latest_event_id < ?))"
+          )
           queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
         }
         queryParams.push(limit + 1)
 
+        if (input.project) {
+          eventConditions.push("e.project_id = ?")
+          queryParams.push(input.project)
+        }
+        if (cursor) {
+          eventConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))")
+          queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
+        }
+        queryParams.push(limit + 1, limit + 1)
+
         rows = yield* db.all<EventRow>(
           "events.list_grouped_fast",
-          `WITH representatives AS (
+          `WITH grouped_representatives AS (
              SELECT ${eventColumns},
                g.occurrence_count AS group_count,
                g.first_seen AS group_first_seen,
@@ -369,18 +383,25 @@ export const listEvents = (
              FROM event_groups g
              JOIN events e ON e.id = g.latest_event_id
              JOIN projects p ON p.id = g.project_id
-             ${groupProjectCondition}
-             UNION ALL
+             ${groupConditions.length > 0 ? `WHERE ${groupConditions.join(" AND ")}` : ""}
+             ORDER BY g.last_seen DESC, g.latest_event_id DESC
+             LIMIT ?
+           ), ungrouped_representatives AS (
              SELECT ${eventColumns},
                1 AS group_count,
                e.created_at AS group_first_seen,
                e.created_at AS group_last_seen
-             FROM events e
+             FROM events e INDEXED BY ${emptyFingerprintIndex}
              JOIN projects p ON p.id = e.project_id
-             ${eventProjectCondition}
+             WHERE ${eventConditions.join(" AND ")}
+             ORDER BY e.created_at DESC, e.id DESC
+             LIMIT ?
+           ), representatives AS (
+             SELECT * FROM grouped_representatives
+             UNION ALL
+             SELECT * FROM ungrouped_representatives
            )
            SELECT * FROM representatives
-           WHERE 1 = 1 ${outerCursor}
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
           queryParams
