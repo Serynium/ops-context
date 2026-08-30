@@ -1,0 +1,124 @@
+name: Implement Cloudflare Access administration
+
+on:
+  push:
+    branches: [security/cloudflare-access]
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/cloudflare-access
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - name: Apply Access identity adapter
+        shell: bash
+        run: |
+          grep -q 'CreateEventInputSchema' worker/src/event-contract.ts
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          access = root / 'worker/src/access.ts'
+          access.write_text('''import { Effect } from "effect"\nimport type { AppError } from "./errors.js"\n\nexport interface AccessPrincipal {\n  readonly id: string\n  readonly username: string\n  readonly email: string\n  readonly authenticatedBy: "cloudflare-access"\n}\n\nexport interface AccessConfigLike {\n  readonly baseUrl: string\n}\n\nconst unauthorized = (message: string): AppError => ({\n  status: 401,\n  code: "unauthorized",\n  message\n})\n\nconst forbidden = (message: string): AppError => ({\n  status: 403,\n  code: "forbidden",\n  message\n})\n\n/**\n * Trust boundary for Cloudflare Access protected routes. Cloudflare must be\n * configured to protect the hostname and the unprotected workers.dev route\n * must not expose administrator endpoints. Requiring both Access headers\n * prevents ordinary callers from being treated as administrators accidentally.\n */\nexport const authenticateAccessRequest = (\n  request: Request,\n  config: AccessConfigLike\n): Effect.Effect<AccessPrincipal, AppError> =>\n  Effect.gen(function*() {\n    const expectedHost = new URL(config.baseUrl).host\n    const actualHost = new URL(request.url).host\n    if (actualHost !== expectedHost) {\n      return yield* Effect.fail(\n        forbidden("Administrator requests must use the Access-protected application hostname")\n      )\n    }\n\n    const email = request.headers.get("cf-access-authenticated-user-email")?.trim()\n    const assertion = request.headers.get("cf-access-jwt-assertion")?.trim()\n    if (!email || !assertion) {\n      return yield* Effect.fail(\n        unauthorized("A valid Cloudflare Access identity is required")\n      )\n    }\n\n    return {\n      id: email,\n      username: email,\n      email,\n      authenticatedBy: "cloudflare-access"\n    } as const\n  }).pipe(Effect.withSpan("AdministratorIdentity.authenticate"))\n\nexport const hasAccessIdentity = (request: Request): boolean =>\n  Boolean(\n    request.headers.get("cf-access-authenticated-user-email")?.trim() &&\n      request.headers.get("cf-access-jwt-assertion")?.trim()\n  )\n''')
+
+          middleware_path = root / 'worker/src/middleware.ts'
+          middleware = middleware_path.read_text()
+          if 'authenticateAccessRequest' not in middleware:
+              imports = list(re.finditer(r'^import .*$', middleware, re.M))
+              insert = imports[-1].end() + 1 if imports else 0
+              middleware = middleware[:insert] + 'import { authenticateAccessRequest } from "./access.js"\n' + middleware[insert:]
+
+          # Limit substitutions to the administrator middleware implementation.
+          starts = [middleware.find('AdminAuthorizationLive'), middleware.find('AdminAuthorization.layer')]
+          start = next((value for value in starts if value >= 0), -1)
+          if start < 0:
+              raise SystemExit('Could not find administrator middleware implementation')
+          next_export = middleware.find('\nexport ', start + 10)
+          end = next_export if next_export >= 0 else len(middleware)
+          segment = middleware[start:end]
+
+          auth_match = re.search(r'const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*yield\*\s*Auth\b', segment)
+          if not auth_match:
+              raise SystemExit('Could not find Auth dependency in administrator middleware')
+          auth_name = auth_match.group('name')
+          segment = segment[:auth_match.start()] + 'const accessConfig = yield* AppConfig' + segment[auth_match.end():]
+
+          call_pattern = re.compile(rf'{re.escape(auth_name)}\.[A-Za-z_$][\w$]*\s*\((?P<args>[^)]*)\)')
+          call = call_pattern.search(segment)
+          if not call:
+              raise SystemExit('Could not find administrator Auth service call')
+          args = call.group('args').strip()
+          request_arg = args.split(',')[0].strip()
+          segment = segment[:call.start()] + f'authenticateAccessRequest({request_arg}, accessConfig)' + segment[call.end():]
+          middleware = middleware[:start] + segment + middleware[end:]
+          middleware_path.write_text(middleware)
+
+          index_path = root / 'worker/src/index.ts'
+          index = index_path.read_text()
+          if 'bridgeAccessIdentityToMcp' not in index:
+              imports = list(re.finditer(r'^import .*$', index, re.M))
+              insert = imports[-1].end() + 1 if imports else 0
+              index = index[:insert] + 'import { hasAccessIdentity } from "./access.js"\n' + index[insert:]
+              marker = 'export default'
+              pos = index.find(marker)
+              if pos < 0:
+                  raise SystemExit('Could not find Worker export')
+              helper = '''const bridgeAccessIdentityToMcp = (request: Request, env: Env): Request => {\n  const url = new URL(request.url)\n  if (url.pathname !== "/mcp" || !hasAccessIdentity(request)) return request\n  if (!env.OPS_MCP_TOKEN) return request\n\n  const headers = new Headers(request.headers)\n  headers.set("authorization", `Bearer ${env.OPS_MCP_TOKEN}`)\n  return new Request(request, { headers })\n}\n\nconst rejectLegacyAdministratorAuth = (request: Request): Response | undefined => {\n  const path = new URL(request.url).pathname\n  if (path !== "/api/v1/auth/login" && path !== "/api/v1/auth/logout") {\n    return undefined\n  }\n  return Response.json(\n    {\n      error: "not_found",\n      message: "Administrator login is provided by Cloudflare Access"\n    },\n    { status: 404 }\n  )\n}\n\n'''
+              index = index[:pos] + helper + index[pos:]
+
+              fetch_match = re.search(r'\bfetch\s*\([^)]*request[^)]*\)\s*\{', index)
+              if not fetch_match:
+                  raise SystemExit('Could not find Worker fetch handler')
+              inject = '''\n    const legacyAuth = rejectLegacyAdministratorAuth(request)\n    if (legacyAuth !== undefined) return legacyAuth\n    request = bridgeAccessIdentityToMcp(request, env)\n'''
+              index = index[:fetch_match.end()] + inject + index[fetch_match.end():]
+          index_path.write_text(index)
+
+          # Remove production password/session variables while leaving dead code for the
+          # dedicated removal migration in #14. Type bindings remain temporarily until then.
+          for config_name in ('wrangler.jsonc', 'wrangler.test.jsonc'):
+              path = root / config_name
+              text = path.read_text()
+              text = re.sub(r'\n\s*"OPS_ADMIN_USER"\s*:\s*"[^"]*"\s*,?', '', text)
+              path.write_text(text)
+
+          example = root / '.dev.vars.example'
+          if example.exists():
+              text = example.read_text()
+              text = '\n'.join(
+                  line for line in text.splitlines()
+                  if not line.startswith('ADMIN_PASSWORD_HASH=')
+              ) + '\n'
+              example.write_text(text)
+
+          test_path = root / 'worker/test/access.test.ts'
+          test_path.write_text('''import { Effect } from "effect"\nimport { describe, expect, it } from "vitest"\nimport { authenticateAccessRequest } from "../src/access.js"\n\nconst config = { baseUrl: "https://ops.example.com" }\n\ndescribe("Cloudflare Access administrator identity", () => {\n  it("accepts an Access-protected identity on the configured host", async () => {\n    const request = new Request("https://ops.example.com/api/v1/status", {\n      headers: {\n        "Cf-Access-Authenticated-User-Email": "operator@example.com",\n        "Cf-Access-Jwt-Assertion": "test-assertion"\n      }\n    })\n    await expect(\n      Effect.runPromise(authenticateAccessRequest(request, config))\n    ).resolves.toMatchObject({\n      email: "operator@example.com",\n      authenticatedBy: "cloudflare-access"\n    })\n  })\n\n  it("rejects missing Access assertions", async () => {\n    await expect(\n      Effect.runPromise(\n        authenticateAccessRequest(\n          new Request("https://ops.example.com/api/v1/status"),\n          config\n        )\n      )\n    ).rejects.toMatchObject({ code: "unauthorized" })\n  })\n\n  it("rejects alternate hostnames", async () => {\n    const request = new Request("https://bypass.workers.dev/api/v1/status", {\n      headers: {\n        "Cf-Access-Authenticated-User-Email": "operator@example.com",\n        "Cf-Access-Jwt-Assertion": "test-assertion"\n      }\n    })\n    await expect(\n      Effect.runPromise(authenticateAccessRequest(request, config))\n    ).rejects.toMatchObject({ code: "forbidden" })\n  })\n})\n''')
+
+          docs = root / 'docs/cloudflare-access.md'
+          docs.write_text('''# Cloudflare Access administration\n\nOps Context delegates administrator authentication to Cloudflare Access. The deployed Worker does not provide a password login.\n\n## Recommended hostnames\n\n- `ingest.ops.example.com` — public event ingestion, protected by project keys.\n- `app.ops.example.com` — PWA and administrator API, protected by an Access application.\n- `mcp.ops.example.com` — MCP endpoint, protected by an Access user or service-token policy.\n\nConfigure the application hostname as `OPS_BASE_URL`. Do not expose administrator routes through an unprotected `workers.dev` hostname. Access must forward `Cf-Access-Authenticated-User-Email` and `Cf-Access-Jwt-Assertion`; the Worker requires both and rejects a host that differs from `OPS_BASE_URL`.\n\nThe legacy `/api/v1/auth/login` and `/api/v1/auth/logout` routes return 404. Password/session storage and schema removal is completed with the Queue-first/Cron-removal migration in #14, after the scoped subscription-renewal credential in #16 is available.\n''')
+
+          readme = root / 'README.md'
+          text = readme.read_text()
+          if 'docs/cloudflare-access.md' not in text:
+              text += '\n## Administrator access\n\nProduction administration is protected by Cloudflare Access rather than an application password. See [docs/cloudflare-access.md](docs/cloudflare-access.md) for hostname and policy configuration.\n'
+          readme.write_text(text)
+          PY
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Commit implementation
+        run: |
+          rm .github/workflows/implement-issue-15.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: authenticate administrators with Cloudflare Access"
+          git push
