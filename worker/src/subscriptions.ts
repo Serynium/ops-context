@@ -168,7 +168,8 @@ export const registerSubscription = (
          renewal_credential_issued_at = excluded.renewal_credential_issued_at,
          previous_renewal_credential_hash = NULL,
          previous_renewal_credential_valid_until = NULL,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at
+       WHERE push_subscriptions.enabled = 1 OR ? = 1`,
       [
         id,
         name,
@@ -180,7 +181,8 @@ export const registerSubscription = (
         credentialHash,
         now,
         existing?.created_at ?? now,
-        now
+        now,
+        input.reactivate === true ? 1 : 0
       ]
     )
 
@@ -189,6 +191,12 @@ export const registerSubscription = (
       [input.subscription.endpoint]
     )
     if (!row) return yield* Effect.fail(notFound("push subscription could not be saved"))
+    if (row.enabled !== 1) {
+      return yield* Effect.fail(badRequest(
+        "subscription_disabled",
+        "this push installation is disabled and requires explicit re-enrollment"
+      ))
+    }
     return { subscription: toSubscriptionView(row), renewal_credential: credential }
   })
 
@@ -312,21 +320,25 @@ export const updateSubscription = (
     const current = yield* findSubscriptionRow(id)
     const name = patch.name === undefined ? current.name : patch.name.trim().slice(0, 120)
     if (!name) return yield* Effect.fail(invalid("subscription name cannot be empty"))
-    const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
-    if (current.enabled === 0 && enabled === 1) {
+    const enabledPatch = patch.enabled === undefined ? null : patch.enabled ? 1 : 0
+    if (current.enabled === 0 && enabledPatch === 1) {
       return yield* Effect.fail(invalid("disabled subscriptions must be re-enrolled from their installation"))
     }
-    yield* db.run(
+    const result = yield* db.run(
       `UPDATE push_subscriptions
-       SET name = ?, enabled = ?,
-           renewal_credential_hash = CASE WHEN ? = 1 THEN renewal_credential_hash ELSE NULL END,
-           renewal_credential_issued_at = CASE WHEN ? = 1 THEN renewal_credential_issued_at ELSE NULL END,
-           previous_renewal_credential_hash = CASE WHEN ? = 1 THEN previous_renewal_credential_hash ELSE NULL END,
-           previous_renewal_credential_valid_until = CASE WHEN ? = 1 THEN previous_renewal_credential_valid_until ELSE NULL END,
+       SET name = ?,
+           enabled = CASE WHEN ? IS NULL THEN enabled ELSE ? END,
+           renewal_credential_hash = CASE WHEN ? = 0 THEN NULL ELSE renewal_credential_hash END,
+           renewal_credential_issued_at = CASE WHEN ? = 0 THEN NULL ELSE renewal_credential_issued_at END,
+           previous_renewal_credential_hash = CASE WHEN ? = 0 THEN NULL ELSE previous_renewal_credential_hash END,
+           previous_renewal_credential_valid_until = CASE WHEN ? = 0 THEN NULL ELSE previous_renewal_credential_valid_until END,
            updated_at = ?
-       WHERE id = ?`,
-      [name, enabled, enabled, enabled, enabled, enabled, nowIso(), id]
+       WHERE id = ? AND (COALESCE(?, -1) <> 1 OR enabled = 1)`,
+      [name, enabledPatch, enabledPatch, enabledPatch, enabledPatch, enabledPatch, enabledPatch, nowIso(), id, enabledPatch]
     )
+    if ((result.meta.changes ?? 0) !== 1 && enabledPatch === 1) {
+      return yield* Effect.fail(invalid("disabled subscriptions must be re-enrolled from their installation"))
+    }
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })
 

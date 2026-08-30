@@ -201,6 +201,33 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     })
   })
 
+  it("preserves revocation when renaming a disabled installation", async () => {
+    const credential = `ops_pwa_${"i".repeat(43)}`
+    await seed("sub_renewal_rename_disabled", credential, "https://push.example.test/rename", false)
+    const database = Database.layer(env.DB)
+
+    const renamed = await Effect.runPromise(
+      updateSubscription("sub_renewal_rename_disabled", { name: "Renamed installation" }).pipe(
+        Effect.provide(database)
+      )
+    )
+    expect(renamed).toMatchObject({ name: "Renamed installation", enabled: false })
+
+    const row = await env.DB.prepare(
+      `SELECT enabled, renewal_credential_hash, previous_renewal_credential_hash
+       FROM push_subscriptions WHERE id = 'sub_renewal_rename_disabled'`
+    ).first<{
+      readonly enabled: number
+      readonly renewal_credential_hash: string | null
+      readonly previous_renewal_credential_hash: string | null
+    }>()
+    expect(row).toMatchObject({
+      enabled: 0,
+      renewal_credential_hash: await sha256Hex(credential),
+      previous_renewal_credential_hash: null
+    })
+  })
+
   it("keeps legacy-disabled rows disabled until explicit re-enrollment", async () => {
     const credential = `ops_pwa_${"g".repeat(43)}`
     const endpoint = "https://push.example.test/legacy-disabled"

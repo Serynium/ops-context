@@ -696,11 +696,13 @@ const renderPush = async (): Promise<void> => {
           if (name) await api.updatePush(id, { name })
         } else if (button.dataset.pushAction === "toggle") {
           const enabled = button.dataset.pushEnabled !== "true"
+          const localRenewal = await readPushRenewalCredential()
           await api.updatePush(id, { enabled })
-          if (!enabled) await revokePushRenewalCredential(id)
+          if (!enabled) await revokePushRenewalCredential(id, localRenewal?.credential)
         } else if (button.dataset.pushAction === "delete" && window.confirm("Remove this push subscription?")) {
+          const localRenewal = await readPushRenewalCredential()
           await api.deletePush(id)
-          await revokePushRenewalCredential(id)
+          await revokePushRenewalCredential(id, localRenewal?.credential)
         }
         await renderPush()
       } catch (cause) { notify(errorMessage(cause)) }

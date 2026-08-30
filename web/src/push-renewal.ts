@@ -99,14 +99,23 @@ export const readPushRenewalCredential = async (): Promise<PushRenewalCredential
   }
 }
 
-export const revokePushRenewalCredential = async (installationId: string): Promise<void> => {
-  const current = await readPushRenewalCredential()
-  if (current?.installation_id !== installationId) return
+export const revokePushRenewalCredential = async (
+  installationId: string,
+  expectedCredential: string | undefined
+): Promise<void> => {
+  if (!expectedCredential) return
   const database = await openDatabase()
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite")
-      transaction.objectStore(STORE_NAME).put({ installation_id: installationId, revoked: true }, RECORD_KEY)
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.get(RECORD_KEY)
+      request.onsuccess = () => {
+        const current = request.result as PushRenewalCredential | undefined
+        if (current?.installation_id === installationId && current.credential === expectedCredential) {
+          store.put({ installation_id: installationId, revoked: true }, RECORD_KEY)
+        }
+      }
       transaction.oncomplete = () => resolve()
       transaction.onerror = () => reject(transaction.error ?? new Error("could not clear push credential"))
     })
