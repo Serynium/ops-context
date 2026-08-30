@@ -1,7 +1,18 @@
-import type { Env } from "../src/types.js"
+import type { D1Migration } from "cloudflare:test"
+import type { Env as AppEnv } from "../src/types.js"
 
-declare module "cloudflare:workers" {
-  interface ProvidedEnv extends Env {
-    readonly TEST_MIGRATIONS: ReadonlyArray<D1Migration>
+declare global {
+  namespace Cloudflare {
+    interface Env extends AppEnv {
+      readonly TEST_MIGRATIONS: D1Migration[]
+    }
   }
 }
+
+declare module "cloudflare:workers" {
+  interface ProvidedEnv extends AppEnv {
+    readonly TEST_MIGRATIONS: D1Migration[]
+  }
+}
+
+export {}
