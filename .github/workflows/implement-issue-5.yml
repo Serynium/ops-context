@@ -1,0 +1,162 @@
+name: Implement bounded push retries
+
+on:
+  push:
+    branches: [reliability/bounded-push-retries]
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: reliability/bounded-push-retries
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - name: Apply bounded retry refactor
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+
+          # Durable retry metadata. Existing `failed` is the terminal/dead state;
+          # dead_at makes that semantic explicit without rebuilding the D1 table.
+          migration = root / 'migrations/0004_bounded_push_retries.sql'
+          migration.write_text('''-- Bound Queue retries and keep Cron from becoming a second retry scheduler.\nALTER TABLE push_jobs ADD COLUMN retry_scheduled_until TEXT;\nALTER TABLE push_jobs ADD COLUMN dead_at TEXT;\n\nCREATE INDEX IF NOT EXISTS push_jobs_retry_guard\n  ON push_jobs(state, retry_scheduled_until, dead_at, lease_until);\n''')
+
+          push_path = root / 'worker/src/push.ts'
+          push = push_path.read_text()
+          if 'export const preparePushRetry' not in push:
+              if 'Database' not in push or 'Effect' not in push or 'PushJobMessage' not in push:
+                  raise SystemExit('push.ts does not expose the expected Effect/Database/PushJobMessage symbols')
+              push += '''\n\nexport type PushRetryDisposition =\n  | { readonly _tag: "Retry"; readonly delaySeconds: number }\n  | { readonly _tag: "Dead" }\n  | { readonly _tag: "Terminal" }\n\nexport const shouldTerminatePushRetry = (\n  attempts: number,\n  maxAttempts: number\n): boolean => attempts >= Math.max(1, maxAttempts)\n\n/**\n * Persists the Queue retry decision after a transient delivery failure.\n *\n * Cloudflare Queue owns the delayed retry. D1 owns the durable attempt ceiling\n * and terminal state. `retry_scheduled_until` prevents scheduled recovery from\n * publishing a second message while Queue already owns the retry.\n */\nexport const preparePushRetry = (\n  message: PushJobMessage,\n  delaySeconds: number,\n  maxAttempts: number\n) =>\n  Effect.gen(function*() {\n    const database = yield* Database\n    const row = yield* database.first<{\n      readonly attempts: number\n      readonly state: string\n    }>(\n      `SELECT attempts, state\n       FROM push_jobs\n       WHERE event_id = ? AND subscription_id = ?`,\n      [message.eventId, message.subscriptionId]\n    )\n\n    if (!row || row.state === "sent" || row.state === "failed") {\n      return { _tag: "Terminal" } as const\n    }\n\n    const now = new Date().toISOString()\n    if (shouldTerminatePushRetry(row.attempts, maxAttempts)) {\n      yield* database.run(\n        `UPDATE push_jobs\n         SET state = 'failed',\n             retry_scheduled_until = NULL,\n             dead_at = COALESCE(dead_at, ?),\n             lease_until = NULL,\n             last_error = COALESCE(last_error, 'delivery retry limit exceeded'),\n             updated_at = ?\n         WHERE event_id = ?\n           AND subscription_id = ?\n           AND state <> 'sent'`,\n        [now, now, message.eventId, message.subscriptionId]\n      )\n      return { _tag: "Dead" } as const\n    }\n\n    const boundedDelay = Math.max(1, Math.floor(delaySeconds))\n    const retryAt = new Date(Date.now() + boundedDelay * 1_000).toISOString()\n    yield* database.run(\n      `UPDATE push_jobs\n       SET retry_scheduled_until = ?,\n           updated_at = ?\n       WHERE event_id = ?\n         AND subscription_id = ?\n         AND state NOT IN ('sent', 'failed')`,\n      [retryAt, now, message.eventId, message.subscriptionId]\n    )\n\n    return { _tag: "Retry", delaySeconds: boundedDelay } as const\n  }).pipe(Effect.withSpan("PushDelivery.prepareRetry"))\n\n/** Mark a provider-permanent outcome as the durable terminal/dead state. */\nexport const markPushJobDead = (\n  message: PushJobMessage,\n  reason = "permanent delivery failure"\n) =>\n  Effect.gen(function*() {\n    const database = yield* Database\n    const now = new Date().toISOString()\n    yield* database.run(\n      `UPDATE push_jobs\n       SET state = 'failed',\n           retry_scheduled_until = NULL,\n           dead_at = COALESCE(dead_at, ?),\n           lease_until = NULL,\n           last_error = COALESCE(last_error, ?),\n           updated_at = ?\n       WHERE event_id = ?\n         AND subscription_id = ?\n         AND state <> 'sent'`,\n      [now, reason, now, message.eventId, message.subscriptionId]\n    )\n  }).pipe(Effect.withSpan("PushDelivery.markDead"))\n'''
+          push_path.write_text(push)
+
+          index_path = root / 'worker/src/index.ts'
+          index = index_path.read_text()
+          import_pattern = re.compile(r'import\s*\{(?P<body>[^}]*)\}\s*from\s*["\']\./push\.js["\']', re.S)
+          match = import_pattern.search(index)
+          if not match:
+              raise SystemExit('Could not find push.ts import in index.ts')
+          body = match.group('body')
+          names = [n.strip() for n in body.split(',') if n.strip()]
+          for name in ('preparePushRetry', 'markPushJobDead'):
+              if name not in names:
+                  names.append(name)
+          replacement = 'import {\n  ' + ',\n  '.join(names) + '\n} from "./push.js"'
+          index = index[:match.start()] + replacement + index[match.end():]
+
+          if 'const parsePushMaxAttempts' not in index:
+              marker = 'export default'
+              pos = index.find(marker)
+              if pos < 0:
+                  raise SystemExit('Could not find Worker default export')
+              helper = '''const parsePushMaxAttempts = (env: Env): number => {\n  const parsed = Number.parseInt(env.OPS_PUSH_MAX_ATTEMPTS ?? "5", 10)\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5\n}\n\n'''
+              index = index[:pos] + helper + index[pos:]
+
+          runner_match = re.search(r'const\s+result\s*=\s*await\s+([A-Za-z_$][\w.$]*)\.runPromise\s*\(', index)
+          if not runner_match:
+              raise SystemExit('Could not infer ManagedRuntime variable in Queue handler')
+          runner = runner_match.group(1)
+
+          switch_pattern = re.compile(
+              r'''case\s+["']Delivered["']\s*:\s*\n\s*case\s+["']PermanentFailure["']\s*:\s*\n\s*case\s+["']AlreadyProcessed["']\s*:\s*\n\s*message\.ack\(\)\s*\n\s*break\s*\n\s*case\s+["']Retry["']\s*:\s*\n\s*message\.retry\(\s*\{\s*delaySeconds\s*:\s*result\.delaySeconds\s*\}\s*\)\s*\n\s*break''',
+              re.S
+          )
+          switch_replacement = f'''case "Delivered":\n        case "AlreadyProcessed":\n          message.ack()\n          break\n\n        case "PermanentFailure":\n          await {runner}.runPromise(\n            markPushJobDead(message.body)\n          )\n          message.ack()\n          break\n\n        case "Retry": {{\n          const disposition = await {runner}.runPromise(\n            preparePushRetry(\n              message.body,\n              result.delaySeconds,\n              parsePushMaxAttempts(env)\n            )\n          )\n\n          if (disposition._tag === "Retry") {{\n            message.retry({{ delaySeconds: disposition.delaySeconds }})\n          }} else {{\n            message.ack()\n          }}\n          break\n        }}'''
+          index, count = switch_pattern.subn(switch_replacement, index, count=1)
+          if count != 1 and 'preparePushRetry(' not in index[index.find('async queue'):]:
+              raise SystemExit('Could not replace Queue outcome switch')
+          index_path.write_text(index)
+
+          maintenance_path = root / 'worker/src/maintenance.ts'
+          maintenance = maintenance_path.read_text()
+          if 'retry_scheduled_until IS NULL' not in maintenance:
+              candidates = [
+                  "WHERE state IN ('pending', 'queued', 'sending')",
+                  "WHERE state IN ('pending', 'queued')",
+                  "WHERE state = 'pending'"
+              ]
+              replaced = False
+              for candidate in candidates:
+                  if candidate in maintenance:
+                      maintenance = maintenance.replace(
+                          candidate,
+                          candidate.replace('WHERE ', 'WHERE retry_scheduled_until IS NULL\\n        AND dead_at IS NULL\\n        AND '),
+                          1
+                      )
+                      replaced = True
+                      break
+              if not replaced:
+                  # Fall back to the first recovery query mentioning push_jobs and state.
+                  maintenance, n = re.subn(
+                      r'(FROM\s+push_jobs\s+WHERE\s+)(?=state\b)',
+                      r'\1retry_scheduled_until IS NULL\\n        AND dead_at IS NULL\\n        AND ',
+                      maintenance,
+                      count=1,
+                      flags=re.S
+                  )
+                  replaced = n == 1
+              if not replaced:
+                  raise SystemExit('Could not guard the push-job recovery query')
+          maintenance_path.write_text(maintenance)
+
+          types_path = root / 'worker/src/types.ts'
+          types = types_path.read_text()
+          if 'OPS_PUSH_MAX_ATTEMPTS' not in types:
+              match = re.search(r'^(\s*readonly\s+OPS_RETENTION_DAYS[^\n]*\n)', types, re.M)
+              if match:
+                  types = types[:match.end()] + '  readonly OPS_PUSH_MAX_ATTEMPTS?: string\n' + types[match.end():]
+              else:
+                  env_match = re.search(r'(export interface Env\s*\{)', types)
+                  if not env_match:
+                      raise SystemExit('Could not find Env interface')
+                  types = types[:env_match.end()] + '\n  readonly OPS_PUSH_MAX_ATTEMPTS?: string' + types[env_match.end():]
+          types_path.write_text(types)
+
+          for config_name in ('wrangler.jsonc', 'wrangler.test.jsonc'):
+              path = root / config_name
+              text = path.read_text()
+              if 'OPS_PUSH_MAX_ATTEMPTS' not in text:
+                  text, n = re.subn(
+                      r'("OPS_RETENTION_DAYS"\s*:\s*"[^"]+"\s*,?)',
+                      lambda m: m.group(1).rstrip(',') + ',\n    "OPS_PUSH_MAX_ATTEMPTS": "5"',
+                      text,
+                      count=1
+                  )
+                  if n != 1:
+                      raise SystemExit(f'Could not add OPS_PUSH_MAX_ATTEMPTS to {config_name}')
+              path.write_text(text)
+
+          test_path = root / 'worker/test/push-retry-policy.test.ts'
+          test_path.write_text('''import { describe, expect, it } from "vitest"\nimport { shouldTerminatePushRetry } from "../src/push.js"\n\ndescribe("bounded push retries", () => {\n  it("continues below the durable attempt ceiling", () => {\n    expect(shouldTerminatePushRetry(4, 5)).toBe(false)\n  })\n\n  it("enters the terminal dead state at the ceiling", () => {\n    expect(shouldTerminatePushRetry(5, 5)).toBe(true)\n    expect(shouldTerminatePushRetry(8, 5)).toBe(true)\n  })\n\n  it("never accepts a maximum below one", () => {\n    expect(shouldTerminatePushRetry(1, 0)).toBe(true)\n  })\n})\n''')
+
+          runtime_test = root / 'worker/test/worker-runtime.test.ts'
+          test = runtime_test.read_text()
+          if 'retry_scheduled_until' not in test:
+              anchor = '    const response = await worker.fetch(request, env)'
+              if anchor not in test:
+                  raise SystemExit('Could not extend Worker runtime migration smoke test')
+              columns = '''    const pushJobColumns = await env.DB.prepare(\n      "PRAGMA table_info(push_jobs)"\n    ).all<{ readonly name: string }>()\n    expect(\n      pushJobColumns.results.map((row: { readonly name: string }) => row.name)\n    ).toEqual(expect.arrayContaining(["retry_scheduled_until", "dead_at"]))\n\n'''
+              test = test.replace(anchor, columns + anchor, 1)
+          runtime_test.write_text(test)
+          PY
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Commit implementation
+        run: |
+          rm .github/workflows/implement-issue-5.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: bound push retries and persist terminal delivery state"
+          git push
