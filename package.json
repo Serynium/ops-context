@@ -26,7 +26,7 @@
     "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/vitest-plugin": "1.1.2",
     "@cloudflare/workers-types": "5.20260827.1",
     "typescript": "5.9.3",
     "vite": "8.2.2",
