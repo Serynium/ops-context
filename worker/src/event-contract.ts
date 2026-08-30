@@ -1,7 +1,11 @@
 import { Effect, Schema, SchemaGetter, SchemaIssue } from "effect"
-import { appError, type AppError, type ValidationIssue } from "./errors.js"
+import { invalidEvent, type InvalidEvent, type ValidationIssue } from "./errors.js"
 
-export const EVENT_PAYLOAD_MAX_BYTES = 256 * 1024
+export const EVENT_REQUEST_MAX_BYTES = 256 * 1024
+// Cloudflare Queue messages are capped at 128,000 bytes, including roughly 100
+// bytes of internal metadata. Keep the normalized event comfortably below that
+// ceiling so the versioned command envelope can always be published.
+export const EVENT_PAYLOAD_MAX_BYTES = 120_000
 export const EVENT_TITLE_MAX_LENGTH = 240
 export const EVENT_BODY_MAX_LENGTH = 8_000
 export const EVENT_SOURCE_MAX_LENGTH = 160
@@ -245,11 +249,9 @@ export const formatEventValidationIssues = (issue: SchemaIssue.Issue): ReadonlyA
 
 export const decodeCreateEventInput = (
   input: unknown
-): Effect.Effect<CreateEventInput, AppError> =>
+): Effect.Effect<CreateEventInput, InvalidEvent> =>
   Schema.decodeUnknownEffect(CreateEventInputSchema)(input).pipe(
-    Effect.mapError((error) => appError(
-      422,
-      "validation_error",
+    Effect.mapError((error) => invalidEvent(
       "event payload failed validation",
       formatEventValidationIssues(error.issue)
     ))

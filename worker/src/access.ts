@@ -53,8 +53,6 @@ export interface CloudflareAccessContext {
 
 export interface ExecutionContextWithAccess {
   readonly access?: CloudflareAccessContext
-  readonly waitUntil: (promise: Promise<unknown>) => void
-  readonly passThroughOnException: () => void
 }
 
 const normalizedHost = (value: string | undefined): string =>
@@ -105,7 +103,7 @@ export const attachCloudflareAccess = async (
   for (const name of internalHeaders) headers.delete(name)
 
   const surface = surfaceFor(request, env)
-  const access = context.access
+  const access = context.access as CloudflareAccessContext | undefined
   if (!surface || !access) {
     return suppliedInternalHeader ? recreateRequest(request, headers) : request
   }
@@ -115,7 +113,8 @@ export const attachCloudflareAccess = async (
     return recreateRequest(request, headers)
   }
 
-  const identity = await access.getIdentity().catch(() => null)
+  const identity = await access.getIdentity().catch(() => null) as
+    CloudflareAccessIdentity | null
   const email = identity?.email?.trim()
   const name = identity?.name?.trim() || identity?.common_name?.trim()
   const subject = identity?.id?.trim() || identity?.sub?.trim() || email || `service:${access.aud}`
@@ -132,7 +131,7 @@ export const attachCloudflareAccess = async (
   return recreateRequest(request, headers)
 }
 
-// Kept as the descriptive public name used by the identity boundary tests.
+// Backward-compatible name used by the Access contract tests and adapters.
 export const attachAccessIdentity = attachCloudflareAccess
 
 interface HeaderView {
@@ -190,7 +189,7 @@ export class AdministratorIdentity extends Context.Service<
           const email = headers.get(ACCESS_EMAIL)?.trim()
           const name = headers.get(ACCESS_NAME)?.trim()
 
-          if (headers.authorization?.startsWith("Bearer ops_proj_")) {
+          if (headers.authorization?.startsWith("Bearer ")) {
             return yield* new ForbiddenError({
               error: "forbidden",
               message: "project credentials cannot authorize private surfaces"
@@ -198,12 +197,6 @@ export class AdministratorIdentity extends Context.Service<
           }
 
           if (!verified) {
-            if (headers.authorization?.startsWith("Bearer ")) {
-              return yield* new ForbiddenError({
-                error: "forbidden",
-                message: "project credentials cannot authorize private surfaces"
-              })
-            }
             return yield* new UnauthorizedError({
               error: "unauthorized",
               message: "Cloudflare Access authentication is required"
@@ -237,16 +230,15 @@ export class AdministratorIdentity extends Context.Service<
             })
           }
 
-          const principalKind: AccessPrincipalKind = kind
-
-          return {
+          const principal: AccessPrincipal = {
             subject,
-            kind: principalKind,
+            kind,
             audience,
             surface: requiredSurface,
             ...(email ? { email } : {}),
             ...(name ? { name } : {})
           }
+          return principal
         }).pipe(Effect.withSpan("AdministratorIdentity.authenticate"))
 
       const requireSameOrigin = Effect.fn("AdministratorIdentity.requireSameOrigin")(

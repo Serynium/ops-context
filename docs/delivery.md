@@ -1,6 +1,6 @@
 # Web Push delivery lifecycle
 
-Ops Context accepts event writes independently from Web Push delivery. D1 is the durable source of truth for events, jobs, attempts, and terminal state. Cloudflare Queue is the only ordinary retry scheduler.
+Ops Context accepts events into Cloudflare Queue before touching D1. The `IngestEvent` consumer idempotently persists events/jobs and publishes `DeliverPush`; D1 is then the durable source of truth for jobs, attempts, and terminal state. Cloudflare Queue is the only ordinary retry scheduler.
 
 ## State machine
 
@@ -27,9 +27,7 @@ The D1 `attempts` counter is incremented by the conditional claim. `OPS_PUSH_MAX
 
 ## Retry ownership
 
-A transient delivery failure is persisted as `retrying` with a future `retry_scheduled_until`. The current Queue message is then retried with the corresponding delay.
-
-The scheduled reconciliation query explicitly excludes `retrying` jobs while their retry guard is active. This prevents Queue and scheduled maintenance from both publishing the same ordinary retry.
+A transient delivery failure is persisted as `retrying` with a future `available_at`. The current Queue message is then retried with the corresponding delay. No scheduled path republishes delivery jobs.
 
 ## Permanent outcomes
 
@@ -52,16 +50,42 @@ Each delivery outcome uses a D1 batch for related state:
 - optional subscription disabling.
 
 This prevents a job from becoming terminal without the matching operator-visible delivery record.
+Every statement is guarded by the claim's exact lease value. The delivery insert runs before the
+state transition inside the same atomic batch, so a consumer whose lease expired cannot record an
+attempt or overwrite the result of the consumer that reclaimed the job.
 
-## Reconciliation
+## Push-consumer D1 measurements
 
-Scheduled maintenance is a narrow recovery mechanism for:
+The normal success path now performs three repository operations, in order:
 
-- jobs that were committed but never published;
-- queued messages that appear to have been lost;
-- abandoned `sending` leases.
+1. one conditional claim, which is the authoritative eligibility check;
+2. one joined read of the claimed job, event, project, and subscription;
+3. one atomic success-finalization batch.
 
-It is not the normal retry mechanism and does not restart terminal jobs. Issue #14 replaces the remaining D1-first reconciliation path with Queue-first ingestion and removes the repair Cron.
+The previous path performed a pre-claim job read, the claim, three separate context reads, and the
+finalization batch. The following measurements use the Workers test runtime with one seeded
+project, event, subscription, and queued job. They sum `D1Result.meta.rows_read` and
+`D1Result.meta.rows_written` for a successful HTTP 201 delivery; the before queries were replayed
+from commit `575a01e` and the after queries use the repository operations introduced for issue #12.
+
+| Successful delivery | D1 round trips | SQL statements | Rows read | Rows written |
+| --- | ---: | ---: | ---: | ---: |
+| Before | 6 | 7 | 10 | 10 |
+| After | 3 | 4 | 10 | 10 |
+
+The row counters include index maintenance and the lease-ownership predicates. This change halves
+network round trips while keeping measured D1 row consumption flat; the extra ownership checks are
+what prevent a stale claimant from finalizing after lease reclamation.
+
+## Crash recovery and scheduled work
+
+`IngestEvent` stays unacknowledged until D1 persistence and downstream publication complete. A consumer crash therefore causes Queue redelivery, which idempotently resumes remaining fan-out. There is no delivery-repair query or Cron.
+
+The only configured schedule is once-daily retention (`0 3 * * *`) when automatic retention is wanted. Set `retention_days` to `0` and remove the `triggers` block from `wrangler.jsonc` for a no-Cron deployment, or when retention is managed externally.
+
+Use a pause/drain window for the Queue-first cutover: stop predecessor HTTP/Sentry writers, Queue consumers, and scheduled triggers; wait at least five minutes for already-running publication and delivery invocations to finish; apply migration `0006_queue_first_ingestion.sql`; deploy the new Worker; then resume traffic and consumers. The migration terminalizes only legacy `pending` jobs older than that five-minute safety cutoff and only lease-less or expired `sending` jobs, so recent publication gaps and actively leased consumers remain untouched. Already queued and delayed-retry jobs keep their Queue-owned lifecycle and their previous untagged messages remain decodable. Tagged messages must match the supported command version and cannot fall through to legacy decoding. The migration also adds the atomic fan-out marker, acceptance-alias table, and durable ingestion-failure ledger. Terminal counts are visible in administrator status, with reasons retained in D1.
+
+Removing the five-minute repair schedule eliminates 288 periodic Worker invocations and their recovery D1 queries per day. Queue-first ingestion adds one Queue operation per accepted event. Events containing structured data also add one consolidated D1 settings read at acceptance so reusable credentials are removed before Queue storage; delivery fan-out operations are otherwise the same. The cost trade is event-proportional Queue work and redaction reads instead of constant polling.
 
 ## Authentication independence
 

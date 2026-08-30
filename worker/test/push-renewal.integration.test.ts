@@ -1,8 +1,10 @@
 import { env } from "cloudflare:workers"
+import { createExecutionContext } from "cloudflare:test"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import worker from "../src/index.js"
-import { CredentialCrypto, Database } from "../src/services.js"
+import { D1RepositoriesLive } from "../src/repositories.js"
+import { CredentialCrypto } from "../src/services.js"
 import {
   deleteSubscription,
   listSubscriptions,
@@ -63,7 +65,7 @@ const renew = (
     },
     body: JSON.stringify({ subscription: subscription(endpoint) })
   }
-) as Parameters<typeof worker.fetch>[0], env)
+) as Parameters<typeof worker.fetch>[0], env, createExecutionContext())
 
 describe.sequential("installation-scoped push renewal credentials", () => {
   beforeEach(async () => {
@@ -77,7 +79,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       enrollment_key: enrollmentKey,
       subscription: subscription("https://push.example.test/enrollment")
     }
-    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const layer = Layer.mergeAll(D1RepositoriesLive(env.DB), CredentialCrypto.layer)
     const enroll = () => Effect.runPromise(
       registerSubscription(input, "test agent").pipe(Effect.provide(layer))
     )
@@ -97,7 +99,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
 
   it("does not let delayed silent enrollment supersede explicit enrollment", async () => {
     const endpoint = "https://push.example.test/explicit-wins"
-    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const layer = Layer.mergeAll(D1RepositoriesLive(env.DB), CredentialCrypto.layer)
     const explicit = await Effect.runPromise(registerSubscription({
       enrollment_key: `ops_enroll_${"v".repeat(43)}`,
       reactivate: true,
@@ -109,8 +111,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       reactivate: false,
       subscription: subscription(endpoint)
     }, "test agent").pipe(Effect.provide(layer)))).rejects.toMatchObject({
-      code: "subscription_enrollment_superseded",
-      status: 400
+      _tag: "SubscriptionEnrollmentSuperseded"
     })
 
     const row = await env.DB.prepare(
@@ -213,14 +214,14 @@ describe.sequential("installation-scoped push renewal credentials", () => {
   it("requires re-enrollment instead of enabling a row with a revoked credential", async () => {
     const credential = `ops_pwa_${"f".repeat(43)}`
     await seed("sub_renewal_reenable", credential, "https://push.example.test/reenable")
-    const database = Database.layer(env.DB)
+    const database = D1RepositoriesLive(env.DB)
 
     await Effect.runPromise(updateSubscription("sub_renewal_reenable", { enabled: false }).pipe(
       Effect.provide(database)
     ))
     await expect(Effect.runPromise(updateSubscription("sub_renewal_reenable", { enabled: true }).pipe(
       Effect.provide(database)
-    ))).rejects.toMatchObject({ status: 422 })
+    ))).rejects.toMatchObject({ _tag: "InvalidSubscription" })
 
     const row = await env.DB.prepare(
       `SELECT enabled, renewal_credential_hash, previous_renewal_credential_hash
@@ -240,7 +241,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
   it("preserves revocation when renaming a disabled installation", async () => {
     const credential = `ops_pwa_${"i".repeat(43)}`
     await seed("sub_renewal_rename_disabled", credential, "https://push.example.test/rename", false)
-    const database = Database.layer(env.DB)
+    const database = D1RepositoriesLive(env.DB)
 
     const renamed = await Effect.runPromise(
       updateSubscription("sub_renewal_rename_disabled", { name: "Renamed installation" }).pipe(
@@ -268,7 +269,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     const credential = `ops_pwa_${"g".repeat(43)}`
     const endpoint = "https://push.example.test/legacy-disabled"
     await seed("sub_renewal_legacy_disabled", credential, endpoint, false)
-    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const layer = Layer.mergeAll(D1RepositoriesLive(env.DB), CredentialCrypto.layer)
     const input = {
       enrollment_key: `ops_enroll_${"y".repeat(43)}`,
       subscription: subscription(endpoint)
@@ -276,7 +277,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
 
     await expect(Effect.runPromise(
       registerSubscription({ ...input, reactivate: false }, "test agent").pipe(Effect.provide(layer))
-    )).rejects.toMatchObject({ code: "subscription_disabled", status: 400 })
+    )).rejects.toMatchObject({ _tag: "SubscriptionDisabled" })
 
     const reenrolled = await Effect.runPromise(
       registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
@@ -293,7 +294,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     const endpoint = "https://push.example.test/removed-legacy"
     const id = "sub_renewal_removed_legacy"
     await seed(id, credential, endpoint)
-    const database = Database.layer(env.DB)
+    const database = D1RepositoriesLive(env.DB)
     const layer = Layer.mergeAll(database, CredentialCrypto.layer)
     const input = {
       enrollment_key: `ops_enroll_${"x".repeat(43)}`,
@@ -324,7 +325,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     await Effect.runPromise(deleteSubscription(id).pipe(Effect.provide(database)))
     await expect(Effect.runPromise(
       registerSubscription({ ...input, reactivate: false }, "test agent").pipe(Effect.provide(layer))
-    )).rejects.toMatchObject({ code: "subscription_disabled", status: 400 })
+    )).rejects.toMatchObject({ _tag: "SubscriptionDisabled" })
     await expect(Effect.runPromise(listSubscriptions.pipe(Effect.provide(database)))).resolves.not.toContainEqual(
       expect.objectContaining({ id })
     )

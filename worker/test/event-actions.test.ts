@@ -6,9 +6,7 @@ const expectInvalidActions = async (actions: unknown): Promise<void> => {
   await expect(
     Effect.runPromise(decodeCreateEventInput({ title: "Action test", actions }))
   ).rejects.toMatchObject({
-    _tag: "AppError",
-    status: 422,
-    code: "validation_error"
+    _tag: "InvalidEvent"
   })
 }
 

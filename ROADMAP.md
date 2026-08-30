@@ -11,13 +11,14 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 - Bounded Queue retries and terminal delivery state.
 - Cloudflare Access-only authentication for the private PWA, administrator API, and MCP surfaces.
 - Workers-runtime testing with real D1 migrations.
+- A measured materialized fast path for the default grouped inbox.
 
 ## Near term
 
 - Scoped PWA credentials for background push-subscription renewal (#16).
 - Tagged domain/application errors and repository ports with runtime D1 row decoding (#9, #10).
 - D1 query cost instrumentation and hot-path consolidation (#11, #12, #17).
-- Queue-first event acceptance and removal of the remaining repair Cron (#14).
+- Queue-first event acceptance and removal of the remaining repair Cron (#14) are implemented.
 - Complete race, retry, crash-recovery, and idempotency integration tests (#8).
 
 ## Measurement-driven work
@@ -25,7 +26,6 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 These features should be implemented only when production measurements justify them:
 
 - D1 index tuning from query plans and rows-read/write metadata (#18).
-- A materialized fast path for the default grouped inbox (#19).
 - FTS5 search instead of broad substring scans (#20).
 - D1 Sessions/read-replication evaluation for global read latency (#21).
 - Splitting MCP or push delivery into separate Worker deployments (#22).

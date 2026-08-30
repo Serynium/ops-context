@@ -7,7 +7,8 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 ## What is implemented
 
 - Schema-first Effect v4 HTTP API using `HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, tagged errors, services, Layers, and reusable managed runtimes.
-- Cloudflare D1 persistence through `@effect/sql-d1`, including atomic event and durable push-job batches.
+- Cloudflare D1 persistence with atomic event and durable push-job batches.
+- Named D1 query telemetry for duration, rows returned, rows read, and rows written, without SQL parameters or payload values. See [D1 query observability](docs/d1-observability.md).
 - Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
 - Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.
 - Drop-in Sentry SDK ingestion through the modern envelope endpoint, with compressed bodies, Sentry grouping fingerprints, and the same event creation and notification pipeline.
@@ -58,6 +59,11 @@ Apps, CI, cron jobs                      MCP clients / agents
 ```
 
 The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so scheduled reconciliation is restricted to genuinely unpublished, lost, or lease-abandoned work. Cloudflare Queue owns ordinary delayed retries; D1 owns leases, attempt limits, and terminal `sent`/`dead` state. The dead-letter Queue is consumed into an operator-visible terminal record rather than starting a fresh retry cycle. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending. See [Web Push delivery lifecycle](docs/delivery.md).
+
+MCP, HTTP, Queue consumption, and scheduled maintenance intentionally remain one
+modular Worker deployment until production isolation or scaling evidence justifies the
+extra operational boundary. See [ADR 0002](docs/decisions/0002-retain-single-worker-deployment.md)
+for the measured bundle baseline, decision triggers, and requirements for a safe split.
 
 ## Requirements
 
@@ -250,6 +256,11 @@ Events with the same non-empty fingerprint are grouped only within their project
 }
 ```
 
+The default grouped inbox reads a measured project-scoped read model. Filters
+that depend on individual occurrences automatically use the exact dynamic
+query. See [Grouped inbox read model](docs/grouped-inbox-read-model.md) for the
+measurements, retention behavior, and idempotent repair operation.
+
 Supported event-list query parameters are:
 
 ```text
@@ -321,11 +332,11 @@ Administrator authentication accepts the secure session cookie created by the PW
 The Worker boundary is a standard Cloudflare module handler. Inside that boundary:
 
 - `HttpApi`, endpoint/group schemas, and `HttpApiMiddleware` define and validate the HTTP contract.
-- `Schema.TaggedError` values define declared API failures and status codes.
+- Tagged domain and application errors are mapped to HTTP only by the API adapter; see [docs/errors.md](docs/errors.md).
 - `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
 - `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled maintenance, MCP, and Sentry envelope executions.
-- `@effect/sql-d1` provides the D1 SQL client, while a narrow `Database` service preserves native D1 batch behavior where atomic batches are required.
+- A narrow `Database` service uses native D1 results to preserve atomic batches and capture per-query row and duration metadata.
 - Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
 

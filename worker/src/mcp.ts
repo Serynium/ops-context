@@ -1,8 +1,10 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
+import { D1StructuredLoggerLive } from "./database-observability.js"
+import { isApplicationError, type ApplicationError } from "./errors.js"
 import type { EventPage, ListEventsInput } from "./events.js"
 import {
   GetEventArguments,
@@ -86,7 +88,45 @@ const contentResult = <A extends object>(value: A) => ({
   structuredContent: value as Record<string, unknown>
 })
 
+export interface McpToolFailure {
+  readonly code: "invalid_argument" | "not_found" | "conflict" | "unavailable"
+  readonly message: string
+}
+
+export const toMcpToolFailure = (failure: ApplicationError): McpToolFailure => {
+  switch (failure._tag) {
+    case "InvalidEvent":
+    case "InvalidProject":
+    case "InvalidSubscription":
+    case "SubscriptionDisabled":
+    case "SubscriptionEnrollmentSuperseded":
+    case "InvalidRenewalCredential":
+    case "InvalidSilence":
+    case "InvalidSettings":
+    case "InvalidEventQuery":
+      return { code: "invalid_argument", message: failure.message }
+    case "ProjectNotFound":
+    case "EventNotFound":
+    case "SubscriptionNotFound":
+    case "SubscriptionRevoked":
+    case "SilenceNotFound":
+    case "InvalidProjectCredential":
+      return { code: "not_found", message: failure.message }
+    case "DuplicateExternalId":
+    case "ProjectDeletionConflict":
+    case "SubscriptionEndpointConflict":
+      return { code: "conflict", message: failure.message }
+    case "RepositoryUnavailable":
+    case "QueueUnavailable":
+    case "CryptographyUnavailable":
+    case "DeliveryTemporarilyUnavailable":
+    case "PushNotConfigured":
+      return { code: "unavailable", message: "Tool service is temporarily unavailable" }
+  }
+}
+
 const errorMessage = (error: unknown): string => {
+  if (isApplicationError(error)) return toMcpToolFailure(error).message
   if (typeof error === "object" && error !== null) {
     const message = (error as { readonly message?: unknown }).message
     if (typeof message === "string") return message
@@ -94,12 +134,17 @@ const errorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : "Tool execution failed"
 }
 
-const runEffect = async <A>(effect: Effect.Effect<A, ApiFailure>): Promise<A> => {
-  try {
-    return await Effect.runPromise(effect)
-  } catch (error) {
-    throw new Error(errorMessage(error))
-  }
+export const runMcpEffect = async <A, E extends ApplicationError>(
+  effect: Effect.Effect<A, E>
+): Promise<A> => {
+  const exit = await Effect.runPromiseExit(effect.pipe(Effect.provide(D1StructuredLoggerLive)))
+  if (Exit.isSuccess(exit)) return exit.value
+
+  const error = Cause.squash(exit.cause)
+  const failure = isApplicationError(error)
+    ? toMcpToolFailure(error)
+    : { code: "unavailable", message: "Tool execution failed" } as const
+  throw new Error(`${failure.code}: ${failure.message}`)
 }
 
 const secureResponse = (response: Response): Response => {
@@ -136,7 +181,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       const resolveProject = async (value: string | undefined) => {
         const selector = trimmed(value)
         if (!selector) return undefined
-        const available = await runEffect(projects.list)
+        const available = await runMcpEffect(projects.list)
         return available.find((project) => project.id === selector || project.slug === selector)
       }
 
@@ -163,7 +208,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             inputSchema: ListProjectsArguments,
             annotations: readOnlyAnnotations
           },
-          async () => contentResult({ projects: await runEffect(projects.list) })
+          async () => contentResult({ projects: await runMcpEffect(projects.list) })
         )
 
         server.registerTool(
@@ -178,7 +223,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             const selector = trimmed(args.project)
             const project = await resolveProject(selector)
             if (selector && !project) throw new Error(`Unknown project: ${selector}`)
-            const page = await runEffect(events.list(toListInput(args, project?.id)))
+            const page = await runMcpEffect(events.list(toListInput(args, project?.id)))
             return contentResult(eventPageOutput(page))
           }
         )
@@ -196,7 +241,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             const project = await resolveProject(selector)
             if (selector && !project) throw new Error(`Unknown project: ${selector}`)
             const query = requiredText(args.query, "query")
-            const page = await runEffect(events.list(toListInput(args, project?.id, query)))
+            const page = await runMcpEffect(events.list(toListInput(args, project?.id, query)))
             return contentResult(eventPageOutput(page))
           }
         )
@@ -209,7 +254,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             inputSchema: GetEventArguments,
             annotations: readOnlyAnnotations
           },
-          async ({ id }) => contentResult(await runEffect(events.get(requiredText(id, "id"))))
+          async ({ id }) => contentResult(await runMcpEffect(events.get(requiredText(id, "id"))))
         )
 
         server.registerTool(
@@ -234,12 +279,12 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
               ...(since ? { since } : {}),
               ...(until ? { until } : {})
             }
-            const grouped = await runEffect(events.list({ ...window, grouped: "true", limit: "1" }))
+            const grouped = await runMcpEffect(events.list({ ...window, grouped: "true", limit: "1" }))
             const latest = grouped.events[0]
             if (!latest) {
               throw new Error(`No events with fingerprint ${fingerprint} in project ${selector}`)
             }
-            const occurrences = await runEffect(events.list({
+            const occurrences = await runMcpEffect(events.list({
               ...window,
               grouped: "false",
               ...(before ? { before } : {}),
