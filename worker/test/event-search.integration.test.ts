@@ -109,13 +109,21 @@ describe("FTS5 event search", () => {
       title: "Quoted alpha event",
       createdAt: "2026-01-02T00:00:00.000Z"
     })
+    await insertEvent({
+      id: "evt_01",
+      title: "Error while waiting for timeout",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    })
 
     expect(await searchIds("cafe")).toEqual(["evt_04"])
     expect(await searchIds("caf*")).toEqual(["evt_04", "evt_03"])
     expect(await searchIds('"deploy blue"')).toEqual(["evt_04"])
+    expect(await searchIds("error-timeout")).toEqual(["evt_01"])
     expect(await searchIds("afe")).toEqual([])
     expect(await searchIds('alpha" OR cafeteria')).toEqual([])
-    expect(compileEventSearchQuery('alpha" OR cafeteria')).toBe('"alpha""" AND "OR" AND "cafeteria"')
+    expect(compileEventSearchQuery("error-timeout")).toBe('"error" AND "timeout"')
+    expect(compileEventSearchQuery("error-time*")).toBe('"error" AND "time"*')
+    expect(compileEventSearchQuery('alpha" OR cafeteria')).toBe('"alpha" AND "OR" AND "cafeteria"')
     await expect(run(listEvents({ search: '"unterminated' }))).rejects.toMatchObject({
       _tag: "InvalidEventQuery",
       message: "search phrase has an unterminated quote"

@@ -249,8 +249,11 @@ export const compileEventSearchQuery = (input: string): string => {
     while (offset < input.length && !/\s/u.test(input[offset] ?? "")) offset += 1
     const raw = input.slice(start, offset)
     const prefix = raw.endsWith("*")
-    const value = (prefix ? raw.slice(0, -1) : raw).trim()
-    if (value) parts.push({ value, prefix })
+    const values = (prefix ? raw.slice(0, -1) : raw)
+      .match(/[\p{L}\p{M}\p{N}\p{Co}_]+/gu) ?? []
+    values.forEach((value, index) => {
+      parts.push({ value, prefix: prefix && index === values.length - 1 })
+    })
   }
 
   if (parts.length === 0) throw invalidEventQuery("search must contain a token")
