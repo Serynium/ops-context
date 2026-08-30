@@ -13,9 +13,15 @@ const isQueryLog = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null &&
   (value as { readonly event?: unknown }).event === "d1_query"
 
-const queryLogs = (spy: ReturnType<typeof vi.spyOn>) =>
+interface ConsoleInfoSpy {
+  readonly mock: {
+    readonly calls: ReadonlyArray<ReadonlyArray<unknown>>
+  }
+}
+
+const queryLogs = (spy: ConsoleInfoSpy): ReadonlyArray<Record<string, unknown>> =>
   spy.mock.calls
-    .map(([message]) => message)
+    .map((call) => call[0])
     .filter(isQueryLog)
 
 afterEach(() => {
