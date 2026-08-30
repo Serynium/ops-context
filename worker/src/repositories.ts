@@ -465,6 +465,20 @@ export interface StoredSettings {
   readonly mcpEnabled: string | null
 }
 
+const decodeStoredRedactKeys = (
+  raw: string | undefined
+): Effect.Effect<ReadonlyArray<string>, RepositoryUnavailable> => {
+  if (raw === undefined) return Effect.succeed([])
+  try {
+    const decoded: unknown = JSON.parse(raw)
+    return Schema.decodeUnknownEffect(Schema.Array(Schema.String))(decoded).pipe(
+      Effect.mapError(() => repositoryFailure("decode"))
+    )
+  } catch {
+    return Effect.succeed(raw.split(",").map((key) => key.trim()).filter(Boolean))
+  }
+}
+
 export class SettingsRepository extends Context.Service<SettingsRepository, {
   readonly get: Effect.Effect<StoredSettings, RepositoryUnavailable>
   readonly set: (key: "retention_days" | "redact_keys" | "setup_completed" | "mcp_enabled", value: string, updatedAt: string) => Effect.Effect<void, RepositoryUnavailable>
@@ -476,18 +490,7 @@ export class SettingsRepository extends Context.Service<SettingsRepository, {
       WHERE key IN ('retention_days', 'redact_keys', 'setup_completed', 'mcp_enabled')`, [], "settings.load").pipe(
       Effect.flatMap((rows) => {
         const values = new Map(rows.map((row) => [row.key, row.value]))
-        const raw = values.get("redact_keys")
-        const decodeRedactKeys = raw === undefined
-          ? Effect.succeed([] as ReadonlyArray<string>)
-          : Effect.try({
-              try: () => JSON.parse(raw) as unknown,
-              catch: () => repositoryFailure("decode")
-            }).pipe(Effect.flatMap((decoded) =>
-              Schema.decodeUnknownEffect(Schema.Array(Schema.String))(decoded).pipe(
-                Effect.mapError(() => repositoryFailure("decode"))
-              )
-            ))
-        return decodeRedactKeys.pipe(Effect.map((redactKeys) => ({
+        return decodeStoredRedactKeys(values.get("redact_keys")).pipe(Effect.map((redactKeys) => ({
           retentionDays: values.get("retention_days") ?? null,
           redactKeys,
           setupCompleted: values.get("setup_completed") ?? null,

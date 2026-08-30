@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   D1RepositoriesLive,
   EventsRepository,
-  ProjectsRepository
+  ProjectsRepository,
+  SettingsRepository
 } from "../src/repositories.js"
 
 const reset = async (): Promise<void> => {
@@ -12,7 +13,8 @@ const reset = async (): Promise<void> => {
     env.DB.prepare("DELETE FROM deliveries"),
     env.DB.prepare("DELETE FROM push_jobs"),
     env.DB.prepare("DELETE FROM events"),
-    env.DB.prepare("DELETE FROM projects")
+    env.DB.prepare("DELETE FROM projects"),
+    env.DB.prepare("DELETE FROM settings")
   ])
 }
 
@@ -66,5 +68,19 @@ describe("D1 repository row decoding", () => {
       expect(String(result.cause)).toContain("repository read failed")
       expect(String(result.cause)).not.toContain("enabled")
     }
+  })
+
+  it("decodes legacy comma-separated redact keys", async () => {
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('redact_keys', 'password, token, custom', ?)"
+    ).bind(new Date(0).toISOString()).run()
+
+    const stored = await Effect.runPromise(
+      Effect.gen(function*() {
+        return yield* (yield* SettingsRepository).get
+      }).pipe(Effect.provide(D1RepositoriesLive(env.DB)))
+    )
+
+    expect(stored.redactKeys).toEqual(["password", "token", "custom"])
   })
 })
