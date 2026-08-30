@@ -128,10 +128,10 @@ export const PushJobRowSchema = Schema.Struct({
 export type PushJobRow = typeof PushJobRowSchema.Type
 
 class D1Executor extends Context.Service<D1Executor, {
-  readonly all: <A>(schema: Schema.Schema<A>, statement: string, params?: Params, queryName?: string) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
-  readonly first: <A>(schema: Schema.Schema<A>, statement: string, params?: Params) => Effect.Effect<A | null, RepositoryUnavailable>
-  readonly run: (statement: string, params?: Params) => Effect.Effect<number, RepositoryUnavailable>
-  readonly batch: (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>) => Effect.Effect<void, RepositoryUnavailable>
+  readonly all: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
+  readonly first: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<A | null, RepositoryUnavailable>
+  readonly run: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
+  readonly batch: (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/internal/D1Executor") {
   static readonly layer = Layer.effect(
     D1Executor,
@@ -146,33 +146,33 @@ class D1Executor extends Context.Service<D1Executor, {
       const mapFailure = (operation: "read" | "batch") =>
         Effect.mapError((_cause: unknown) => repositoryFailure(operation))
 
-      const all = <A>(schema: Schema.Schema<A>, statement: string, params: Params = [], queryName?: string): Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable> =>
+      const all = <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string): Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable> =>
         SqlSchema.findAll({
           Request: Schema.Void,
           Result: schema,
           execute: () => execute(statement, params, queryName)
         })(undefined).pipe(mapFailure("read")) as unknown as Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
 
-      const first = <A>(schema: Schema.Schema<A>, statement: string, params: Params = []): Effect.Effect<A | null, RepositoryUnavailable> =>
+      const first = <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string): Effect.Effect<A | null, RepositoryUnavailable> =>
         SqlSchema.findOneOption({
           Request: Schema.Void,
           Result: schema,
-          execute: () => execute(statement, params)
+          execute: () => execute(statement, params, queryName)
         })(undefined).pipe(
           Effect.map(Option.getOrNull),
           mapFailure("read")
         ) as Effect.Effect<A | null, RepositoryUnavailable>
 
-      const run = (statement: string, params: Params = []) =>
-        database.run("repository.write", statement, params).pipe(
+      const run = (statement: string, params: Params, queryName: string) =>
+        database.run(queryName, statement, params).pipe(
           Effect.map((result) => (result.meta as { readonly changes?: number }).changes ?? 0),
           Effect.mapError(() => repositoryFailure("write"))
         )
 
-      const batch = (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>) => {
+      const batch = (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => {
         if (statements.length === 0) return Effect.void
-        return database.batch("repository.batch", statements.map(({ sql, params }) => ({
-          name: "repository.batch.item",
+        return database.batch(queryName, statements.map(({ sql, params }) => ({
+          name: queryName,
           sql,
           ...(params ? { params } : {})
         }))).pipe(mapFailure("batch"))
@@ -209,25 +209,28 @@ export class ProjectsRepository extends Context.Service<ProjectsRepository, {
     const Count = Schema.Struct({ count: Schema.Number })
     const Id = Schema.Struct({ id: Schema.String })
     return ProjectsRepository.of({
-      list: db.all(ProjectRowSchema, "SELECT * FROM projects ORDER BY name COLLATE NOCASE"),
-      findById: (id) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE id = ?", [id]),
-      findFirst: db.first(ProjectRowSchema, "SELECT * FROM projects ORDER BY created_at LIMIT 1"),
-      findByApiKeyHash: (hash) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE api_key_hash = ?", [hash]),
-      slugExists: (slug) => db.first(Id, "SELECT id FROM projects WHERE slug = ?", [slug]).pipe(Effect.map(Boolean)),
+      list: db.all(ProjectRowSchema, "SELECT * FROM projects ORDER BY name COLLATE NOCASE", [], "projects.list"),
+      findById: (id) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE id = ?", [id], "projects.get_by_id"),
+      findFirst: db.first(ProjectRowSchema, "SELECT * FROM projects ORDER BY created_at LIMIT 1", [], "projects.get_first"),
+      findByApiKeyHash: (hash) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE api_key_hash = ?", [hash], "projects.get_by_api_key_hash"),
+      slugExists: (slug) => db.first(Id, "SELECT id FROM projects WHERE slug = ?", [slug], "projects.get_by_slug").pipe(Effect.map(Boolean)),
       insert: (project) => db.run(
         `INSERT INTO projects
          (id, name, slug, icon, api_key_hash, notify, min_level, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, 'info', ?, ?)`,
-        [project.id, project.name, project.slug, project.icon, project.apiKeyHash, project.createdAt, project.createdAt]
+        [project.id, project.name, project.slug, project.icon, project.apiKeyHash, project.createdAt, project.createdAt],
+        "projects.create"
       ).pipe(Effect.asVoid),
       update: (id, values) => db.run(
         "UPDATE projects SET name = ?, icon = ?, notify = ?, min_level = ?, updated_at = ? WHERE id = ?",
-        [values.name, values.icon, values.notify, values.minLevel, values.updatedAt, id]
+        [values.name, values.icon, values.notify, values.minLevel, values.updatedAt, id],
+        "projects.update"
       ).pipe(Effect.asVoid),
-      count: db.first(Count, "SELECT COUNT(*) AS count FROM projects").pipe(Effect.map((row) => row?.count ?? 0)),
-      delete: (id) => db.run("DELETE FROM projects WHERE id = ?", [id]).pipe(Effect.asVoid),
+      count: db.first(Count, "SELECT COUNT(*) AS count FROM projects", [], "projects.count").pipe(Effect.map((row) => row?.count ?? 0)),
+      delete: (id) => db.run("DELETE FROM projects WHERE id = ?", [id], "projects.delete").pipe(Effect.asVoid),
       rotateApiKey: (id, hash, updatedAt) => db.run(
-        "UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, updatedAt, id]
+        "UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, updatedAt, id],
+        "projects.rotate_api_key"
       ).pipe(Effect.asVoid)
     })
   }))
@@ -322,7 +325,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
           FROM events e JOIN projects p ON p.id = e.project_id
           WHERE ${ungroupedConditions.join(" AND ")}
         ) SELECT * FROM representatives WHERE 1 = 1 ${outerCursor}
-          ORDER BY created_at DESC, id DESC LIMIT ?`, queryParams)
+          ORDER BY created_at DESC, id DESC LIMIT ?`, queryParams, "events.list_grouped")
       }
 
       if (criteria.cursor) {
@@ -332,13 +335,14 @@ export class EventsRepository extends Context.Service<EventsRepository, {
       params.push(criteria.limit)
       return db.all(EventRowSchema, `${eventSelect}
         ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
-        ORDER BY e.created_at DESC, e.id DESC LIMIT ?`, params)
+        ORDER BY e.created_at DESC, e.id DESC LIMIT ?`, params, "events.list")
     }
 
     return EventsRepository.of({
-      findById: (id) => db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [id]),
+      findById: (id) => db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [id], "events.get_by_id"),
       findIdByExternalId: (projectId, externalId) => db.first(
-        Id, "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1", [projectId, externalId]
+        Id, "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1", [projectId, externalId],
+        "events.get_by_external_id"
       ).pipe(Effect.map((row) => row?.id ?? null)),
       list,
       insertWithPushJobs: (event, subscriptionIds) => db.batch([
@@ -357,10 +361,10 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)`,
           params: [event.id, subscriptionId, event.createdAt, event.createdAt]
         }))
-      ]),
+      ], "events.create_with_push_jobs"),
       markPushJobsQueued: (eventId, queuedAt, onlyPending) => db.run(
         `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?${onlyPending ? " AND state = 'pending'" : ""}`,
-        [queuedAt, queuedAt, eventId]
+        [queuedAt, queuedAt, eventId], "push_jobs.mark_queued"
       ).pipe(Effect.asVoid),
       unsilenceWithPushJobs: (eventId, subscriptionIds, now) => db.batch([
         { sql: "UPDATE events SET silence_id = NULL WHERE id = ?", params: [eventId] },
@@ -373,8 +377,8 @@ export class EventsRepository extends Context.Service<EventsRepository, {
               lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
           params: [eventId, subscriptionId, now, now]
         }))
-      ]),
-      pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff])
+      ], "events.unsilence_with_push_jobs"),
+      pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune")
     })
   }))
 }
@@ -391,23 +395,24 @@ export class SubscriptionsRepository extends Context.Service<SubscriptionsReposi
   static readonly layer = Layer.effect(SubscriptionsRepository, Effect.gen(function*() {
     const db = yield* D1Executor
     return SubscriptionsRepository.of({
-      list: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions ORDER BY created_at DESC"),
-      listEnabled: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY created_at"),
-      findById: (id) => db.first(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE id = ?", [id]),
-      findByEndpoint: (endpoint) => db.first(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE endpoint = ?", [endpoint]),
+      list: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions ORDER BY created_at DESC", [], "subscriptions.list"),
+      listEnabled: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY created_at", [], "subscriptions.list_enabled"),
+      findById: (id) => db.first(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE id = ?", [id], "subscriptions.get_by_id"),
+      findByEndpoint: (endpoint) => db.first(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE endpoint = ?", [endpoint], "subscriptions.get_by_endpoint"),
       upsert: (v) => db.run(`INSERT INTO push_subscriptions
         (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
         ON CONFLICT(endpoint) DO UPDATE SET name = excluded.name, p256dh = excluded.p256dh,
           auth = excluded.auth, user_agent = excluded.user_agent, enabled = 1,
           last_seen_at = excluded.last_seen_at, updated_at = excluded.updated_at`,
-        [v.id, v.name, v.endpoint, v.p256dh, v.auth, v.userAgent, v.now, v.createdAt, v.now]
+        [v.id, v.name, v.endpoint, v.p256dh, v.auth, v.userAgent, v.now, v.createdAt, v.now],
+        "subscriptions.upsert"
       ).pipe(Effect.asVoid),
       update: (id, name, enabled, updatedAt) => db.run(
         "UPDATE push_subscriptions SET name = ?, enabled = ?, updated_at = ? WHERE id = ?",
-        [name, enabled, updatedAt, id]
+        [name, enabled, updatedAt, id], "subscriptions.update"
       ).pipe(Effect.asVoid),
-      delete: (id) => db.run("DELETE FROM push_subscriptions WHERE id = ?", [id]).pipe(Effect.asVoid)
+      delete: (id) => db.run("DELETE FROM push_subscriptions WHERE id = ?", [id], "subscriptions.delete").pipe(Effect.asVoid)
     })
   }))
 }
@@ -427,13 +432,13 @@ export class SilencesRepository extends Context.Service<SilencesRepository, {
     const select = `SELECT s.id, s.project_id, p.name AS project_name, s.field, s.value, s.note, s.created_at
       FROM silences s LEFT JOIN projects p ON p.id = s.project_id`
     return SilencesRepository.of({
-      list: db.all(SilenceRowSchema, `${select} ORDER BY s.created_at DESC`),
-      findById: (id) => db.first(SilenceRowSchema, `${select} WHERE s.id = ?`, [id]),
+      list: db.all(SilenceRowSchema, `${select} ORDER BY s.created_at DESC`, [], "silences.list"),
+      findById: (id) => db.first(SilenceRowSchema, `${select} WHERE s.id = ?`, [id], "silences.get_by_id"),
       insert: (v) => db.run(
         "INSERT INTO silences (id, project_id, field, value, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        [v.id, v.projectId, v.field, v.value, v.note, v.createdAt]
+        [v.id, v.projectId, v.field, v.value, v.note, v.createdAt], "silences.create"
       ).pipe(Effect.asVoid),
-      delete: (id) => db.run("DELETE FROM silences WHERE id = ?", [id]).pipe(Effect.asVoid),
+      delete: (id) => db.run("DELETE FROM silences WHERE id = ?", [id], "silences.delete").pipe(Effect.asVoid),
       findMatch: (projectId, candidates) => {
         const nonEmpty = candidates.filter((candidate) => candidate[1] !== "")
         if (nonEmpty.length === 0) return Effect.succeed(null)
@@ -452,7 +457,7 @@ export class SilencesRepository extends Context.Service<SilencesRepository, {
           LIMIT 1`, params, "silences.match"
         ).pipe(Effect.map((rows) => rows[0]?.id ?? null))
       },
-      countSilencedEvents: db.first(Count, "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL")
+      countSilencedEvents: db.first(Count, "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL", [], "silences.count_events")
         .pipe(Effect.map((row) => row?.count ?? 0))
     })
   }))
@@ -502,7 +507,7 @@ export class SettingsRepository extends Context.Service<SettingsRepository, {
       get,
       set: (key, value, updatedAt) => db.run(`INSERT INTO settings (key, value, updated_at)
         VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        [key, value, updatedAt]
+        [key, value, updatedAt], "settings.set"
       ).pipe(Effect.asVoid)
     })
   }))
@@ -518,8 +523,8 @@ export class DeliveriesRepository extends Context.Service<DeliveriesRepository, 
       COALESCE(s.name, '') AS subscription_name, d.status, d.response_status, d.error, d.attempted_at
       FROM deliveries d LEFT JOIN push_subscriptions s ON s.id = d.subscription_id`
     return DeliveriesRepository.of({
-      listForEvent: (eventId) => db.all(DeliveryRowSchema, `${select} WHERE d.event_id = ? ORDER BY d.attempted_at DESC`, [eventId]),
-      latest: db.first(DeliveryRowSchema, `${select} ORDER BY d.attempted_at DESC LIMIT 1`)
+      listForEvent: (eventId) => db.all(DeliveryRowSchema, `${select} WHERE d.event_id = ? ORDER BY d.attempted_at DESC`, [eventId], "deliveries.list_for_event"),
+      latest: db.first(DeliveryRowSchema, `${select} ORDER BY d.attempted_at DESC LIMIT 1`, [], "deliveries.latest")
     })
   }))
 }
@@ -561,21 +566,22 @@ export class PushJobsRepository extends Context.Service<PushJobsRepository, {
     const Recoverable = Schema.Struct({ event_id: Schema.String, subscription_id: Schema.String })
     const find = (message: PushJobMessage) => db.first(PushJobRowSchema,
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
-      [message.eventId, message.subscriptionId])
+      [message.eventId, message.subscriptionId], "push_jobs.get")
     return PushJobsRepository.of({
       find,
       claim: (message, now, leaseUntil) => db.run(`UPDATE push_jobs
         SET state = 'sending', attempts = attempts + 1, lease_until = ?, updated_at = ?
         WHERE event_id = ? AND subscription_id = ?
           AND (state IN ('pending', 'queued', 'retrying') OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?)))
-          AND available_at <= ?`, [leaseUntil, now, message.eventId, message.subscriptionId, now, now]
+          AND available_at <= ?`, [leaseUntil, now, message.eventId, message.subscriptionId, now, now],
+        "push_jobs.claim"
       ).pipe(Effect.map((count) => count > 0)),
       loadContext: (message) => Effect.gen(function*() {
         const job = yield* find(message)
         if (!job) return null
-        const event = yield* db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [message.eventId])
+        const event = yield* db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [message.eventId], "push_jobs.get_event")
         const subscription = yield* db.first(PushSubscriptionRowSchema,
-          "SELECT * FROM push_subscriptions WHERE id = ?", [message.subscriptionId])
+          "SELECT * FROM push_subscriptions WHERE id = ?", [message.subscriptionId], "push_jobs.get_subscription")
         return event && subscription ? { job, event, subscription } : null
       }),
       finalizeSuccess: (v) => db.batch([
@@ -583,7 +589,7 @@ export class PushJobsRepository extends Context.Service<PushJobsRepository, {
           last_error = '', updated_at = ? WHERE event_id = ? AND subscription_id = ?`,
           params: [v.now, v.message.eventId, v.message.subscriptionId] },
         deliveryInsert(v, "sent")
-      ]),
+      ], "push_jobs.finalize_success"),
       finalizeDead: (v) => db.batch([
         { sql: `UPDATE push_jobs SET state = 'dead', lease_until = NULL, dead_at = ?,
           last_error = ?, updated_at = ? WHERE event_id = ? AND subscription_id = ?`,
@@ -593,26 +599,26 @@ export class PushJobsRepository extends Context.Service<PushJobsRepository, {
           sql: "UPDATE push_subscriptions SET enabled = 0, updated_at = ? WHERE id = ?",
           params: [v.now, v.message.subscriptionId]
         }] : [])
-      ]),
+      ], "push_jobs.finalize_dead"),
       scheduleRetry: (v) => db.batch([
         { sql: `UPDATE push_jobs SET state = 'retrying', available_at = ?, queued_at = ?,
           lease_until = NULL, dead_at = NULL, last_error = ?, updated_at = ?
           WHERE event_id = ? AND subscription_id = ?`,
           params: [v.availableAt, v.now, v.error.slice(0, 4_000), v.now, v.message.eventId, v.message.subscriptionId] },
         deliveryInsert(v, "failed")
-      ]),
+      ], "push_jobs.finalize_retry"),
       listRecoverable: (now, staleQueueTime) => db.all(Recoverable, `SELECT event_id, subscription_id
         FROM push_jobs WHERE (state = 'pending' AND available_at <= ?)
           OR (state = 'queued' AND available_at <= ? AND (queued_at IS NULL OR queued_at < ?))
           OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?))
-        ORDER BY available_at LIMIT 100`, [now, now, staleQueueTime, now]
+        ORDER BY available_at LIMIT 100`, [now, now, staleQueueTime, now], "push_jobs.list_recoverable"
       ).pipe(Effect.map((rows) => rows.map((row) => ({ eventId: row.event_id, subscriptionId: row.subscription_id })))),
       markRecoveredQueued: (messages, queuedAt) => db.batch(messages.map((message) => ({
         sql: `UPDATE push_jobs SET state = 'queued', queued_at = ?, lease_until = NULL,
           dead_at = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?
           AND state IN ('pending', 'queued', 'sending', 'retrying')`,
         params: [queuedAt, queuedAt, message.eventId, message.subscriptionId]
-      })))
+      })), "push_jobs.mark_recovered_queued")
     })
   }))
 }
@@ -637,13 +643,13 @@ export class SystemRepository extends Context.Service<SystemRepository, {
       enabled_subscriptions: Schema.Number, dead_jobs: Schema.Number
     })
     return SystemRepository.of({
-      health: db.first(Health, "SELECT 1 AS ok").pipe(Effect.asVoid),
+      health: db.first(Health, "SELECT 1 AS ok", [], "system.health").pipe(Effect.asVoid),
       counts: db.first(Counts, `SELECT
         (SELECT COUNT(*) FROM projects) AS projects,
         (SELECT COUNT(*) FROM events) AS events,
         (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
         (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
-        (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`
+        (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`, [], "system.counts"
       ).pipe(Effect.map((row) => row ?? { projects: 0, events: 0, subscriptions: 0, enabled_subscriptions: 0, dead_jobs: 0 }))
     })
   }))
