@@ -1,15 +1,22 @@
 import { Context, Effect, Layer } from "effect"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
-import type { ListEventsInput } from "./events.js"
+import type { EventPage, ListEventsInput } from "./events.js"
 import {
   AppConfig,
   CredentialCrypto,
   Database,
   PasswordHasher
 } from "./services.js"
+import type { EventView, ProjectView } from "./types.js"
 
-const protocolVersion = "2025-06-18"
+const protocolVersion = "2026-07-28"
+const supportedProtocolVersions = new Set([protocolVersion, "2025-06-18"])
+const readOnlyAnnotations = {
+  readOnlyHint: true,
+  idempotentHint: true,
+  openWorldHint: false
+} as const
 
 interface JsonRpcRequest {
   readonly jsonrpc?: unknown
@@ -20,81 +27,89 @@ interface JsonRpcRequest {
 
 interface ToolDefinition {
   readonly name: string
+  readonly title: string
   readonly description: string
   readonly inputSchema: Readonly<Record<string, unknown>>
+  readonly annotations: typeof readOnlyAnnotations
 }
+
+const commonEventProperties = {
+  project: { type: "string", description: "Project id or slug" },
+  level: { type: "string", enum: ["info", "success", "warning", "error", "critical"] },
+  source: { type: "string" },
+  fingerprint: { type: "string" },
+  since: { type: "string", format: "date-time" },
+  until: { type: "string", format: "date-time" },
+  grouped: { type: "boolean" },
+  silenced: { type: "boolean" },
+  before: { type: "string", description: "Cursor returned by a previous call" },
+  limit: { type: "integer", minimum: 1, maximum: 100, default: 25 }
+} as const
 
 const tools: ReadonlyArray<ToolDefinition> = [
   {
     name: "list_projects",
-    description: "List every Ops Context project.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+    title: "List projects",
+    description: "List every project that sends operational events.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: readOnlyAnnotations
   },
   {
     name: "list_events",
-    description: "List operational events with the same filters as the inbox.",
+    title: "List events",
+    description: "List recent events newest first. Set grouped=true to collapse repeated fingerprints within each project.",
     inputSchema: {
       type: "object",
-      properties: {
-        project: { type: "string" },
-        level: { type: "string", enum: ["info", "success", "warning", "error", "critical"] },
-        source: { type: "string" },
-        fingerprint: { type: "string" },
-        since: { type: "string", format: "date-time" },
-        until: { type: "string", format: "date-time" },
-        grouped: { type: "boolean" },
-        silenced: { type: "boolean" },
-        limit: { type: "integer", minimum: 1, maximum: 100 }
-      },
+      properties: commonEventProperties,
       additionalProperties: false
-    }
+    },
+    annotations: readOnlyAnnotations
   },
   {
     name: "search_events",
-    description: "Search event titles, bodies, sources, fingerprints, and structured context.",
+    title: "Search events",
+    description: "Case-insensitive search across titles, bodies, sources, fingerprints, and structured context.",
     inputSchema: {
       type: "object",
       required: ["query"],
       properties: {
         query: { type: "string", minLength: 1 },
-        project: { type: "string" },
-        level: { type: "string", enum: ["info", "success", "warning", "error", "critical"] },
-        source: { type: "string" },
-        fingerprint: { type: "string" },
-        since: { type: "string", format: "date-time" },
-        until: { type: "string", format: "date-time" },
-        grouped: { type: "boolean" },
-        silenced: { type: "boolean" },
-        limit: { type: "integer", minimum: 1, maximum: 100 }
+        ...commonEventProperties
       },
       additionalProperties: false
-    }
+    },
+    annotations: readOnlyAnnotations
   },
   {
     name: "get_event",
-    description: "Get one event by its id.",
+    title: "Get event",
+    description: "Get one event with its complete structured context and actions.",
     inputSchema: {
       type: "object",
       required: ["id"],
       properties: { id: { type: "string" } },
       additionalProperties: false
-    }
+    },
+    annotations: readOnlyAnnotations
   },
   {
     name: "get_event_group",
-    description: "List occurrences for one project and fingerprint.",
+    title: "Get event group",
+    description: "Get aggregate metadata, the latest event, and paginated occurrences for a project and fingerprint.",
     inputSchema: {
       type: "object",
-      required: ["project_id", "fingerprint"],
+      required: ["project", "fingerprint"],
       properties: {
-        project_id: { type: "string" },
+        project: { type: "string", description: "Project id or slug" },
         fingerprint: { type: "string", minLength: 1 },
         since: { type: "string", format: "date-time" },
         until: { type: "string", format: "date-time" },
-        limit: { type: "integer", minimum: 1, maximum: 100 }
+        before: { type: "string", description: "Cursor returned by a previous call" },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 }
       },
       additionalProperties: false
-    }
+    },
+    annotations: readOnlyAnnotations
   }
 ]
 
@@ -122,13 +137,10 @@ const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
 
 const stringArgument = (
   args: Readonly<Record<string, unknown>>,
-  key: string,
-  required = false
+  key: string
 ): string | undefined => {
   const value = args[key]
-  if (typeof value === "string" && value.trim()) return value.trim()
-  if (required) throw new Error(`${key} is required`)
-  return undefined
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
 const booleanArgument = (
@@ -136,18 +148,19 @@ const booleanArgument = (
   key: string
 ): string | undefined => typeof args[key] === "boolean" ? String(args[key]) : undefined
 
-const limitArgument = (args: Readonly<Record<string, unknown>>): string | undefined => {
+const limitArgument = (args: Readonly<Record<string, unknown>>, fallback = 25): string => {
   const value = args.limit
   return typeof value === "number" && Number.isInteger(value)
     ? String(Math.max(1, Math.min(100, value)))
-    : undefined
+    : String(fallback)
 }
 
 const listInput = (
   args: Readonly<Record<string, unknown>>,
+  projectId: string | undefined,
   search?: string
 ): ListEventsInput => ({
-  ...(stringArgument(args, "project") ? { project: stringArgument(args, "project") } : {}),
+  ...(projectId ? { project: projectId } : {}),
   ...(stringArgument(args, "level") ? { level: stringArgument(args, "level") } : {}),
   ...(stringArgument(args, "source") ? { source: stringArgument(args, "source") } : {}),
   ...(stringArgument(args, "fingerprint") ? { fingerprint: stringArgument(args, "fingerprint") } : {}),
@@ -155,8 +168,33 @@ const listInput = (
   ...(stringArgument(args, "until") ? { until: stringArgument(args, "until") } : {}),
   ...(booleanArgument(args, "grouped") ? { grouped: booleanArgument(args, "grouped") } : {}),
   ...(booleanArgument(args, "silenced") ? { silenced: booleanArgument(args, "silenced") } : {}),
-  ...(limitArgument(args) ? { limit: limitArgument(args) } : {}),
+  ...(stringArgument(args, "before") ? { before: stringArgument(args, "before") } : {}),
+  limit: limitArgument(args),
   ...(search ? { search } : {})
+})
+
+const eventSummary = (event: EventView) => ({
+  id: event.id,
+  project: event.project_name,
+  project_id: event.project_id,
+  level: event.level,
+  title: event.title,
+  ...(event.body ? { body: event.body } : {}),
+  ...(event.source ? { source: event.source } : {}),
+  ...(event.type ? { type: event.type } : {}),
+  ...(event.fingerprint ? { fingerprint: event.fingerprint } : {}),
+  ...(event.external_id ? { external_id: event.external_id } : {}),
+  occurred_at: event.occurred_at,
+  created_at: event.created_at,
+  ...(event.silenced ? { silenced: true } : {}),
+  ...(Object.keys(event.data).length > 0 ? { data_keys: Object.keys(event.data).sort() } : {}),
+  ...(event.actions.length > 0 ? { actions: event.actions } : {}),
+  ...(event.group ? { group: event.group } : {})
+})
+
+const eventPageOutput = (page: EventPage) => ({
+  events: page.events.map(eventSummary),
+  ...(page.next_cursor ? { next_cursor: page.next_cursor } : {})
 })
 
 const contentResult = (value: unknown) => ({
@@ -219,6 +257,12 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       const credentials = yield* CredentialCrypto
       const passwordHasher = yield* PasswordHasher
 
+      const resolveProject = Effect.fn("Mcp.resolveProject")(function*(value: string | undefined) {
+        if (!value) return undefined
+        const available = yield* projects.list
+        return available.find((project) => project.id === value || project.slug === value)
+      })
+
       const hasAdminSession = Effect.fn("Mcp.hasAdminSession")(function*(request: Request) {
         const token = parseCookies(request).ops_session
         if (!token) return false
@@ -245,12 +289,21 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
         const authorization = request.headers.get("authorization")
         if (!authorization?.startsWith("Bearer ")) return "none" as const
         const presented = authorization.slice("Bearer ".length).trim()
-        if (!presented || !config.mcpToken || config.mcpToken.length < 16) return "project-key" as const
-        const [presentedHash, configuredHash] = yield* Effect.all([
-          credentials.sha256Hex(presented),
-          credentials.sha256Hex(config.mcpToken)
-        ]).pipe(Effect.catch(() => Effect.succeed(["", ""] as const)))
-        return presentedHash && presentedHash === configuredHash ? "mcp" as const : "project-key" as const
+        if (!presented) return "invalid" as const
+
+        if (config.mcpToken && config.mcpToken.length >= 16) {
+          const [presentedHash, configuredHash] = yield* Effect.all([
+            credentials.sha256Hex(presented),
+            credentials.sha256Hex(config.mcpToken)
+          ]).pipe(Effect.catch(() => Effect.succeed(["", ""] as const)))
+          if (presentedHash && presentedHash === configuredHash) return "mcp" as const
+        }
+
+        const projectKey = yield* projects.authenticate(presented).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false))
+        )
+        return projectKey ? "project-key" as const : "invalid" as const
       })
 
       const authorized = Effect.fn("Mcp.authorized")(function*(request: Request) {
@@ -262,6 +315,12 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             response: json({ error: "forbidden", message: "project API keys cannot access MCP" }, 403)
           }
         }
+        if (bearer === "invalid") {
+          return {
+            ok: false as const,
+            response: json({ error: "unauthorized", message: "invalid MCP bearer token" }, 401)
+          }
+        }
         if (yield* hasAdminSession(request)) return { ok: true as const }
         if (yield* hasBasicCredentials(request)) return { ok: true as const }
         return {
@@ -270,40 +329,95 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
         }
       })
 
-      const callTool = Effect.fn("Mcp.callTool")(function*(name: string, args: Readonly<Record<string, unknown>>) {
-        let effect: Effect.Effect<unknown, ApiFailure>
-        switch (name) {
-          case "list_projects":
-            effect = projects.list
-            break
-          case "list_events":
-            effect = events.list(listInput(args))
-            break
-          case "search_events": {
-            const query = stringArgument(args, "query", true)!
-            effect = events.list(listInput(args, query))
-            break
-          }
-          case "get_event":
-            effect = events.get(stringArgument(args, "id", true)!)
-            break
-          case "get_event_group":
-            effect = events.list({
-              project: stringArgument(args, "project_id", true)!,
-              fingerprint: stringArgument(args, "fingerprint", true)!,
-              ...(stringArgument(args, "since") ? { since: stringArgument(args, "since") } : {}),
-              ...(stringArgument(args, "until") ? { until: stringArgument(args, "until") } : {}),
-              grouped: "false",
-              limit: limitArgument(args) ?? "100"
-            })
-            break
-          default:
-            return toolError(`Unknown tool: ${name}`)
-        }
-        return yield* effect.pipe(
+      const runTool = <A>(effect: Effect.Effect<A, ApiFailure>) =>
+        effect.pipe(
           Effect.map(contentResult),
           Effect.catch((error) => Effect.succeed(toolError(errorMessage(error))))
         )
+
+      const projectForArgs = Effect.fn("Mcp.projectForArgs")(function*(args: Readonly<Record<string, unknown>>) {
+        const requested = stringArgument(args, "project")
+        if (!requested) return { requested: undefined, project: undefined }
+        return { requested, project: yield* resolveProject(requested) }
+      })
+
+      const callTool = Effect.fn("Mcp.callTool")(function*(name: string, args: Readonly<Record<string, unknown>>) {
+        switch (name) {
+          case "list_projects":
+            return yield* runTool(projects.list.pipe(
+              Effect.map((available) => ({ projects: available }))
+            ))
+
+          case "list_events": {
+            const resolved = yield* projectForArgs(args)
+            if (resolved.requested && !resolved.project) return toolError(`Unknown project: ${resolved.requested}`)
+            return yield* runTool(events.list(listInput(args, resolved.project?.id)).pipe(
+              Effect.map(eventPageOutput)
+            ))
+          }
+
+          case "search_events": {
+            const query = stringArgument(args, "query")
+            if (!query) return toolError("query is required")
+            const resolved = yield* projectForArgs(args)
+            if (resolved.requested && !resolved.project) return toolError(`Unknown project: ${resolved.requested}`)
+            return yield* runTool(events.list(listInput(args, resolved.project?.id, query)).pipe(
+              Effect.map(eventPageOutput)
+            ))
+          }
+
+          case "get_event": {
+            const id = stringArgument(args, "id")
+            if (!id) return toolError("id is required")
+            return yield* runTool(events.get(id))
+          }
+
+          case "get_event_group": {
+            const projectArgument = stringArgument(args, "project")
+            const fingerprint = stringArgument(args, "fingerprint")
+            if (!projectArgument || !fingerprint) return toolError("project and fingerprint are required")
+            const project = yield* resolveProject(projectArgument)
+            if (!project) return toolError(`Unknown project: ${projectArgument}`)
+
+            const window: ListEventsInput = {
+              project: project.id,
+              fingerprint,
+              ...(stringArgument(args, "since") ? { since: stringArgument(args, "since") } : {}),
+              ...(stringArgument(args, "until") ? { until: stringArgument(args, "until") } : {})
+            }
+            const groupEffect = Effect.gen(function*() {
+              const grouped = yield* events.list({ ...window, grouped: "true", limit: "1" })
+              const latest = grouped.events[0]
+              if (!latest) return toolError(`No events with fingerprint ${fingerprint} in project ${projectArgument}`)
+              const occurrences = yield* events.list({
+                ...window,
+                grouped: "false",
+                ...(stringArgument(args, "before") ? { before: stringArgument(args, "before") } : {}),
+                limit: limitArgument(args)
+              })
+              const group = latest.group ?? {
+                count: occurrences.events.length,
+                first_seen: latest.created_at,
+                last_seen: latest.created_at
+              }
+              return {
+                project: project.name,
+                project_id: project.id,
+                fingerprint,
+                count: group.count,
+                first_seen: group.first_seen,
+                last_seen: group.last_seen,
+                latest,
+                occurrences: occurrences.events.map(eventSummary),
+                ...(occurrences.next_cursor ? { next_cursor: occurrences.next_cursor } : {})
+              }
+            })
+            return yield* runTool(groupEffect)
+          }
+
+          default:
+            return toolError(`Unknown tool: ${name}`)
+        }
       })
 
       const dispatch = Effect.fn("Mcp.dispatch")(function*(request: JsonRpcRequest) {
@@ -318,18 +432,21 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             const requestedVersion = typeof params.protocolVersion === "string"
               ? params.protocolVersion
               : protocolVersion
+            const negotiatedVersion = supportedProtocolVersions.has(requestedVersion)
+              ? requestedVersion
+              : protocolVersion
             return rpcResult(id, {
-              protocolVersion: requestedVersion,
+              protocolVersion: negotiatedVersion,
               capabilities: { tools: { listChanged: false } },
-              serverInfo: { name: "ops-context", version: "0.3.0" },
-              instructions: "Read-only access to projects, events, event search, and fingerprint groups."
+              serverInfo: { name: "ops-context", title: "Ops Context", version: "0.3.0" },
+              instructions: "Ops Context stores operational events from applications. These tools are read-only. Repeated fingerprints are occurrences of the same event within a project."
             })
           }
           case "server/discover":
             return rpcResult(id, {
-              protocolVersions: ["2026-07-28", protocolVersion],
+              protocolVersions: Array.from(supportedProtocolVersions),
               capabilities: { tools: {} },
-              serverInfo: { name: "ops-context", version: "0.3.0" }
+              serverInfo: { name: "ops-context", title: "Ops Context", version: "0.3.0" }
             })
           case "ping":
             return rpcResult(id, {})
@@ -363,6 +480,11 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
           if (!access.ok) return access.response
           if (request.method !== "POST") {
             return json({ error: "method_not_allowed", message: "Use POST for MCP Streamable HTTP" }, 405)
+          }
+
+          const requestVersion = request.headers.get("mcp-protocol-version")
+          if (requestVersion && !supportedProtocolVersions.has(requestVersion)) {
+            return rpcError(null, -32600, `Unsupported MCP protocol version: ${requestVersion}`, 400)
           }
 
           const contentLength = Number.parseInt(request.headers.get("content-length") ?? "0", 10)
