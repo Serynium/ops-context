@@ -1,8 +1,13 @@
 import { Schema } from "effect"
 import { HttpApiSchema } from "effect/unstable/httpapi"
-import type { AppError } from "./errors.js"
+import {
+  CreateEventInputSchema,
+  EventActionOutputSchema,
+  EventLevel
+} from "./event-contract.js"
+import { validationIssuesFromCause, type AppError } from "./errors.js"
 
-export const Level = Schema.Literals(["info", "success", "warning", "error", "critical"])
+export const Level = EventLevel
 export type Level = typeof Level.Type
 
 export const SilenceField = Schema.Literals(["fingerprint", "title", "source"])
@@ -10,10 +15,7 @@ export type SilenceField = typeof SilenceField.Type
 
 export const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
 
-export const EventAction = Schema.Struct({
-  label: Schema.String,
-  url: Schema.String
-})
+export const EventAction = EventActionOutputSchema
 
 export const EventGroup = Schema.Struct({
   count: Schema.Int,
@@ -170,18 +172,7 @@ export const AuthLoginInput = Schema.Struct({
   password: Schema.String
 })
 
-export const CreateEventInput = Schema.Struct({
-  external_id: Schema.optional(Schema.String),
-  source: Schema.optional(Schema.String),
-  type: Schema.optional(Schema.String),
-  level: Schema.optional(Level),
-  title: Schema.String,
-  body: Schema.optional(Schema.String),
-  fingerprint: Schema.optional(Schema.String),
-  occurred_at: Schema.optional(Schema.String),
-  data: Schema.optional(Schema.Unknown),
-  actions: Schema.optional(Schema.Array(EventAction))
-})
+export const CreateEventInput = CreateEventInputSchema
 
 export const EventListQuery = Schema.Struct({
   project: Schema.optional(Schema.String),
@@ -246,6 +237,11 @@ export const TestNotificationInput = Schema.Struct({
   project_id: Schema.optional(Schema.String)
 })
 
+export const ValidationIssue = Schema.Struct({
+  path: Schema.Array(Schema.Union([Schema.String, Schema.Number])),
+  message: Schema.String
+})
+
 const errorFields = {
   error: Schema.String,
   message: Schema.String
@@ -281,9 +277,18 @@ export class ConflictError extends Schema.TaggedError<ConflictError>()(
   { httpApiStatus: 409 }
 ) {}
 
+export class PayloadTooLargeError extends Schema.TaggedError<PayloadTooLargeError>()(
+  "PayloadTooLargeError",
+  errorFields,
+  { httpApiStatus: 413 }
+) {}
+
 export class InvalidError extends Schema.TaggedError<InvalidError>()(
   "InvalidError",
-  errorFields,
+  {
+    ...errorFields,
+    issues: Schema.optional(Schema.Array(ValidationIssue))
+  },
   { httpApiStatus: 422 }
 ) {}
 
@@ -305,6 +310,7 @@ export type ApiFailure =
   | ForbiddenError
   | NotFoundError
   | ConflictError
+  | PayloadTooLargeError
   | InvalidError
   | InternalError
   | ServiceUnavailableError
@@ -315,6 +321,7 @@ export const CommonErrors = [
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  PayloadTooLargeError,
   InvalidError,
   InternalError,
   ServiceUnavailableError
@@ -333,8 +340,12 @@ export const toApiFailure = (error: AppError): ApiFailure => {
       return new NotFoundError(fields)
     case 409:
       return new ConflictError(fields)
-    case 422:
-      return new InvalidError(fields)
+    case 413:
+      return new PayloadTooLargeError(fields)
+    case 422: {
+      const issues = validationIssuesFromCause(error.cause)
+      return new InvalidError({ ...fields, ...(issues ? { issues } : {}) })
+    }
     case 503:
       return new ServiceUnavailableError(fields)
     default:
