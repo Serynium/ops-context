@@ -1,0 +1,14 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "REPLACE_WITH_DISPOSABLE_WORKER_NAME",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-08-29",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "REPLACE_WITH_DISPOSABLE_DATABASE_NAME",
+      "database_id": "REPLACE_WITH_DISPOSABLE_DATABASE_ID"
+    }
+  ]
+}

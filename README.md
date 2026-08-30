@@ -9,6 +9,7 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 - Schema-first Effect v4 HTTP API using `HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, tagged errors, services, Layers, and reusable managed runtimes.
 - Cloudflare D1 persistence with atomic event and durable push-job batches.
 - Named D1 query telemetry for duration, rows returned, rows read, and rows written, without SQL parameters or payload values. See [D1 query observability](docs/d1-observability.md).
+- Primary-only D1 reads retained after a Sessions/read-replication prototype; adoption is gated on production regional and tail-latency evidence. See [ADR 0003](docs/decisions/0003-retain-primary-d1-reads.md).
 - Measured FTS5 event search with documented token, phrase, prefix, redaction, maintenance, and rebuild behavior. See [Event search](docs/event-search.md).
 - Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
 - Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.

@@ -25,6 +25,15 @@ export interface SqlStatement {
   readonly params?: ReadonlyArray<unknown>
 }
 
+/**
+ * The D1 operations used by repository adapters. Both the authoritative database
+ * binding and a request-scoped D1 session implement this shape.
+ */
+export interface D1Connection {
+  readonly prepare: D1Database["prepare"]
+  readonly batch: D1Database["batch"]
+}
+
 export interface DatabaseService {
   readonly first: <A extends object>(
     name: string,
@@ -52,7 +61,7 @@ export interface DatabaseService {
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
-  static readonly layer = (db: D1Database): Layer.Layer<Database> => {
+  static readonly layer = (db: D1Connection): Layer.Layer<Database> => {
     const requireD1Success = <A extends D1Result<unknown>>(result: A): A => {
       if (result.success !== true) throw new Error("D1 operation returned an unsuccessful result")
       return result

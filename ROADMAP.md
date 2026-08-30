@@ -27,7 +27,7 @@ These features should be implemented only when production measurements justify t
 
 - D1 index tuning from query plans and rows-read/write metadata (#18).
 - FTS5 search instead of broad substring scans (#20).
-- D1 Sessions/read-replication evaluation for global read latency (#21).
+- D1 Sessions/read-replication evaluation retained primary-only reads pending production regional p95 evidence (#21; [ADR 0003](docs/decisions/0003-retain-primary-d1-reads.md)).
 - Splitting MCP or push delivery into separate Worker deployments (#22).
 
 ## Possible product features

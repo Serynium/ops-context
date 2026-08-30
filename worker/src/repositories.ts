@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { SqlSchema } from "effect/unstable/sql"
 import { repositoryUnavailable, type RepositoryUnavailable } from "./errors.js"
 import { rebuildEventGroupsSql } from "./event-groups.js"
-import { Database } from "./services.js"
+import { Database, type D1Connection } from "./services.js"
 import type { DeliverPushCommand } from "./queue-contract.js"
 import type { SilenceField } from "./silences.js"
 import type {
@@ -952,7 +952,7 @@ const RepositoryLayers = Layer.mergeAll(
   SystemRepository.layer
 )
 
-export const D1RepositoriesLive = (db: D1Database) => {
+export const D1RepositoriesLive = (db: D1Connection) => {
   const database = Database.layer(db)
   return RepositoryLayers.pipe(Layer.provide(D1Executor.layer), Layer.provide(database))
 }
