@@ -25,10 +25,10 @@ const message: PushJobMessage = {
 
 const config = (maxPushAttempts = 6): ConfigService => ({
   baseUrl: "https://ops.example.com",
-  adminUser: "admin",
+  appOrigin: "https://ops.example.com",
+  appHost: "ops.example.com",
   defaultRetentionDays: 0,
   maxPushAttempts,
-  adminPasswordHash: "unused",
   vapidPublicKey: "unused",
   vapidPrivateJwk: "unused",
   vapidSubject: "mailto:test@example.com"
