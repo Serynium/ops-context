@@ -101,7 +101,7 @@ export const EventBody = text("Event body", 0, EVENT_BODY_MAX_LENGTH)
 export const EventSource = text("Event source", 0, EVENT_SOURCE_MAX_LENGTH)
 export const EventType = text("Event type", 0, EVENT_TYPE_MAX_LENGTH)
 export const EventFingerprint = text("Event fingerprint", 0, EVENT_FINGERPRINT_MAX_LENGTH)
-export const EventExternalId = text("Event external id", 0, EVENT_EXTERNAL_ID_MAX_LENGTH)
+export const EventExternalId = text("Event external id", 1, EVENT_EXTERNAL_ID_MAX_LENGTH)
 
 export const EventOccurredAt = text("Event occurrence timestamp", 1, 64)
   .check(Schema.makeFilter<string>((value) =>
