@@ -10,6 +10,7 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "build:worker": "wrangler deploy --dry-run --outdir .worker-dist",
+    "analyze:worker": "pnpm build:web && wrangler deploy --dry-run --outdir .worker-dist --metafile .worker-dist/bundle-meta.json && node scripts/report-worker-bundle.mjs",
     "typecheck": "tsc -p worker/tsconfig.json && tsc -p worker/test/tsconfig.json && tsc -p web/tsconfig.json",
     "test": "pnpm build:web && vitest run",
     "test:watch": "pnpm build:web && vitest",
