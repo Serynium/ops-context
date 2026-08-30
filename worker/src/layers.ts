@@ -23,6 +23,7 @@ import {
   SameOriginLive
 } from "./middleware.js"
 import { SentryEndpoint } from "./sentry.js"
+import { PushDeliveryRepository } from "./push-repository.js"
 import {
   InfrastructureLive,
   WebPush
@@ -93,8 +94,9 @@ export const makeLayers = (env: Env) => {
   const http = Layer.mergeAll(routes, securityHeaders)
 
   const webPush = WebPush.layer.pipe(Layer.provide(infrastructure))
+  const pushRepository = PushDeliveryRepository.layer.pipe(Layer.provide(infrastructure))
   const delivery = PushDelivery.layer.pipe(
-    Layer.provide(Layer.mergeAll(infrastructure, webPush))
+    Layer.provide(Layer.mergeAll(infrastructure, webPush, pushRepository))
   )
   const maintenance = Maintenance.layer.pipe(Layer.provide(infrastructure))
   const mcp = McpEndpoint.layer.pipe(Layer.provide(base))

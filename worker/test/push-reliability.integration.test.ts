@@ -9,6 +9,7 @@ import {
   processPushMessage,
   type PushJobRow
 } from "../src/push.js"
+import { PushDeliveryRepository } from "../src/push-repository.js"
 import {
   AppConfig,
   CredentialCrypto,
@@ -42,18 +43,26 @@ const runtimeLayer = (
   response: Response | Error,
   maxPushAttempts = 6,
   onSend: () => void = () => undefined
-) => Layer.mergeAll(
-  Database.layer(env.DB),
-  CredentialCrypto.layer,
-  Layer.succeed(AppConfig)(config(maxPushAttempts)),
-  Layer.succeed(WebPush)({
-    send: () => Effect.sync(onSend).pipe(
-      Effect.flatMap(() => response instanceof Error
-        ? Effect.fail(deliveryTemporarilyUnavailable(response.message, response))
-        : Effect.succeed(response))
-    )
-  })
-)
+) => {
+  const infrastructure = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+  const repository = PushDeliveryRepository.layer.pipe(Layer.provide(infrastructure))
+  return Layer.mergeAll(
+    repository,
+    Layer.succeed(AppConfig)(config(maxPushAttempts)),
+    Layer.succeed(WebPush)({
+      send: () => Effect.sync(onSend).pipe(
+        Effect.flatMap(() => response instanceof Error
+          ? Effect.fail(deliveryTemporarilyUnavailable(response.message, response))
+          : Effect.succeed(response))
+      )
+    })
+  )
+}
+
+const pushRepositoryLayer = () =>
+  PushDeliveryRepository.layer.pipe(
+    Layer.provide(Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer))
+  )
 
 const project: ProjectRow = {
   id: "prj_test",
@@ -227,6 +236,21 @@ describe("bounded push delivery lifecycle", () => {
     expect(await deliveryCount()).toBe(1)
   })
 
+  it("retries an unexpectedly early Queue delivery without claiming the job", async () => {
+    await seed({ availableAt: new Date(Date.now() + 60_000).toISOString() })
+
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response(null, { status: 201 })))
+      )
+    )
+
+    expect(outcome._tag).toBe("Retry")
+    expect((await getJob()).state).toBe("queued")
+    expect((await getJob()).attempts).toBe(0)
+    expect(await deliveryCount()).toBe(0)
+  })
+
   it("reclaims an expired sending lease", async () => {
     await seed({
       state: "sending",
@@ -242,6 +266,45 @@ describe("bounded push delivery lifecycle", () => {
 
     expect(outcome._tag).toBe("Delivered")
     expect((await getJob()).attempts).toBe(2)
+  })
+
+  it("prevents an expired claimant from finalizing over the reclaimed lease", async () => {
+    await seed()
+    const repositoryLayer = pushRepositoryLayer()
+    const firstClaim = await Effect.runPromise(
+      Effect.flatMap(PushDeliveryRepository, (_) => _.claim(message)).pipe(
+        Effect.provide(repositoryLayer)
+      )
+    )
+    if (!firstClaim || "availableAt" in firstClaim) throw new Error("first claim failed")
+
+    await env.DB.prepare(
+      `UPDATE push_jobs SET lease_until = ?
+       WHERE event_id = ? AND subscription_id = ?`
+    ).bind(
+      new Date(Date.now() - 60_000).toISOString(),
+      message.eventId,
+      message.subscriptionId
+    ).run()
+
+    const secondClaim = await Effect.runPromise(
+      Effect.flatMap(PushDeliveryRepository, (_) => _.claim(message)).pipe(
+        Effect.provide(repositoryLayer)
+      )
+    )
+    if (!secondClaim || "availableAt" in secondClaim) throw new Error("reclaim failed")
+
+    await Effect.runPromise(
+      Effect.gen(function*() {
+        const repository = yield* PushDeliveryRepository
+        yield* repository.finalizeSuccess(firstClaim, 201)
+        yield* repository.finalizeSuccess(secondClaim, 201)
+      }).pipe(Effect.provide(repositoryLayer))
+    )
+
+    expect((await getJob()).state).toBe("sent")
+    expect((await getJob()).attempts).toBe(2)
+    expect(await deliveryCount()).toBe(1)
   })
 
   it("enters the terminal dead state when the configured attempt limit is reached", async () => {
@@ -464,7 +527,7 @@ describe("bounded push delivery lifecycle", () => {
 
     const outcome = await Effect.runPromise(
       processDeadLetterMessage(message).pipe(
-        Effect.provide(Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer))
+        Effect.provide(pushRepositoryLayer())
       )
     )
 
