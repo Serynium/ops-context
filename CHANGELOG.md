@@ -6,6 +6,9 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.
+- D1 observability guidance for read amplification, write volume, latency, failures, and before/after performance comparisons.
+
 - Strict Effect Schema event ingestion with field-level validation issues, calendar-valid RFC 3339 timestamps, HTTP(S)-only actions, bounded structured context, and a 256 KiB raw request limit.
 - Event-ingestion contract documentation and Workers-runtime coverage for oversized bodies.
 

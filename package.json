@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@effect/platform-browser": "4.0.0-rc.112",
-    "@effect/sql-d1": "4.0.0-rc.112",
     "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
     "effect": "4.0.0-rc.112"

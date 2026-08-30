@@ -126,7 +126,7 @@ const eventSelect = `
 export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
-    const row = yield* db.first<EventRow>(`${eventSelect} WHERE e.id = ?`, [id])
+    const row = yield* db.first<EventRow>("events.get_by_id", `${eventSelect} WHERE e.id = ?`, [id])
     if (!row) return yield* Effect.fail(eventNotFound())
     return toEventView(row)
   })
@@ -143,6 +143,7 @@ export const createEventForProject = (
 
     if (normalized.external_id) {
       const existing = yield* db.first<{ readonly id: string }>(
+        "events.get_by_external_id",
         "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1",
         [project.id, normalized.external_id]
       )
@@ -171,6 +172,7 @@ export const createEventForProject = (
 
     const statements = [
       {
+        name: "events.create",
         sql: `INSERT INTO events
           (id, external_id, project_id, source, type, level, title, body, fingerprint,
            payload_json, actions_json, occurred_at, created_at, silence_id)
@@ -193,6 +195,7 @@ export const createEventForProject = (
         ]
       },
       ...subscriptions.map((subscription) => ({
+        name: "push_jobs.create_pending",
         sql: `INSERT INTO push_jobs
           (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
           VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)`,
@@ -200,7 +203,7 @@ export const createEventForProject = (
       }))
     ]
 
-    yield* db.batch(statements)
+    yield* db.batch("events.create_with_push_jobs", statements)
 
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
@@ -210,6 +213,7 @@ export const createEventForProject = (
       if (published) {
         const queuedAt = nowIso()
         yield* db.run(
+          "push_jobs.mark_queued_for_event",
           "UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ? AND state = 'pending'",
           [queuedAt, queuedAt, eventId]
         )
@@ -341,6 +345,7 @@ export const listEvents = (
       }
       queryParams.push(limit + 1)
       rows = yield* db.all<EventRow>(
+        "events.list_grouped",
         `WITH ranked AS (
            SELECT ${eventColumns},
              COUNT(*) OVER (
@@ -382,6 +387,7 @@ export const listEvents = (
         ...(cursorCondition ? [cursorCondition] : [])
       ]
       rows = yield* db.all<EventRow>(
+        "events.list",
         `${eventSelect}
          ${allConditions.length > 0 ? `WHERE ${allConditions.join(" AND ")}` : ""}
          ORDER BY e.created_at DESC, e.id DESC
@@ -406,6 +412,7 @@ export const eventDeliveries = (
     const db = yield* Database
     yield* getEvent(eventId)
     return yield* db.all<DeliveryRow>(
+      "deliveries.list_for_event",
       `SELECT
          d.id,
          d.event_id,
@@ -436,12 +443,14 @@ export const unsilenceEvent = (
 
     const subscriptions = yield* listEnabledSubscriptionRows
     const now = nowIso()
-    yield* db.batch([
+    yield* db.batch("events.unsilence_with_push_jobs", [
       {
+        name: "events.unsilence",
         sql: "UPDATE events SET silence_id = NULL WHERE id = ?",
         params: [eventId]
       },
       ...subscriptions.map((subscription) => ({
+        name: "push_jobs.upsert_pending",
         sql: `INSERT INTO push_jobs
           (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
           VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)
@@ -461,6 +470,7 @@ export const unsilenceEvent = (
       if (published) {
         const queuedAt = nowIso()
         yield* db.run(
+          "push_jobs.mark_queued_for_event",
           "UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?",
           [queuedAt, queuedAt, eventId]
         )

@@ -3,6 +3,7 @@ import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
+import { D1StructuredLoggerLive } from "./database-observability.js"
 import { isApplicationError, type ApplicationError } from "./errors.js"
 import type { EventPage, ListEventsInput } from "./events.js"
 import {
@@ -131,7 +132,7 @@ const errorMessage = (error: unknown): string => {
 export const runMcpEffect = async <A, E extends ApplicationError>(
   effect: Effect.Effect<A, E>
 ): Promise<A> => {
-  const exit = await Effect.runPromiseExit(effect)
+  const exit = await Effect.runPromiseExit(effect.pipe(Effect.provide(D1StructuredLoggerLive)))
   if (Exit.isSuccess(exit)) return exit.value
 
   const error = Cause.squash(exit.cause)

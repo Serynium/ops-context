@@ -7,7 +7,8 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 ## What is implemented
 
 - Schema-first Effect v4 HTTP API using `HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, tagged errors, services, Layers, and reusable managed runtimes.
-- Cloudflare D1 persistence through `@effect/sql-d1`, including atomic event and durable push-job batches.
+- Cloudflare D1 persistence with atomic event and durable push-job batches.
+- Named D1 query telemetry for duration, rows returned, rows read, and rows written, without SQL parameters or payload values. See [D1 query observability](docs/d1-observability.md).
 - Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
 - Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.
 - Drop-in Sentry SDK ingestion through the modern envelope endpoint, with compressed bodies, Sentry grouping fingerprints, and the same event creation and notification pipeline.
@@ -329,7 +330,7 @@ The Worker boundary is a standard Cloudflare module handler. Inside that boundar
 - `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
 - `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled maintenance, MCP, and Sentry envelope executions.
-- `@effect/sql-d1` provides the D1 SQL client, while a narrow `Database` service preserves native D1 batch behavior where atomic batches are required.
+- A narrow `Database` service uses native D1 results to preserve atomic batches and capture per-query row and duration metadata.
 - Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
 

@@ -2,24 +2,26 @@ import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createEventForProject } from "../src/events.js"
+import { D1StructuredLoggerLive } from "../src/database-observability.js"
 import { AppConfig, CredentialCrypto, Database, PushQueue } from "../src/services.js"
 import { getSettings } from "../src/settings.js"
 import { matchSilence, type SilenceField } from "../src/silences.js"
 import type { ProjectRow } from "../src/types.js"
 
-const infrastructure = Layer.merge(Database.layer(env.DB), AppConfig.layer(env))
+const database = Layer.merge(Database.layer(env.DB), D1StructuredLoggerLive)
+const infrastructure = Layer.merge(database, AppConfig.layer(env))
 
 const isQueryLog = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null &&
-  (value as { readonly event?: unknown }).event === "d1_query"
+  (value as { readonly event?: unknown }).event === "d1.query"
 
-interface ConsoleInfoSpy {
+interface ConsoleLogSpy {
   readonly mock: {
     readonly calls: ReadonlyArray<ReadonlyArray<unknown>>
   }
 }
 
-const queryLogs = (spy: ConsoleInfoSpy): ReadonlyArray<Record<string, unknown>> =>
+const queryLogs = (spy: ConsoleLogSpy): ReadonlyArray<Record<string, unknown>> =>
   spy.mock.calls
     .map((call) => call[0])
     .filter(isQueryLog)
@@ -58,7 +60,7 @@ describe("event-ingestion lookups", () => {
       project.updated_at
     ).run()
 
-    const log = vi.spyOn(console, "info").mockImplementation(() => undefined)
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
     await Effect.runPromise(
       createEventForProject(project, {
         title: "Cold-path event",
@@ -68,11 +70,12 @@ describe("event-ingestion lookups", () => {
         Database.layer(env.DB),
         AppConfig.layer(env),
         PushQueue.layer(env.PUSH_QUEUE),
-        CredentialCrypto.layer
+        CredentialCrypto.layer,
+        D1StructuredLoggerLive
       )))
     )
 
-    const names = queryLogs(log).map((entry) => entry.query)
+    const names = queryLogs(log).map((entry) => entry["db.query.name"])
     expect(names.filter((name) => name === "settings.load")).toHaveLength(1)
     expect(names.filter((name) => name === "silences.match")).toHaveLength(1)
   })
@@ -88,7 +91,7 @@ describe("event-ingestion lookups", () => {
       "UPDATE settings SET value = '[\"authorization\",\"secret\"]' WHERE key = 'redact_keys'"
     ).run()
 
-    const log = vi.spyOn(console, "info").mockImplementation(() => undefined)
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
     const settings = await Effect.runPromise(getSettings.pipe(Effect.provide(infrastructure)))
 
     expect(settings).toMatchObject({
@@ -100,13 +103,13 @@ describe("event-ingestion lookups", () => {
     const entries = queryLogs(log)
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
-      event: "d1_query",
-      query: "settings.load",
-      rows_returned: 4
+      event: "d1.query",
+      "db.query.name": "settings.load",
+      "db.rows_returned": 4
     })
-    expect(entries[0]).toHaveProperty("duration_ms")
-    expect(entries[0]).toHaveProperty("rows_read")
-    expect(entries[0]).toHaveProperty("rows_written")
+    expect(entries[0]).toHaveProperty("db.duration_ms")
+    expect(entries[0]).toHaveProperty("db.rows_read")
+    expect(entries[0]).toHaveProperty("db.rows_written")
   })
 
   it("matches every non-empty candidate combination with one query", async () => {
@@ -133,9 +136,9 @@ describe("event-ingestion lookups", () => {
       const candidates = values.map(([field, value], index) =>
         [field, mask & (1 << index) ? value : ""] as const
       )
-      const log = vi.spyOn(console, "info").mockImplementation(() => undefined)
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
       const matched = await Effect.runPromise(
-        matchSilence("prj_lookup", candidates).pipe(Effect.provide(Database.layer(env.DB)))
+        matchSilence("prj_lookup", candidates).pipe(Effect.provide(database))
       )
 
       const expected = mask & 1
@@ -144,7 +147,7 @@ describe("event-ingestion lookups", () => {
           ? "sil_project_title"
           : "sil_project_source"
       expect(matched).toBe(expected)
-      expect(queryLogs(log).filter((entry) => entry.query === "silences.match")).toHaveLength(1)
+      expect(queryLogs(log).filter((entry) => entry["db.query.name"] === "silences.match")).toHaveLength(1)
       log.mockRestore()
     }
   })
@@ -167,23 +170,23 @@ describe("event-ingestion lookups", () => {
         ["fingerprint", ""],
         ["title", "Shared title"],
         ["source", ""]
-      ]).pipe(Effect.provide(Database.layer(env.DB)))
+      ]).pipe(Effect.provide(database))
     )
 
     expect(matched).toBe("sil_project")
   })
 
   it("ignores empty candidates without querying D1", async () => {
-    const log = vi.spyOn(console, "info").mockImplementation(() => undefined)
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
     const matched = await Effect.runPromise(
       matchSilence("prj_empty", [
         ["fingerprint", ""],
         ["title", ""],
         ["source", ""]
-      ]).pipe(Effect.provide(Database.layer(env.DB)))
+      ]).pipe(Effect.provide(database))
     )
 
     expect(matched).toBeNull()
-    expect(queryLogs(log).filter((entry) => entry.query === "silences.match")).toHaveLength(0)
+    expect(queryLogs(log).filter((entry) => entry["db.query.name"] === "silences.match")).toHaveLength(0)
   })
 })

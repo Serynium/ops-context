@@ -23,6 +23,7 @@ import {
   SameOriginLive
 } from "./middleware.js"
 import { SentryEndpoint } from "./sentry.js"
+import { D1StructuredLoggerLive } from "./database-observability.js"
 import { PushDeliveryRepository } from "./push-repository.js"
 import {
   InfrastructureLive,
@@ -91,7 +92,9 @@ export const makeLayers = (env: Env) => {
     Layer.provide(HttpSupportLive)
   )
 
-  const http = Layer.mergeAll(routes, securityHeaders)
+  const http = Layer.mergeAll(routes, securityHeaders).pipe(
+    Layer.provide(D1StructuredLoggerLive)
+  )
 
   const webPush = WebPush.layer.pipe(Layer.provide(infrastructure))
   const pushRepository = PushDeliveryRepository.layer.pipe(Layer.provide(infrastructure))
@@ -101,7 +104,9 @@ export const makeLayers = (env: Env) => {
   const maintenance = Maintenance.layer.pipe(Layer.provide(infrastructure))
   const mcp = McpEndpoint.layer.pipe(Layer.provide(base))
   const sentry = SentryEndpoint.layer.pipe(Layer.provide(base))
-  const programs = Layer.mergeAll(delivery, maintenance, mcp, sentry)
+  const programs = Layer.mergeAll(delivery, maintenance, mcp, sentry).pipe(
+    Layer.provide(D1StructuredLoggerLive)
+  )
 
   return { http, programs } as const
 }

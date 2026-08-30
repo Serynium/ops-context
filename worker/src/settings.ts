@@ -21,6 +21,7 @@ const setValue = (key: string, value: string): Effect.Effect<void, RepositoryUna
   Effect.gen(function*() {
     const db = yield* Database
     yield* db.run(
+      "settings.upsert",
       `INSERT INTO settings (key, value, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -42,7 +43,7 @@ export const getSettings: Effect.Effect<SettingsView, RepositoryUnavailable, Dat
   Effect.gen(function*() {
     const config = yield* AppConfig
     const db = yield* Database
-    const rows = yield* db.namedAll<SettingRow>(
+    const rows = yield* db.all<SettingRow>(
       "settings.load",
       `SELECT key, value FROM settings
        WHERE key IN (${requiredSettingKeys.map(() => "?").join(", ")})`,

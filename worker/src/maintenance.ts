@@ -28,12 +28,13 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, RepositoryUnavaila
     let prunedEvents = 0
     if (settings.retention_days > 0) {
       const cutoff = new Date(Date.now() - settings.retention_days * 86_400_000).toISOString()
-      const pruned = yield* db.run("DELETE FROM events WHERE created_at < ?", [cutoff])
+      const pruned = yield* db.run("events.prune_before", "DELETE FROM events WHERE created_at < ?", [cutoff])
       prunedEvents = changes(pruned)
     }
 
     const staleQueueTime = new Date(Date.now() - 5 * 60_000).toISOString()
     const jobs = yield* db.all<RecoverableJob>(
+      "push_jobs.list_recoverable",
       `SELECT event_id, subscription_id
        FROM push_jobs
        WHERE
@@ -61,7 +62,9 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, RepositoryUnavaila
       yield* queue.sendMany(messages)
       const queuedAt = nowIso()
       yield* db.batch(
+        "push_jobs.mark_recovered_queued",
         messages.map((message) => ({
+          name: "push_jobs.mark_recovered_queued",
           sql: `UPDATE push_jobs
                 SET state = 'queued', queued_at = ?, lease_until = NULL, dead_at = NULL, updated_at = ?
                 WHERE event_id = ? AND subscription_id = ?

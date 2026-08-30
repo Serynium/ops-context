@@ -1,8 +1,11 @@
 import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto"
-import { D1Client } from "@effect/sql-d1"
 import { buildPushHTTPRequest, type PushMessage, type PushSubscription } from "@pushforge/builder"
 import { Context, Crypto, Effect, Layer } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import {
+  d1FailureTelemetry,
+  d1SuccessTelemetry,
+  type DatabaseOperation
+} from "./database-observability.js"
 import {
   cryptographyUnavailable,
   deliveryTemporarilyUnavailable,
@@ -16,115 +19,120 @@ import {
 import type { Env, PushJobMessage } from "./types.js"
 
 export interface SqlStatement {
+  readonly name: string
   readonly sql: string
   readonly params?: ReadonlyArray<unknown>
 }
 
 export interface DatabaseService {
-  readonly namedAll: <A extends object>(
-    name: string,
-    sql: string,
-    params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
   readonly first: <A extends object>(
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<A | null, RepositoryUnavailable>
   readonly all: <A extends object>(
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
   readonly run: (
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<D1Result<unknown>, RepositoryUnavailable>
-  readonly batch: (statements: ReadonlyArray<SqlStatement>) => Effect.Effect<void, RepositoryUnavailable>
+  readonly batch: (
+    name: string,
+    statements: ReadonlyArray<SqlStatement>
+  ) => Effect.Effect<void, RepositoryUnavailable>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
-  static readonly layerNoDeps = Layer.effect(
-    Database,
-    Effect.gen(function*() {
-      const sql = yield* SqlClient.SqlClient
-      const d1 = yield* D1Client.D1Client
+  static readonly layer = (db: D1Database): Layer.Layer<Database> => {
+    const requireD1Success = <A extends D1Result<unknown>>(result: A): A => {
+      if (result.success !== true) throw new Error("D1 operation returned an unsuccessful result")
+      return result
+    }
 
-      const sqlFailure = (operation: string) =>
-        Effect.mapError((cause: unknown) => repositoryUnavailable(`database ${operation} failed`, cause))
-
-      const namedAll: DatabaseService["namedAll"] = <A extends object>(
-        name: string,
-        statement: string,
-        params: ReadonlyArray<unknown> = []
-      ) =>
-        Effect.tryPromise({
-          try: async () => {
-            const startedAt = performance.now()
-            const result = await d1.config.db.prepare(statement).bind(...params).all<A>()
-            if (!result.success) throw new Error(result.error ?? "D1 query failed")
-
-            console.info({
-              event: "d1_query",
-              query: name,
-              duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
-              rows_returned: result.results.length,
-              rows_read: result.meta.rows_read ?? null,
-              rows_written: result.meta.rows_written ?? null
-            })
-
-            return result.results
-          },
-          catch: (cause) => repositoryUnavailable(`database query ${name} failed`, cause)
+    const observe = <A>(
+      name: string,
+      operation: DatabaseOperation,
+      execute: () => Promise<A>,
+      successTelemetry: (result: A) => ReadonlyArray<Record<string, unknown>>
+    ): Effect.Effect<A, RepositoryUnavailable> =>
+      Effect.tryPromise({
+        try: execute,
+        catch: (cause) => repositoryUnavailable(`database ${operation} failed`, cause)
+      }).pipe(
+        Effect.tap((result) =>
+          Effect.forEach(successTelemetry(result), (telemetry) =>
+            Effect.all([
+              Effect.annotateCurrentSpan(telemetry),
+              Effect.logInfo(telemetry)
+            ], { discard: true }), { discard: true })
+        ),
+        Effect.tapError(() => {
+          const telemetry = d1FailureTelemetry(name, operation)
+          return Effect.all([
+            Effect.annotateCurrentSpan(telemetry),
+            Effect.logError(telemetry)
+          ], { discard: true })
+        }),
+        Effect.withSpan("D1.query", {
+          kind: "client",
+          attributes: {
+            "db.system": "cloudflare-d1",
+            "db.query.name": name,
+            "db.operation": operation
+          }
         })
+      )
 
-      const first: DatabaseService["first"] = <A extends object>(
-        statement: string,
-        params: ReadonlyArray<unknown> = []
-      ) =>
-        sql.unsafe<A>(statement, params).pipe(
-          Effect.map((rows) => rows[0] ?? null),
-          sqlFailure("query")
-        )
+    const all: DatabaseService["all"] = <A extends object>(
+      name: string,
+      statement: string,
+      params: ReadonlyArray<unknown> = []
+    ) =>
+      observe(
+        name,
+        "query",
+        async () => requireD1Success(await db.prepare(statement).bind(...params).all<A>()),
+        (result) => [d1SuccessTelemetry(name, "query", result)]
+      ).pipe(Effect.map((result) => (result.results ?? []) as ReadonlyArray<A>))
 
-      const all: DatabaseService["all"] = <A extends object>(
-        statement: string,
-        params: ReadonlyArray<unknown> = []
-      ) =>
-        sql.unsafe<A>(statement, params).pipe(
-          Effect.map((rows) => rows as ReadonlyArray<A>),
-          sqlFailure("query")
-        )
+    const first: DatabaseService["first"] = <A extends object>(
+      name: string,
+      statement: string,
+      params: ReadonlyArray<unknown> = []
+    ) =>
+      all<A>(name, statement, params).pipe(Effect.map((rows) => rows[0] ?? null))
 
-      const run: DatabaseService["run"] = (statement, params = []) =>
-        Effect.tryPromise({
-          try: async () => {
-            const result = await d1.config.db.prepare(statement).bind(...params).run()
-            if (!result.success) throw new Error(result.error ?? "D1 write failed")
-            return result
-          },
-          catch: (cause) => repositoryUnavailable("database write failed", cause)
-        })
+    const run: DatabaseService["run"] = (name, statement, params = []) =>
+      observe(
+        name,
+        "write",
+        async () => requireD1Success(await db.prepare(statement).bind(...params).run()),
+        (result) => [d1SuccessTelemetry(name, "write", result)]
+      )
 
-      const batch: DatabaseService["batch"] = (statements) => {
-        if (statements.length === 0) return Effect.void
-        return d1.batch(
-          statements.map((statement) =>
-            sql.unsafe<Record<string, unknown>>(statement.sql, statement.params)
+    const batch: DatabaseService["batch"] = (name, statements) => {
+      if (statements.length === 0) return Effect.void
+      return observe(
+        name,
+        "batch",
+        async () => {
+          const results = await db.batch(
+            statements.map((statement) => db.prepare(statement.sql).bind(...(statement.params ?? [])))
           )
-        ).pipe(
-          Effect.asVoid,
-          sqlFailure("batch")
+          return results.map(requireD1Success)
+        },
+        (results) => results.map((result, index) =>
+          d1SuccessTelemetry(statements[index]?.name ?? name, "batch", result)
         )
-      }
+      ).pipe(Effect.asVoid)
+    }
 
-      return Database.of({ namedAll, first, all, run, batch })
-    })
-  )
-
-  static readonly layer = (db: D1Database): Layer.Layer<Database> =>
-    this.layerNoDeps.pipe(
-      Layer.provide(D1Client.layer({ db })),
-      Layer.orDie
-    )
+    return Layer.succeed(Database)(Database.of({ first, all, run, batch }))
+  }
 }
 
 export interface ConfigService {

@@ -11,9 +11,6 @@ importers:
       '@effect/platform-browser':
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112(effect@4.0.0-rc.112)
-      '@effect/sql-d1':
-        specifier: 4.0.0-rc.112
-        version: 4.0.0-rc.112(effect@4.0.0-rc.112)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -104,11 +101,6 @@ packages:
 
   '@effect/platform-browser@4.0.0-rc.112':
     resolution: {integrity: sha512-GSlqNDnjILz2EqOFPhVdMEHxlPq6SGb8+KOpNnLfRvVJjXRTMawEO+v1PCuwt2CHAqESbJAa2Nk+qcQvTrv4MQ==}
-    peerDependencies:
-      effect: ^4.0.0-rc.112
-
-  '@effect/sql-d1@4.0.0-rc.112':
-    resolution: {integrity: sha512-Wxdr6aU3pBHqhyBiybzbHmEK7qZ2w4iy0IxBgJHe9BLleYzCxObOaBQI9qq/VZSqEvc0IaOBMpbk2zh3dlPNSQ==}
     peerDependencies:
       effect: ^4.0.0-rc.112
 
@@ -1071,11 +1063,6 @@ snapshots:
 
   '@effect/platform-browser@4.0.0-rc.112(effect@4.0.0-rc.112)':
     dependencies:
-      effect: 4.0.0-rc.112
-
-  '@effect/sql-d1@4.0.0-rc.112(effect@4.0.0-rc.112)':
-    dependencies:
-      '@cloudflare/workers-types': 5.20260827.1
       effect: 4.0.0-rc.112
 
   '@emnapi/runtime@1.11.3':

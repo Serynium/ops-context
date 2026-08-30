@@ -57,14 +57,14 @@ const slugify = (name: string): string => {
 export const listProjects: Effect.Effect<ReadonlyArray<ProjectView>, RepositoryUnavailable, Database> =
   Effect.gen(function*() {
     const db = yield* Database
-    const rows = yield* db.all<ProjectRow>("SELECT * FROM projects ORDER BY name COLLATE NOCASE")
+    const rows = yield* db.all<ProjectRow>("projects.list", "SELECT * FROM projects ORDER BY name COLLATE NOCASE")
     return rows.map(toView)
   })
 
 export const findProjectRow = (id: string): Effect.Effect<ProjectRow, ProjectNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
-    const row = yield* db.first<ProjectRow>("SELECT * FROM projects WHERE id = ?", [id])
+    const row = yield* db.first<ProjectRow>("projects.get_by_id", "SELECT * FROM projects WHERE id = ?", [id])
     if (!row) return yield* Effect.fail(projectNotFound())
     return row
   })
@@ -76,7 +76,7 @@ export const authenticateProject = (apiKey: string): Effect.Effect<ProjectRow, I
   Effect.gen(function*() {
     const db = yield* Database
     const hash = yield* sha256Hex(apiKey)
-    const project = yield* db.first<ProjectRow>("SELECT * FROM projects WHERE api_key_hash = ?", [hash])
+    const project = yield* db.first<ProjectRow>("projects.get_by_api_key_hash", "SELECT * FROM projects WHERE api_key_hash = ?", [hash])
     if (!project) return yield* Effect.fail(invalidProjectCredential())
     return project
   })
@@ -97,10 +97,11 @@ export const createProject = (
     const apiKeyHash = yield* sha256Hex(apiKey)
     const baseSlug = slugify(name)
     let slug = baseSlug
-    const existing = yield* db.first<{ readonly id: string }>("SELECT id FROM projects WHERE slug = ?", [slug])
+    const existing = yield* db.first<{ readonly id: string }>("projects.get_by_slug", "SELECT id FROM projects WHERE slug = ?", [slug])
     if (existing) slug = `${baseSlug.slice(0, 40)}-${id.slice(-6)}`
 
     yield* db.run(
+      "projects.create",
       `INSERT INTO projects
        (id, name, slug, icon, api_key_hash, notify, min_level, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, 1, 'info', ?, ?)`,
@@ -129,6 +130,7 @@ export const updateProject = (
     const minLevel = patch.min_level ?? current.min_level
 
     yield* db.run(
+      "projects.update",
       `UPDATE projects SET name = ?, icon = ?, notify = ?, min_level = ?, updated_at = ? WHERE id = ?`,
       [name, icon, notify, minLevel, nowIso(), id]
     )
@@ -140,12 +142,13 @@ export const deleteProject = (id: string): Effect.Effect<void, ProjectNotFound |
     const db = yield* Database
     yield* findProjectRow(id)
     const count = yield* db.first<{ readonly count: number }>(
+      "projects.count",
       "SELECT COUNT(*) AS count FROM projects"
     )
     if ((count?.count ?? 0) <= 1) {
       return yield* Effect.fail(projectDeletionConflict("the last project cannot be deleted"))
     }
-    yield* db.run("DELETE FROM projects WHERE id = ?", [id])
+    yield* db.run("projects.delete", "DELETE FROM projects WHERE id = ?", [id])
   })
 
 export const rotateProjectKey = (
@@ -156,7 +159,7 @@ export const rotateProjectKey = (
     yield* findProjectRow(id)
     const apiKey = `ops_proj_${yield* randomToken(32)}`
     const hash = yield* sha256Hex(apiKey)
-    yield* db.run("UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, nowIso(), id])
+    yield* db.run("projects.rotate_api_key", "UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, nowIso(), id])
     const project = yield* getProject(id)
     return { ...project, api_key: apiKey }
   })

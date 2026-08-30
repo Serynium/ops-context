@@ -121,7 +121,10 @@ export class Projects extends Context.Service<Projects, {
         list: runDb(listProjects).pipe(Effect.withSpan("Projects.list")),
         get: Effect.fn("Projects.get")((id: string) => runDb(getProject(id))),
         findRow: Effect.fn("Projects.findRow")((id: string) => runDb(findProjectRow(id))),
-        firstRow: database.first<ProjectRow>("SELECT * FROM projects ORDER BY created_at LIMIT 1"),
+        firstRow: database.first<ProjectRow>(
+          "projects.get_first_created",
+          "SELECT * FROM projects ORDER BY created_at LIMIT 1"
+        ),
         authenticate: Effect.fn("Projects.authenticate")((apiKey: string) =>
           run(authenticateProject(apiKey))
         ),
@@ -251,6 +254,7 @@ export class Silences extends Context.Service<Silences, {
         listSummary: Effect.gen(function*() {
           const silences = yield* list
           const count = yield* database.first<{ readonly count: number }>(
+            "events.count_silenced",
             "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL"
           )
           return {
@@ -320,7 +324,7 @@ export class System extends Context.Service<System, {
       const projects = yield* Projects
       const events = yield* Events
 
-      const health = database.first<{ readonly ok: number }>("SELECT 1 AS ok").pipe(
+      const health = database.first<{ readonly ok: number }>("system.health", "SELECT 1 AS ok").pipe(
         Effect.map(() => ({ status: "ok" })),
         Effect.withSpan("System.health")
       )
@@ -337,6 +341,7 @@ export class System extends Context.Service<System, {
           readonly enabled_subscriptions: number
           readonly dead_jobs: number
         }>(
+          "system.status_counts",
           `SELECT
              (SELECT COUNT(*) FROM projects) AS projects,
              (SELECT COUNT(*) FROM events) AS events,
@@ -346,6 +351,7 @@ export class System extends Context.Service<System, {
         )
 
         const lastPush = yield* database.first<DeliveryRow>(
+          "deliveries.get_latest",
           `SELECT d.id, d.event_id, d.subscription_id,
                   COALESCE(s.name, '') AS subscription_name,
                   d.status, d.response_status, d.error, d.attempted_at
