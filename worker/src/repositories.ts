@@ -141,6 +141,7 @@ class D1Executor extends Context.Service<D1Executor, {
   readonly all: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
   readonly first: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<A | null, RepositoryUnavailable>
   readonly run: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
+  readonly runCounted: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
   readonly batch: (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/internal/D1Executor") {
   static readonly layer = Layer.effect(
@@ -179,6 +180,20 @@ class D1Executor extends Context.Service<D1Executor, {
           Effect.mapError(() => repositoryFailure("write"))
         )
 
+      const runCounted = (statement: string, params: Params, queryName: string) =>
+        database.batchResults(queryName, [
+          { name: queryName, sql: statement, params },
+          { name: `${queryName}.count`, sql: "SELECT changes() AS count" }
+        ]).pipe(
+          Effect.flatMap((results) => {
+            const count = (results[1]?.results?.[0] as { readonly count?: unknown } | undefined)?.count
+            return typeof count === "number"
+              ? Effect.succeed(count)
+              : Effect.fail(repositoryFailure("decode"))
+          }),
+          Effect.mapError(() => repositoryFailure("write"))
+        )
+
       const batch = (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => {
         if (statements.length === 0) return Effect.void
         return database.batch(queryName, statements.map(({ sql, params }) => ({
@@ -188,7 +203,7 @@ class D1Executor extends Context.Service<D1Executor, {
         }))).pipe(mapFailure("batch"))
       }
 
-      return D1Executor.of({ all, first, run, batch })
+      return D1Executor.of({ all, first, run, runCounted, batch })
     })
   )
 }
@@ -251,7 +266,7 @@ export interface EventListCriteria {
   readonly level?: Level
   readonly source?: string
   readonly fingerprint?: string
-  readonly search?: string
+  readonly searchQuery?: string
   readonly since?: string
   readonly until?: string
   readonly silenced?: boolean
@@ -316,14 +331,16 @@ export class EventsRepository extends Context.Service<EventsRepository, {
     const list = (criteria: EventListCriteria) => {
       const conditions: Array<string> = []
       const params: Array<unknown> = []
+      const searchJoin = criteria.searchQuery
+        ? "JOIN event_search ON event_search.rowid = e.rowid"
+        : ""
       if (criteria.project) { conditions.push("e.project_id = ?"); params.push(criteria.project) }
       if (criteria.level) { conditions.push("e.level = ?"); params.push(criteria.level) }
       if (criteria.source) { conditions.push("e.source = ?"); params.push(criteria.source) }
       if (criteria.fingerprint) { conditions.push("e.fingerprint = ?"); params.push(criteria.fingerprint) }
-      if (criteria.search) {
-        conditions.push("(e.title LIKE ? OR e.body LIKE ? OR e.source LIKE ? OR e.fingerprint LIKE ? OR e.payload_json LIKE ?)")
-        const pattern = `%${criteria.search}%`
-        params.push(pattern, pattern, pattern, pattern, pattern)
+      if (criteria.searchQuery) {
+        conditions.push("event_search MATCH ?")
+        params.push(criteria.searchQuery)
       }
       if (criteria.silenced === true) conditions.push("e.silence_id IS NOT NULL")
       if (criteria.silenced === false) conditions.push("e.silence_id IS NULL")
@@ -333,7 +350,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         const supportsReadModel = criteria.level === undefined &&
           criteria.source === undefined &&
           criteria.fingerprint === undefined &&
-          criteria.search === undefined &&
+          criteria.searchQuery === undefined &&
           criteria.since === undefined &&
           criteria.until === undefined &&
           criteria.silenced === undefined
@@ -419,14 +436,14 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             MIN(e.created_at) OVER (PARTITION BY e.project_id, e.fingerprint) AS group_first_seen,
             MAX(e.created_at) OVER (PARTITION BY e.project_id, e.fingerprint) AS group_last_seen,
             ROW_NUMBER() OVER (PARTITION BY e.project_id, e.fingerprint ORDER BY e.created_at DESC, e.id DESC) AS group_rank
-          FROM events e JOIN projects p ON p.id = e.project_id
+          FROM events e JOIN projects p ON p.id = e.project_id ${searchJoin}
           WHERE ${fingerprintedConditions.join(" AND ")}
         ), representatives AS (
           SELECT * FROM fingerprinted WHERE group_rank = 1
           UNION ALL
           SELECT ${eventColumns}, 1 AS group_count,
             e.created_at AS group_first_seen, e.created_at AS group_last_seen, 1 AS group_rank
-          FROM events e JOIN projects p ON p.id = e.project_id
+          FROM events e JOIN projects p ON p.id = e.project_id ${searchJoin}
           WHERE ${ungroupedConditions.join(" AND ")}
         ) SELECT * FROM representatives WHERE 1 = 1 ${outerCursor}
           ORDER BY created_at DESC, id DESC LIMIT ?`, queryParams, "events.list_grouped")
@@ -437,7 +454,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         params.push(criteria.cursor.createdAt, criteria.cursor.createdAt, criteria.cursor.id)
       }
       params.push(criteria.limit)
-      return db.all(EventRowSchema, `${eventSelect}
+      return db.all(EventRowSchema, `${eventSelect} ${searchJoin}
         ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
         ORDER BY e.created_at DESC, e.id DESC LIMIT ?`, params, "events.list")
     }
@@ -555,7 +572,11 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             subscription.id, subscription.generation]
         }))
       ], "events.unsilence_with_push_jobs"),
-      pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune"),
+      pruneBefore: (cutoff) => db.runCounted(
+        "DELETE FROM events WHERE created_at < ?",
+        [cutoff],
+        "events.prune"
+      ),
       rebuildGroups: db.batch([
         { sql: "DELETE FROM event_groups" },
         { sql: rebuildEventGroupsSql }

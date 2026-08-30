@@ -302,6 +302,64 @@ const normalizeFilterTime = (value: string, name: "since" | "until"): string => 
   return date.toISOString()
 }
 
+interface SearchPart {
+  readonly value: string
+  readonly prefix: boolean
+}
+
+export const compileEventSearchQuery = (input: string): string => {
+  if (input.length > 240) throw invalidEventQuery("search must be at most 240 characters")
+  if (input.includes("\0")) throw invalidEventQuery("search must not contain NUL characters")
+
+  const parts: Array<SearchPart> = []
+  let offset = 0
+
+  while (offset < input.length) {
+    while (/\s/u.test(input[offset] ?? "")) offset += 1
+    if (offset >= input.length) break
+
+    if (input[offset] === '"') {
+      offset += 1
+      let value = ""
+      let closed = false
+      while (offset < input.length) {
+        const character = input[offset] ?? ""
+        if (character === "\\" && input[offset + 1] === '"') {
+          value += '"'
+          offset += 2
+          continue
+        }
+        if (character === '"') {
+          closed = true
+          offset += 1
+          break
+        }
+        value += character
+        offset += 1
+      }
+      if (!closed) throw invalidEventQuery("search phrase has an unterminated quote")
+      if (value.trim()) parts.push({ value: value.trim(), prefix: false })
+      continue
+    }
+
+    const start = offset
+    while (offset < input.length && !/\s/u.test(input[offset] ?? "")) offset += 1
+    const raw = input.slice(start, offset)
+    const prefix = raw.endsWith("*")
+    const values = (prefix ? raw.slice(0, -1) : raw)
+      .match(/[\p{L}\p{M}\p{N}\p{Co}]+/gu) ?? []
+    values.forEach((value, index) => {
+      parts.push({ value, prefix: prefix && index === values.length - 1 })
+    })
+  }
+
+  if (parts.length === 0) throw invalidEventQuery("search must contain a token")
+  return parts.map(({ value, prefix }) => {
+    const phrase = `"${value.replaceAll('"', '""')}"`
+    return prefix ? `${phrase}*` : phrase
+  }).join(" AND ")
+}
+
 export interface ListEventsInput {
   readonly project?: string | undefined
   readonly level?: string | undefined
@@ -348,14 +406,21 @@ export const listEvents = (
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
-
-    const search = input.search?.trim().slice(0, 240)
+    const searchInput = input.search?.trim()
+    let searchQuery: string | undefined
+    if (searchInput) {
+      try {
+        searchQuery = compileEventSearchQuery(searchInput)
+      } catch (cause) {
+        return yield* Effect.fail(cause as InvalidEventQuery)
+      }
+    }
     const criteria: EventListCriteria = {
       ...(input.project ? { project: input.project } : {}),
       ...(input.level ? { level: input.level as Level } : {}),
       ...(input.source ? { source: input.source } : {}),
       ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
-      ...(search ? { search } : {}),
+      ...(searchQuery ? { searchQuery } : {}),
       ...(since ? { since } : {}),
       ...(until ? { until } : {}),
       ...(input.silenced !== undefined ? { silenced: input.silenced === "true" } : {}),

@@ -42,6 +42,14 @@ describe("MCP Effect schemas", () => {
     expect(result.issues).toBeDefined()
   })
 
+  it("rejects overlong and NUL-containing search queries", async () => {
+    const overlong = await SearchEventsArguments["~standard"].validate({ query: "a".repeat(241) })
+    const nul = await SearchEventsArguments["~standard"].validate({ query: "timeout\0other" })
+
+    expect(overlong.issues).toBeDefined()
+    expect(nul.issues).toBeDefined()
+  })
+
   it("generates the MCP JSON Schema from Effect Schema", () => {
     const jsonSchema = ListEventsArguments["~standard"].jsonSchema.input({
       target: "draft-2020-12"
