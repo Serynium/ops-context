@@ -11,6 +11,11 @@ const Limit = Schema.Int
     description: "Number of results to return, from 1 to 100. Defaults to 25."
   })
 
+const EventSearch = Schema.NonEmptyString
+  .check(Schema.isMaxLength(240, { message: "Search query must be at most 240 characters" }))
+  .check(Schema.isPattern(/^[^\u0000]*$/u, { message: "Search query must not contain NUL characters" }))
+  .annotate({ description: "Case-insensitive token, phrase, or explicit-prefix event search" })
+
 const CommonEventFilterFields = {
   project: Schema.optional(NonEmptyText("Project id or slug")),
   level: Schema.optional(Level),
@@ -27,7 +32,7 @@ const CommonEventFilterFields = {
 export const ListProjectsArgumentsSchema = Schema.Struct({})
 export const ListEventsArgumentsSchema = Schema.Struct(CommonEventFilterFields)
 export const SearchEventsArgumentsSchema = Schema.Struct({
-  query: NonEmptyText("Case-insensitive text to search for"),
+  query: EventSearch,
   ...CommonEventFilterFields
 })
 export const GetEventArgumentsSchema = Schema.Struct({

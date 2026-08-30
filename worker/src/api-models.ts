@@ -163,12 +163,16 @@ export const TestNotificationResult = Schema.Struct({
 
 export const CreateEventInput = CreateEventInputSchema
 
+const EventSearch = Schema.String
+  .check(Schema.isMaxLength(240, { message: "search must be at most 240 characters" }))
+  .check(Schema.isPattern(/^[^\u0000]*$/u, { message: "search must not contain NUL characters" }))
+
 export const EventListQuery = Schema.Struct({
   project: Schema.optional(Schema.String),
   level: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
   fingerprint: Schema.optional(Schema.String),
-  search: Schema.optional(Schema.String),
+  search: Schema.optional(EventSearch),
   since: Schema.optional(Schema.String),
   until: Schema.optional(Schema.String),
   grouped: Schema.optional(Schema.String),

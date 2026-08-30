@@ -20,7 +20,8 @@ FTS5 operators.
   `café` through diacritic folding.
 
 Quotes inside an unquoted token are escaped before FTS5 sees the query. An
-unterminated phrase is rejected as an invalid event query.
+unterminated phrase, a query longer than 240 characters, or a NUL character is
+rejected as an invalid event query before D1 executes it.
 
 The trigram tokenizer was evaluated to preserve the old arbitrary-substring
 behavior. On the 50,000-event local fixture it used 18,862,080 bytes versus

@@ -255,6 +255,9 @@ interface SearchPart {
 }
 
 export const compileEventSearchQuery = (input: string): string => {
+  if (input.length > 240) throw invalidEventQuery("search must be at most 240 characters")
+  if (input.includes("\0")) throw invalidEventQuery("search must not contain NUL characters")
+
   const parts: Array<SearchPart> = []
   let offset = 0
 
@@ -342,7 +345,7 @@ export const listEvents = (
       params.push(input.fingerprint)
     }
     if (input.search) {
-      const search = input.search.trim().slice(0, 240)
+      const search = input.search.trim()
       if (search) {
         let query: string
         try {

@@ -120,6 +120,14 @@ describe("FTS5 event search", () => {
       _tag: "InvalidEventQuery",
       message: "search phrase has an unterminated quote"
     })
+    await expect(run(listEvents({ search: `"${"a".repeat(240)}"` }))).rejects.toMatchObject({
+      _tag: "InvalidEventQuery",
+      message: "search must be at most 240 characters"
+    })
+    await expect(run(listEvents({ search: "timeout\0other" }))).rejects.toMatchObject({
+      _tag: "InvalidEventQuery",
+      message: "search must not contain NUL characters"
+    })
   })
 
   it("indexes normalized redacted payload values without indexing raw JSON syntax", async () => {
