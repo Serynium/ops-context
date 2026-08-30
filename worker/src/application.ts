@@ -444,7 +444,7 @@ export class System extends Context.Service<System, {
         const currentSettings = yield* settings.get
 
         return {
-          version: "0.2.0",
+          version: "0.3.0",
           server: "ops-context/effect-v4/cloudflare-workers",
           database: "Cloudflare D1 / Effect SQL",
           base_url: config.baseUrl ?? origin,
