@@ -79,4 +79,180 @@ const parseRfc3339 = (value: string): string | undefined => {
     local.getUTCFullYear() !== year ||
     local.getUTCMonth() !== month - 1 ||
     local.getUTCDate() !== day ||
-    local.getUTCCI½ÕÉÌ ¤€„ôô¡½ÕÈñð(€€€±½…°¹•ÑUQ5¥¹ÕÑ•Ì ¤€„ôôµ¥¹ÕÑ”ñð(€€€±½…°¹•ÑUQM•½¹‘Ì ¤€„ôôÍ•½¹ñð(€€€±½…°¹•ÑUQ5¥±±¥Í•½¹‘Ì ¤€„ôôµ¥±±¥Í•½¹(€€¤É•ÑÕÉ¸Õ¹‘•™¥¹•((€±•Ð½™™Í•Ñ5¥¹ÕÑ•Ì€ô€À(€¥˜€¡é½¹”€„ôô€‰hˆ¤ì(€€€½¹ÍÐÍ¥¸€ôé½¹”¹ÍÑ…ÉÑÍ]¥Ñ  ˆ¬ˆ¤€ü€Ä€è€´Ä(€€€½¹ÍÐ½™™Í•Ñ!½ÕÈ€ô9Õµ‰•È¡é½¹”¹Í±¥” Ä°€Ì¤¤(€€€½¹ÍÐ½™™Í•Ñ5¥¹ÕÑ”€ô9Õµ‰•È¡é½¹”¹Í±¥” Ð°€Ø¤¤(€€€¥˜€¡½™™Í•Ñ!½ÕÈ€ø€ÈÌñð½™™Í•Ñ5¥¹ÕÑ”€ø€Ôä¤É•ÑÕÉ¸Õ¹‘•™¥¹•(€€€½™™Í•Ñ5¥¹ÕÑ•Ì€ôÍ¥¸€¨€¡½™™Í•Ñ!½ÕÈ€¨€ØÀ€¬½™™Í•Ñ5¥¹ÕÑ”¤(€ô((€½¹ÍÐ¥¹ÍÑ…¹Ð€ô¹•Ü…Ñ”¡±½…±5¥±±¥Ì€´½™™Í•Ñ5¥¹ÕÑ•Ì€¨€ØÁ|ÀÀÀ¤(€É•ÑÕÉ¸9Õµ‰•È¹¥Í9…8¡¥¹ÍÑ…¹Ð¹•ÑQ¥µ” ¤¤€üÕ¹‘•™¥¹•€è¥¹ÍÑ…¹Ð¹Ñ½%M=MÑÉ¥¹œ ¤)ô()•áÁ½ÉÐ½¹ÍÐÙ•¹Ñ1•Ù•°€ôM¡•µ„¹1¥Ñ•É…±Ì¡l‰¥¹™¼ˆ°€‰ÍÕ•ÍÌˆ°€‰Ý…É¹¥¹œˆ°€‰•ÉÉ½Èˆ°€‰É¥Ñ¥…°‰t¤(€€¹…¹¹½Ñ…Ñ”¡ì‘•ÍÉ¥ÁÑ¥½¸è€‰=Á•É…Ñ¥½¹…°Í•Ù•É¥Ñä±•Ù•°ˆô¤()•áÁ½ÉÐ½¹ÍÐÙ•¹ÑQ¥Ñ±”€ôÑ•áÐ ‰Ù•¹ÐÑ¥Ñ±”ˆ°€Ä°Y9Q}Q%Q1}5a}19Q ¤)•áÁ½ÉÐ½¹ÍÐÙ•¹Ñ	½‘ä€ôÑ•áÐ ‰Ù•¹Ð‰½‘äˆ°€À°Y9Q}	=e}5a}19Q ¤)•áÁ½ÉÐ½¹ÍÐÙ•¹ÑM½ÕÉ”€ôÑ•áÐ ‰Ù•¹ÐÍ½ÕÉ”ˆ°€À°Y9Q}M=UI}5a}19Q ¤)•áÁ½ÉÐ½¹ÍÐÙ•¹ÑQåÁ”€ôÑ•áÐ ‰Ù•¹ÐÑåÁ”ˆ°€À°Y9Q}QeA}5a}19Q ¤)•áÁ½ÉÐ½¹ÍÐÙ•¹Ñ¥¹•ÉÁÉ¥¹Ð€ôÑ•áÐ ‰Ù•¹Ð™¥¹•ÉÁÉ¥¹Ðˆ°€À°Y9Q}%9IAI%9Q}5a}19Q ¤)•áÁ½ÉÐ½¹ÍÐÙ•¹ÑáÑ•É¹…±%€ôÑ•áÐ ‰Ù•¹Ð•áÑ•É¹…°¥ˆ°€Ä°Y9Q}aQI91}%}5a}19Q ¤()•áÁ½ÉÐ½¹ÍÐÙ•¹Ñ=ÕÉÉ•‘Ð€ôÑ•áÐ ‰Ù•¹Ð½ÕÉÉ•¹”Ñ¥µ•ÍÑ…µÀˆ°€Ä°€ØÐ¤(€€¹¡•¬¡M¡•µ„¹µ…­•¥±Ñ•ÈñÍÑÉ¥¹œø ¡Ù…±Õ”¤€ôø(€€€Á…ÉÍ•I™ŒÌÌÌä¡Ù…±Õ”¤€„ôôÕ¹‘•™¥¹•ñð€‰½ÕÉÉ•‘}…ÐµÕÍÐ‰”„Ù…±¥I€ÌÌÌäÑ¥µ•ÍÑ…µÀˆ(€€¤¤(€€¹Á¥Á”¡M¡•µ„¹‘•½‘”ñI•ÑÕÉ¹QåÁ”ñÑåÁ•½˜Ñ•áÐøø¡ì(€€€‘•½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôøÁ…ÉÍ•I™ŒÌÌÌä¡Ù…±Õ”¤€üüÙ…±Õ”¤°(€€€•¹½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôøÙ…±Õ”¤(€ô¤¤(€€¹…¹¹½Ñ…Ñ”¡ì‘•ÍÉ¥ÁÑ¥½¸è€‰I€ÌÌÌäÑ¥µ•ÍÑ…µÀ¹½Éµ…±¥é•Ñ¼UQˆô¤((¼¼=ÕÑÁÕÐÍÑ…åÌÁ•Éµ¥ÍÍ¥Ù”Í¼É½ÝÌ…•ÁÑ•‰ä½±‘•ÈÉ•±•…Í•Ì€¡™½È•á…µÁ±”(¼¼µ…¥±Ñ¼è…¹™ÑÀè…Ñ¥½¹Ì¤É•µ…¥¸É•…‘…‰±”…™Ñ•È¥¹ÁÕÐÙ…±¥‘…Ñ¥½¸Ñ¥¡Ñ•¹Ì¸)•áÁ½ÉÐ½¹ÍÐÙ•¹ÑÑ¥½¹=ÕÑÁÕÑM¡•µ„€ôM¡•µ„¹MÑÉÕÐ¡ì(€±…‰•°èM¡•µ„¹MÑÉ¥¹œ°(€ÕÉ°èM¡•µ„¹MÑÉ¥¹œ)ô¤()•áÁ½ÉÐ½¹ÍÐÙ•¹ÑÑ¥½¹%¹ÁÕÑM¡•µ„€ôM¡•µ„¹MÑÉÕÐ¡ì(€±…‰•°èÑ•áÐ ‰Ñ¥½¸±…‰•°ˆ°€Ä°Y9Q}Q%=9}1	1}5a}19Q ¤°(€ÕÉ°èÑ•áÐ ‰Ñ¥½¸UI0ˆ°€Ä°Y9Q}Q%=9}UI1}5a}19Q ¤(€€€€¹¡•¬¡M¡•µ„¹µ…­•¥±Ñ•ÈñÍÑÉ¥¹œø ¡Ù…±Õ”¤€ôøì(€€€€€ÑÉäì(€€€€€€€½¹ÍÐÕÉ°€ô¹•ÜUI0¡Ù…±Õ”¤(€€€€€€€É•ÑÕÉ¸ÕÉ°¹ÁÉ½Ñ½½°€ôôô€‰¡ÑÑÀèˆñðÕÉ°¹ÁÉ½Ñ½½°€ôôô€‰¡ÑÑÁÌèˆ(€€€€€€€€€€üÑÉÕ”(€€€€€€€€€€è€‰…Ñ¥½¸UI0µÕÍÐÕÍ”¡ÑÑÀ½È¡ÑÑÁÌˆ(€€€€€ô…Ñ ì(€€€€€€€É•ÑÕÉ¸€‰…Ñ¥½¸UI0µÕÍÐ‰”…‰Í½±ÕÑ”ˆ(€€€€€ô(€€€ô¤¤(€€€€¹Á¥Á”¡M¡•µ„¹‘•½‘”ñI•ÑÕÉ¹QåÁ”ñÑåÁ•½˜Ñ•áÐøø¡ì(€€€€€‘•½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôø¹•ÜUI0¡Ù…±Õ”¤¹¡É•˜¤°(€€€€€•¹½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôøÙ…±Õ”¤(€€€ô¤¤)ô¤()½¹ÍÐ¥¹ÍÁ•Ñ)Í½¹Y…±Õ”€ô€ (€Ù…±Õ”èÕ¹­¹½Ý¸°(€Á…Ñ èI•…‘½¹±åÉÉ…äñAÉ½Á•ÉÑå-•äø°(€‘•ÁÑ è¹Õµ‰•È°(€¥ÍÍÕ•ÌèÉÉ…äñM¡•µ„¹¥±Ñ•É%ÍÍÕ”ø°(€Í••¸è]•…­M•Ðñ½‰©•Ðø(¤èÙ½¥€ôøì(€¥˜€¡‘•ÁÑ €øY9Q}Q}5a}AQ ¤ì(€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è‘…Ñ„µÕÍÐ¹½Ð•á••€‘íY9Q}Q}5a}AQ!ô¹•ÍÑ•±•Ù•±Í€ô¤(€€€É•ÑÕÉ¸(€ô(€¥˜€¡Ù…±Õ”€ôôô¹Õ±°ñðÑåÁ•½˜Ù…±Õ”€ôôô€‰ÍÑÉ¥¹œˆñðÑåÁ•½˜Ù…±Õ”€ôôô€‰‰½½±•…¸ˆ¤É•ÑÕÉ¸(€¥˜€¡ÑåÁ•½˜Ù…±Õ”€ôôô€‰¹Õµ‰•Èˆ¤ì(€€€¥˜€ …9Õµ‰•È¹¥Í¥¹¥Ñ”¡Ù…±Õ”¤¤¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è€‰‘…Ñ„¹Õµ‰•ÉÌµÕÍÐ‰”™¥¹¥Ñ”ˆô¤(€€€É•ÑÕÉ¸(€ô(€¥˜€¡ÑåÁ•½˜Ù…±Õ”€„ôô€‰½‰©•Ðˆ¤ì(€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è€‰‘…Ñ„Ù…±Õ•ÌµÕÍÐ‰”Ù…±¥)M=8Ù…±Õ•Ìˆô¤(€€€É•ÑÕÉ¸(€ô(€¥˜€¡Í••¸¹¡…Ì¡Ù…±Õ”¤¤ì(€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è€‰‘…Ñ„µÕÍÐ¹½Ð½¹Ñ…¥¸¥ÉÕ±…ÈÉ•™•É•¹•Ìˆô¤(€€€É•ÑÕÉ¸(€ô(€Í••¸¹…‘¡Ù…±Õ”¤((€¥˜€¡ÉÉ…ä¹¥ÍÉÉ…ä¡Ù…±Õ”¤¤ì(€€€¥˜€¡Ù…±Õ”¹±•¹Ñ €øY9Q}Q}5a}IIe}%Q5L¤ì(€€€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è‘…Ñ„…ÉÉ…åÌµ…ä½¹Ñ…¥¸…Ðµ½ÍÐ€‘íY9Q}Q}5a}IIe}%Q5Mô¥Ñ•µÍ€ô¤(€€€€€É•ÑÕÉ¸(€€€ô(€€€Ù…±Õ”¹™½É…  ¡•¹ÑÉä°¥¹‘•à¤€ôø(€€€€€¥¹ÍÁ•Ñ)Í½¹Y…±Õ”¡•¹ÑÉä°l¸¸¹Á…Ñ °¥¹‘•át°‘•ÁÑ €¬€Ä°¥ÍÍÕ•Ì°Í••¸¤(€€€€¤(€€€É•ÑÕÉ¸(€ô((€½¹ÍÐÁÉ½Ñ½ÑåÁ”€ô=‰©•Ð¹•ÑAÉ½Ñ½ÑåÁ•=˜¡Ù…±Õ”¤(€¥˜€¡ÁÉ½Ñ½ÑåÁ”€„ôô=‰©•Ð¹ÁÉ½Ñ½ÑåÁ”€˜˜ÁÉ½Ñ½ÑåÁ”€„ôô¹Õ±°¤ì(€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è€‰‘…Ñ„Ù…±Õ•ÌµÕÍÐ‰”Á±…¥¸)M=8½‰©•ÑÌˆô¤(€€€É•ÑÕÉ¸(€ô((€½¹ÍÐ•¹ÑÉ¥•Ì€ô=‰©•Ð¹•¹ÑÉ¥•Ì¡Ù…±Õ”¤(€¥˜€¡•¹ÑÉ¥•Ì¹±•¹Ñ €øY9Q}Q}5a}=	)Q}-eL¤ì(€€€¥ÍÍÕ•Ì¹ÁÕÍ ¡ìÁ…Ñ °¥ÍÍÕ”è‘…Ñ„½‰©•ÑÌµ…ä½¹Ñ…¥¸…Ðµ½ÍÐ€‘íY9Q}Q}5a}=	)Q}-eMôÁÉ½Á•ÉÑ¥•Í€ô¤(€€€É•ÑÕÉ¸(€ô(€™½È€¡½¹ÍÐm­•ä°•¹ÑÉåt½˜•¹ÑÉ¥•Ì¤ì(€€€¥¹ÍÁ•Ñ)Í½¹Y…±Õ”¡•¹ÑÉä°l¸¸¹Á…Ñ °­•åt°‘•ÁÑ €¬€Ä°¥ÍÍÕ•Ì°Í••¸¤(€ô)ô()•áÁ½ÉÐ½¹ÍÐÙ•¹Ñ…Ñ„€ôM¡•µ„¹I•½É¡M¡•µ„¹MÑÉ¥¹œ°M¡•µ„¹U¹­¹½Ý¸¤(€€¹¡•¬¡M¡•µ„¹µ…­•¥±Ñ•ÈñI•½ÉñÍÑÉ¥¹œ°Õ¹­¹½Ý¸øø ¡Ù…±Õ”¤€ôøì(€€€½¹ÍÐ¥ÍÍÕ•ÌèÉÉ…äñM¡•µ„¹¥±Ñ•É%ÍÍÕ”ø€ômt(€€€¥¹ÍÁ•Ñ)Í½¹Y…±Õ”¡Ù…±Õ”°mt°€À°¥ÍÍÕ•Ì°¹•Ü]•…­M•Ð ¤¤(€€€É•ÑÕÉ¸¥ÍÍÕ•Ì(€ô¤¤(€€¹…¹¹½Ñ…Ñ”¡ì(€€€‘•ÍÉ¥ÁÑ¥½¸è)M=8½‰©•Ð±¥µ¥Ñ•Ñ¼€‘íY9Q}Q}5a}AQ!ô±•Ù•±Ì°€‘íY9Q}Q}5a}=	)Q}-eMôÁÉ½Á•ÉÑ¥•ÌÁ•È½‰©•Ð°…¹€‘íY9Q}Q}5a}IIe}%Q5Mô¥Ñ•µÌÁ•È…ÉÉ…å€(€ô¤()½¹ÍÐÉ•…Ñ•Ù•¹Ñ¥•±‘Ì€ôM¡•µ„¹MÑÉÕÐ¡ì(€•áÑ•É¹…±}¥èM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹ÑáÑ•É¹…±%¤°(€Í½ÕÉ”èM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹ÑM½ÕÉ”¤°(€ÑåÁ”èM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹ÑQåÁ”¤°(€±•Ù•°èM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹Ñ1•Ù•°¤°(€Ñ¥Ñ±”èÙ•¹ÑQ¥Ñ±”°(€‰½‘äèM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹Ñ	½‘ä¤°(€™¥¹•ÉÁÉ¥¹ÐèM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹Ñ¥¹•ÉÁÉ¥¹Ð¤°(€½ÕÉÉ•‘}…ÐèM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹Ñ=ÕÉÉ•‘Ð¤°(€‘…Ñ„èM¡•µ„¹½ÁÑ¥½¹…°¡Ù•¹Ñ…Ñ„¤°(€…Ñ¥½¹ÌèM¡•µ„¹½ÁÑ¥½¹…° (€€€M¡•µ„¹ÉÉ…ä¡Ù•¹ÑÑ¥½¹%¹ÁÕÑM¡•µ„¤(€€€€€€¹¡•¬¡M¡•µ„¹¥Í5…á1•¹Ñ ¡Y9Q}Q%=9M}5a}%Q5L°ì(€€€€€€€µ•ÍÍ…”è…Ñ¥½¹Ìµ…ä½¹Ñ…¥¸…Ðµ½ÍÐ€‘íY9Q}Q%=9M}5a}%Q5Mô¥Ñ•µÍ€(€€€€€ô¤¤(€€¤)ô¤()•áÁ½ÉÐ½¹ÍÐÉ•…Ñ•Ù•¹Ñ%¹ÁÕÑM¡•µ„€ôÉ•…Ñ•Ù•¹Ñ¥•±‘Ì(€€¹Á¥Á”¡M¡•µ„¹‘•½‘”ñÑåÁ•½˜É•…Ñ•Ù•¹Ñ¥•±‘Ìø¡ì(€€€‘•½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôøì(€€€€€¥˜€¡Ù…±Õ”¹•áÑ•É¹…±}¥€„ôô€ˆˆ¤É•ÑÕÉ¸Ù…±Õ”(€€€€€½¹ÍÐì•áÑ•É¹…±}¥è}•áÑ•É¹…±%°€¸¸¹Ý¥Ñ¡½ÕÑáÑ•É¹…±%ô€ôÙ…±Õ”(€€€€€É•ÑÕÉ¸Ý¥Ñ¡½ÕÑáÑ•É¹…±%(€€€ô¤°(€€€•¹½‘”èM¡•µ…•ÑÑ•È¹ÑÉ…¹Í™½É´ ¡Ù…±Õ”¤€ôøÙ…±Õ”¤(€ô¤¤(€€¹¡•¬¡M¡•µ„¹µ…­•¥±Ñ•È ¡Ù…±Õ”¤€ôø(€€€•¹½‘•‘	åÑ•Ì¡Ù…±Õ”¤€ðôY9Q}Ae1=}5a}	eQLñð(€€€€€•¹½‘••Ù•¹ÐÁ…å±½…µÕÍÐ¹½Ð•á••€‘íY9Q}Ae1=}5a}	eQMô‰åÑ•Í€(€€¤¤(€€¹…¹¹½Ñ…Ñ”¡ì(€€€‘•ÍÉ¥ÁÑ¥½¸è=Á•É…Ñ¥½¹…°•Ù•¹ÐÁ…å±½…¸Q¡”•¹½‘•)M=8Á…å±½…µÕÍÐ¹½Ð•á••€‘íY9Q}Ae1=}5a}	eQMô‰åÑ•Ì¹€(€ô¤()•áÁ½ÉÐÑåÁ”É•…Ñ•Ù•¹Ñ%¹ÁÕÐ€ôÑåÁ•½˜É•…Ñ•Ù•¹Ñ%¹ÁÕÑM¡•µ„¹QåÁ”)•áÁ½ÉÐÑåÁ”Ù•¹ÑÑ¥½¹%¹ÁÕÐ€ôÑåÁ•½˜Ù•¹ÑÑ¥½¹%¹ÁÕÑM¡•µ„¹QåÁ”()½¹ÍÐ™½Éµ…Ñ%ÍÍÕ”€ôM¡•µ…%ÍÍÕ”¹µ…­•½Éµ…ÑÑ•ÉMÑ…¹‘…É‘M¡•µ…XÄ ¤()•áÁ½ÉÐ½¹ÍÐ™½Éµ…ÑÙ•¹ÑY…±¥‘…Ñ¥½¹%ÍÍÕ•Ì€ô€¡¥ÍÍÕ”èM¡•µ…%ÍÍÕ”¹%ÍÍÕ”¤èI•…‘½¹±åÉÉ…äñY…±¥‘…Ñ¥½¹%ÍÍÕ”ø€ôø(€™½Éµ…Ñ%ÍÍÕ”¡¥ÍÍÕ”¤¹¥ÍÍÕ•Ì¹µ…À ¡•¹ÑÉä¤€ôø€¡ì(€€€Á…Ñ è€¡•¹ÑÉä¹Á…Ñ €üümt¤¹µ…À ¡Í•µ•¹Ð¤€ôø(€€€€€ÑåÁ•½˜Í•µ•¹Ð€ôôô€‰¹Õµ‰•Èˆ€üÍ•µ•¹Ð€èMÑÉ¥¹œ¡Í•µ•¹Ð¤(€€€€¤°(€€€µ•ÍÍ…”è•¹ÑÉä¹µ•ÍÍ…”(€ô¤¤()•áÁ½ÉÐ½¹ÍÐ‘•½‘•É•…Ñ•Ù•¹Ñ%¹ÁÕÐ€ô€ (€¥¹ÁÕÐèÕ¹­¹½Ý¸(¤è™™•Ð¹™™•ÐñÉ•…Ñ•Ù•¹Ñ%¹ÁÕÐ°ÁÁÉÉ½Èø€ôø(€M¡•µ„¹‘•½‘•U¹­¹½Ý¹™™•Ð¡É•…Ñ•Ù•¹Ñ%¹ÁÕÑM¡•µ„¤¡¥¹ÁÕÐ¤¹Á¥Á” (€€€™™•Ð¹µ…ÁÉÉ½È ¡•ÉÉ½È¤€ôø…ÁÁÉÉ½È (€€€€€€ÐÈÈ°(€€€€€€‰Ù…±¥‘…Ñ¥½¹}•ÉÉ½Èˆ°(€€€€€€‰•Ù•¹ÐÁ…å±½…™…¥±•Ù…±¥‘…Ñ¥½¸ˆ°(€€€€€™½Éµ…ÑÙ•¹ÑY…±¥‘…Ñ¥½¹%ÍÍÕ•Ì¡•ÉÉ½È¹¥ÍÍÕ”¤(€€€€¤¤(€€¤()•áÁ½ÉÐ½¹ÍÐ•¹½‘•‘Ù•¹ÑA…å±½…‘	åÑ•Ì€ô•¹½‘•‘	åÑ•Ì(
+    local.getUTCHours() !== hour ||
+    local.getUTCMinutes() !== minute ||
+    local.getUTCSeconds() !== second ||
+    local.getUTCMilliseconds() !== millisecond
+  ) return undefined
+
+  let offsetMinutes = 0
+  if (zone !== "Z") {
+    const sign = zone.startsWith("+") ? 1 : -1
+    const offsetHour = Number(zone.slice(1, 3))
+    const offsetMinute = Number(zone.slice(4, 6))
+    if (offsetHour > 23 || offsetMinute > 59) return undefined
+    offsetMinutes = sign * (offsetHour * 60 + offsetMinute)
+  }
+
+  const instant = new Date(localMillis - offsetMinutes * 60_000)
+  return Number.isNaN(instant.getTime()) ? undefined : instant.toISOString()
+}
+
+export const EventLevel = Schema.Literals(["info", "success", "warning", "error", "critical"])
+  .annotate({ description: "Operational severity level" })
+
+export const EventTitle = text("Event title", 1, EVENT_TITLE_MAX_LENGTH)
+export const EventBody = text("Event body", 0, EVENT_BODY_MAX_LENGTH)
+export const EventSource = text("Event source", 0, EVENT_SOURCE_MAX_LENGTH)
+export const EventType = text("Event type", 0, EVENT_TYPE_MAX_LENGTH)
+export const EventFingerprint = text("Event fingerprint", 0, EVENT_FINGERPRINT_MAX_LENGTH)
+export const EventExternalId = text("Event external id", 1, EVENT_EXTERNAL_ID_MAX_LENGTH)
+
+export const EventOccurredAt = text("Event occurrence timestamp", 1, 64)
+  .check(Schema.makeFilter<string>((value) =>
+    parseRfc3339(value) !== undefined || "occurred_at must be a valid RFC 3339 timestamp"
+  ))
+  .pipe(Schema.decode<ReturnType<typeof text>>({
+    decode: SchemaGetter.transform((value) => parseRfc3339(value) ?? value),
+    encode: SchemaGetter.transform((value) => value)
+  }))
+  .annotate({ description: "RFC 3339 timestamp normalized to UTC" })
+
+// Output stays permissive so rows accepted by older releases (for example
+// mailto: and ftp: actions) remain readable after input validation tightens.
+export const EventActionOutputSchema = Schema.Struct({
+  label: Schema.String,
+  url: Schema.String
+})
+
+export const EventActionInputSchema = Schema.Struct({
+  label: text("Action label", 1, EVENT_ACTION_LABEL_MAX_LENGTH),
+  url: text("Action URL", 1, EVENT_ACTION_URL_MAX_LENGTH)
+    .check(Schema.makeFilter<string>((value) => {
+      try {
+        const url = new URL(value)
+        return url.protocol === "http:" || url.protocol === "https:"
+          ? true
+          : "action URL must use http or https"
+      } catch {
+        return "action URL must be absolute"
+      }
+    }))
+    .pipe(Schema.decode<ReturnType<typeof text>>({
+      decode: SchemaGetter.transform((value) => new URL(value).href),
+      encode: SchemaGetter.transform((value) => value)
+    }))
+})
+
+const inspectJsonValue = (
+  value: unknown,
+  path: ReadonlyArray<PropertyKey>,
+  depth: number,
+  issues: Array<Schema.FilterIssue>,
+  seen: WeakSet<object>
+): void => {
+  if (depth > EVENT_DATA_MAX_DEPTH) {
+    issues.push({ path, issue: `data must not exceed ${EVENT_DATA_MAX_DEPTH} nested levels` })
+    return
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) issues.push({ path, issue: "data numbers must be finite" })
+    return
+  }
+  if (typeof value !== "object") {
+    issues.push({ path, issue: "data values must be valid JSON values" })
+    return
+  }
+  if (seen.has(value)) {
+    issues.push({ path, issue: "data must not contain circular references" })
+    return
+  }
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    if (value.length > EVENT_DATA_MAX_ARRAY_ITEMS) {
+      issues.push({ path, issue: `data arrays may contain at most ${EVENT_DATA_MAX_ARRAY_ITEMS} items` })
+      return
+    }
+    value.forEach((entry, index) =>
+      inspectJsonValue(entry, [...path, index], depth + 1, issues, seen)
+    )
+    return
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    issues.push({ path, issue: "data values must be plain JSON objects" })
+    return
+  }
+
+  const entries = Object.entries(value)
+  if (entries.length > EVENT_DATA_MAX_OBJECT_KEYS) {
+    issues.push({ path, issue: `data objects may contain at most ${EVENT_DATA_MAX_OBJECT_KEYS} properties` })
+    return
+  }
+  for (const [key, entry] of entries) {
+    inspectJsonValue(entry, [...path, key], depth + 1, issues, seen)
+  }
+}
+
+export const EventData = Schema.Record(Schema.String, Schema.Unknown)
+  .check(Schema.makeFilter<Record<string, unknown>>((value) => {
+    const issues: Array<Schema.FilterIssue> = []
+    inspectJsonValue(value, [], 0, issues, new WeakSet())
+    return issues
+  }))
+  .annotate({
+    description: `JSON object limited to ${EVENT_DATA_MAX_DEPTH} levels, ${EVENT_DATA_MAX_OBJECT_KEYS} properties per object, and ${EVENT_DATA_MAX_ARRAY_ITEMS} items per array`
+  })
+
+export const CreateEventInputSchema = Schema.Struct({
+  external_id: Schema.optional(EventExternalId),
+  source: Schema.optional(EventSource),
+  type: Schema.optional(EventType),
+  level: Schema.optional(EventLevel),
+  title: EventTitle,
+  body: Schema.optional(EventBody),
+  fingerprint: Schema.optional(EventFingerprint),
+  occurred_at: Schema.optional(EventOccurredAt),
+  data: Schema.optional(EventData),
+  actions: Schema.optional(
+    Schema.Array(EventActionInputSchema)
+      .check(Schema.isMaxLength(EVENT_ACTIONS_MAX_ITEMS, {
+        message: `actions may contain at most ${EVENT_ACTIONS_MAX_ITEMS} items`
+      }))
+  )
+}).check(Schema.makeFilter((value) =>
+  encodedBytes(value) <= EVENT_PAYLOAD_MAX_BYTES ||
+    `encoded event payload must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes`
+)).annotate({
+  description: `Operational event payload. The encoded JSON payload must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes.`
+})
+
+export type CreateEventInput = typeof CreateEventInputSchema.Type
+export type EventActionInput = typeof EventActionInputSchema.Type
+
+const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1()
+
+export const formatEventValidationIssues = (issue: SchemaIssue.Issue): ReadonlyArray<ValidationIssue> =>
+  formatIssue(issue).issues.map((entry) => ({
+    path: (entry.path ?? []).map((segment) =>
+      typeof segment === "number" ? segment : String(segment)
+    ),
+    message: entry.message
+  }))
+
+export const decodeCreateEventInput = (
+  input: unknown
+): Effect.Effect<CreateEventInput, AppError> =>
+  Schema.decodeUnknownEffect(CreateEventInputSchema)(input).pipe(
+    Effect.mapError((error) => appError(
+      422,
+      "validation_error",
+      "event payload failed validation",
+      formatEventValidationIssues(error.issue)
+    ))
+  )
+
+export const encodedEventPayloadBytes = encodedBytes
