@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers"
 import { Effect } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { listEvents } from "../src/events.js"
-import { Database } from "../src/services.js"
+import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
 
 interface QueryPlanRow {
   readonly detail: string
@@ -119,8 +119,8 @@ describe("measured D1 index tuning", () => {
 
   it("preserves project ordering, cursor pagination, filters, and ungrouped events", async () => {
     await seedEvents()
-    const run = <A>(effect: Effect.Effect<A, unknown, Database>) =>
-      Effect.runPromise(effect.pipe(Effect.provide(Database.layer(env.DB))))
+    const run = <A>(effect: Effect.Effect<A, unknown, EventsRepository>) =>
+      Effect.runPromise(effect.pipe(Effect.provide(D1RepositoriesLive(env.DB))))
 
     const first = await run(listEvents({ project: "prj_a", limit: "2" }))
     expect(first.events.map((event) => event.id)).toEqual(["evt_06", "evt_05"])

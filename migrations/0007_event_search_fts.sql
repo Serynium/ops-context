@@ -24,7 +24,7 @@ SELECT
   e.fingerprint,
   COALESCE((
     SELECT group_concat(CAST(value.atom AS TEXT), ' ')
-    FROM json_tree(e.payload_json) AS value
+    FROM json_tree(CASE WHEN json_valid(e.payload_json) THEN e.payload_json ELSE '{}' END) AS value
     WHERE value.atom IS NOT NULL
       AND value.type IN ('text', 'integer', 'real', 'true', 'false')
       AND CAST(value.atom AS TEXT) <> '[REDACTED]'
@@ -43,7 +43,7 @@ BEGIN
     new.fingerprint,
     COALESCE((
       SELECT group_concat(CAST(value.atom AS TEXT), ' ')
-      FROM json_tree(new.payload_json) AS value
+      FROM json_tree(CASE WHEN json_valid(new.payload_json) THEN new.payload_json ELSE '{}' END) AS value
       WHERE value.atom IS NOT NULL
         AND value.type IN ('text', 'integer', 'real', 'true', 'false')
         AND CAST(value.atom AS TEXT) <> '[REDACTED]'
@@ -64,7 +64,7 @@ BEGIN
     new.fingerprint,
     COALESCE((
       SELECT group_concat(CAST(value.atom AS TEXT), ' ')
-      FROM json_tree(new.payload_json) AS value
+      FROM json_tree(CASE WHEN json_valid(new.payload_json) THEN new.payload_json ELSE '{}' END) AS value
       WHERE value.atom IS NOT NULL
         AND value.type IN ('text', 'integer', 'real', 'true', 'false')
         AND CAST(value.atom AS TEXT) <> '[REDACTED]'

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers"
 import { Effect } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { compileEventSearchQuery, listEvents } from "../src/events.js"
-import { Database } from "../src/services.js"
+import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
 
 const reset = async (): Promise<void> => {
   await env.DB.batch([
@@ -52,8 +52,8 @@ const insertEvent = async (fixture: EventFixture): Promise<void> => {
   ).run()
 }
 
-const run = <A>(effect: Effect.Effect<A, unknown, Database>): Promise<A> =>
-  Effect.runPromise(effect.pipe(Effect.provide(Database.layer(env.DB))))
+const run = <A>(effect: Effect.Effect<A, unknown, EventsRepository>): Promise<A> =>
+  Effect.runPromise(effect.pipe(Effect.provide(D1RepositoriesLive(env.DB))))
 
 const searchIds = async (
   search: string,
@@ -75,7 +75,7 @@ const rebuild = async (): Promise<void> => {
        e.fingerprint,
        COALESCE((
          SELECT group_concat(CAST(value.atom AS TEXT), ' ')
-         FROM json_tree(e.payload_json) AS value
+         FROM json_tree(CASE WHEN json_valid(e.payload_json) THEN e.payload_json ELSE '{}' END) AS value
          WHERE value.atom IS NOT NULL
            AND value.type IN ('text', 'integer', 'real', 'true', 'false')
            AND CAST(value.atom AS TEXT) <> '[REDACTED]'
