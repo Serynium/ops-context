@@ -1,20 +1,15 @@
 import { Schema } from "effect"
 import { Level } from "./api-models.js"
 
-const described = <A, I, R>(
-  schema: Schema.Schema<A, I, R>,
-  description: string
-): Schema.Schema<A, I, R> => schema.annotate({ description })
-
 const NonEmptyText = (description: string) =>
-  described(Schema.NonEmptyString, description)
+  Schema.NonEmptyString.annotate({ description })
 
-const Limit = described(
-  Schema.Int
-    .check(Schema.isGreaterThanOrEqualTo(1))
-    .check(Schema.isLessThanOrEqualTo(100)),
-  "Number of results to return, from 1 to 100. Defaults to 25."
-)
+const Limit = Schema.Int
+  .check(Schema.isGreaterThanOrEqualTo(1))
+  .check(Schema.isLessThanOrEqualTo(100))
+  .annotate({
+    description: "Number of results to return, from 1 to 100. Defaults to 25."
+  })
 
 const CommonEventFilterFields = {
   project: Schema.optional(NonEmptyText("Project id or slug")),
