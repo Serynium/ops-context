@@ -35,7 +35,7 @@ The Worker accepts identity, gzip, and deflate request bodies. It limits the req
 
 ## Event mapping
 
-Each Sentry `event` envelope item becomes a normal Ops Context event and enters the same creation pipeline as `POST /api/v1/events`. This preserves recursive redaction, silence matching, fingerprint grouping, D1 persistence, durable push jobs, notification thresholds, and Queue delivery.
+Each Sentry `event` envelope item becomes a normal Ops Context event and enters the same Queue-first pipeline as `POST /api/v1/events`. Envelope acceptance therefore precedes eventual D1 visibility; the `IngestEvent` consumer preserves recursive redaction, silence matching, fingerprint grouping, durable push jobs, notification thresholds, and Queue delivery.
 
 | Sentry field | Ops Context field |
 |---|---|

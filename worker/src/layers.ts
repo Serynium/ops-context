@@ -8,9 +8,10 @@ import { AdministratorIdentity } from "./access.js"
 import { ApiHandlers, OpsApi } from "./api.js"
 import {
   Events,
-  Maintenance,
+  EventIngestion,
   Projects,
   PushDelivery,
+  Retention,
   Settings,
   Silences,
   Subscriptions,
@@ -101,10 +102,11 @@ export const makeLayers = (env: Env) => {
   const delivery = PushDelivery.layer.pipe(
     Layer.provide(Layer.mergeAll(infrastructure, webPush, pushRepository))
   )
-  const maintenance = Maintenance.layer.pipe(Layer.provide(infrastructure))
+  const ingestion = EventIngestion.layer.pipe(Layer.provide(infrastructure))
+  const retention = Retention.layer.pipe(Layer.provide(infrastructure))
   const mcp = McpEndpoint.layer.pipe(Layer.provide(base))
   const sentry = SentryEndpoint.layer.pipe(Layer.provide(base))
-  const programs = Layer.mergeAll(delivery, maintenance, mcp, sentry).pipe(
+  const programs = Layer.mergeAll(delivery, ingestion, retention, mcp, sentry).pipe(
     Layer.provide(D1StructuredLoggerLive)
   )
 

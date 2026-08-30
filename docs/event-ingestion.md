@@ -4,11 +4,25 @@
 
 Ops Context rejects invalid values; it does not silently truncate identifiers, fingerprints, timestamps, or message text.
 
+## Queue-first acceptance
+
+The endpoint authenticates the project, validates and normalizes the payload, assigns the event id and acceptance timestamp, and sends a versioned `IngestEvent` command. The command contains the complete normalized event and project id, but never the project key, an Access assertion, or another reusable credential.
+
+Only a successful Queue send produces `202 Accepted`:
+
+```json
+{ "id": "evt_...", "accepted_at": "2026-08-31T12:00:00.000Z", "status": "queued" }
+```
+
+The event can be briefly absent from D1 after this response. Consumers should tolerate that eventual-consistency window. A Queue send failure returns `503 Service Unavailable` and does not claim acceptance.
+
+Queue delivery is at least once. The consumer uses the event id, the unique `(project_id, external_id)` index, and the `(event_id, subscription_id)` job key to make duplicate ingestion harmless. With `external_id`, producer retries deterministically receive the same event id. The consumer publishes and marks each delivery job separately; if it crashes mid-fan-out, Queue redelivery publishes only remaining pending jobs. A crash after a downstream send but before its D1 update may produce a duplicate `DeliverPush` command, which the conditional delivery claim safely ignores.
+
 ## D1 lookup budget
 
-After project authentication and validation, a cold event-ingestion path loads the four required application settings with one `settings.load` query. Silence evaluation removes empty fingerprint, title, and source candidates, then matches every remaining candidate with one ordered `silences.match` query. Candidate order remains fingerprint, title, then source; a project-specific rule wins when both project and global rules match the same candidate.
+The `IngestEvent` consumer loads the four required application settings with one `settings.load` query. Silence evaluation removes empty fingerprint, title, and source candidates, then matches every remaining candidate with one ordered `silences.match` query. Candidate order remains fingerprint, title, then source; a project-specific rule wins when both project and global rules match the same candidate.
 
-No isolate-local settings cache is used. Every ingestion request reads D1, so setting updates are authoritative immediately and isolate eviction has no cache-consistency effect.
+No isolate-local settings cache is used. Each accepted command reads D1, so setting updates are authoritative immediately and isolate eviction has no cache-consistency effect.
 
 Both consolidated queries emit a structured `d1_query` log containing the stable `query` name, `duration_ms`, `rows_returned`, and D1's `rows_read` and `rows_written` metadata. SQL parameters and event content are not logged. These fields support before/after comparison in Cloudflare Logs; the cold-path lookup budget changes from four settings queries plus up to three silence queries to one settings query plus at most one silence query.
 

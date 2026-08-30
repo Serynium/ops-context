@@ -7,7 +7,7 @@ import {
 import { describe, expect, it } from "vitest"
 import type { ExecutionContextWithAccess } from "../src/access.js"
 import worker from "../src/index.js"
-import type { PushJobMessage } from "../src/types.js"
+import { QUEUE_COMMAND_VERSION, type QueueCommand } from "../src/queue-contract.js"
 
 const executionContext = (): ExecutionContext => createExecutionContext()
 
@@ -155,12 +155,14 @@ describe("Cloudflare Worker runtime", () => {
   })
 
   it("acknowledges a Queue message whose durable job no longer exists", async () => {
-    const batch = createMessageBatch<PushJobMessage>("ops-context-push", [
+    const batch = createMessageBatch<QueueCommand>("ops-context-push", [
       {
         id: "missing-job",
         timestamp: new Date(0),
         attempts: 0,
         body: {
+          _tag: "DeliverPush",
+          version: QUEUE_COMMAND_VERSION,
           eventId: "evt_missing",
           subscriptionId: "sub_missing"
         }
@@ -203,11 +205,16 @@ describe("Cloudflare Worker runtime", () => {
          VALUES ('evt_queue_sent', 'sub_queue_sent', 'sent', 1, ?, ?, NULL, NULL, '', ?)`
       ).bind(now, now, now)
     ])
-    const batch = createMessageBatch<PushJobMessage>("ops-context-push", [{
+    const batch = createMessageBatch<QueueCommand>("ops-context-push", [{
       id: "duplicate-sent-job",
       timestamp: new Date(0),
       attempts: 1,
-      body: { eventId: "evt_queue_sent", subscriptionId: "sub_queue_sent" }
+      body: {
+        _tag: "DeliverPush",
+        version: QUEUE_COMMAND_VERSION,
+        eventId: "evt_queue_sent",
+        subscriptionId: "sub_queue_sent"
+      }
     }])
     const context = createExecutionContext()
 
@@ -249,11 +256,16 @@ describe("Cloudflare Worker runtime", () => {
          VALUES ('evt_queue_retry', 'sub_queue_retry', 'retrying', 1, ?, ?, NULL, NULL, 'retry', ?)`
       ).bind(availableAt, now, now)
     ])
-    const batch = createMessageBatch<PushJobMessage>("ops-context-push", [{
+    const batch = createMessageBatch<QueueCommand>("ops-context-push", [{
       id: "deferred-job",
       timestamp: new Date(0),
       attempts: 1,
-      body: { eventId: "evt_queue_retry", subscriptionId: "sub_queue_retry" }
+      body: {
+        _tag: "DeliverPush",
+        version: QUEUE_COMMAND_VERSION,
+        eventId: "evt_queue_retry",
+        subscriptionId: "sub_queue_retry"
+      }
     }])
     const context = createExecutionContext()
 

@@ -17,7 +17,7 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 - Scoped PWA credentials for background push-subscription renewal (#16).
 - Tagged domain/application errors and repository ports with runtime D1 row decoding (#9, #10).
 - D1 query cost instrumentation and hot-path consolidation (#11, #12, #17).
-- Queue-first event acceptance and removal of the remaining repair Cron (#14).
+- Queue-first event acceptance and removal of the remaining repair Cron (#14) are implemented.
 - Complete race, retry, crash-recovery, and idempotency integration tests (#8).
 
 ## Measurement-driven work

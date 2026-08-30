@@ -3,14 +3,16 @@ import { decodeCreateEventInput, type CreateEventInput } from "./event-contract.
 import {
   eventNotFound,
   invalidEventQuery,
+  projectNotFound,
   type CryptographyUnavailable,
   type EventNotFound,
   type InvalidEvent,
   type InvalidEventQuery,
+  type ProjectNotFound,
   type QueueUnavailable,
   type RepositoryUnavailable
 } from "./errors.js"
-import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
+import { base64UrlDecode, base64UrlEncode, sha256Hex } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
 import { redactValue } from "./redact.js"
@@ -18,14 +20,14 @@ import { AppConfig, CredentialCrypto, Database, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
+import { QUEUE_COMMAND_VERSION, type IngestEventCommand } from "./queue-contract.js"
 import type {
   DeliveryRow,
   EventAction,
   EventRow,
   EventView,
   Level,
-  ProjectRow,
-  PushJobMessage
+  ProjectRow
 } from "./types.js"
 
 const encoder = new TextEncoder()
@@ -40,7 +42,7 @@ export interface EventPage {
 }
 
 export type EventError = InvalidEvent | InvalidEventQuery | EventNotFound |
-  RepositoryUnavailable | QueueUnavailable | CryptographyUnavailable
+  ProjectNotFound | RepositoryUnavailable | QueueUnavailable | CryptographyUnavailable
 
 const parsePayload = (value: string): Record<string, unknown> => {
   try {
@@ -131,97 +133,152 @@ export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | R
     return toEventView(row)
   })
 
-export const createEventForProject = (
+export interface EventAccepted {
+  readonly id: string
+  readonly accepted_at: string
+  readonly status: "queued"
+}
+
+const idempotentEventId = (
+  projectId: string,
+  externalId: string
+): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  sha256Hex(`${projectId}\u0000${externalId}`).pipe(
+    Effect.map((digest) => `evt_${digest.slice(0, 32)}`)
+  )
+
+export const enqueueEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventView, EventError, Database | PushQueue | AppConfig | CredentialCrypto> =>
+): Effect.Effect<EventAccepted, EventError, Database | PushQueue | CredentialCrypto> =>
+  Effect.gen(function*() {
+    const queue = yield* PushQueue
+    const normalized = yield* decodeCreateEventInput(input)
+    const acceptedAt = nowIso()
+    let eventId: string
+    if (normalized.external_id) {
+      const db = yield* Database
+      const existing = yield* db.first<{ readonly id: string }>(
+        "SELECT id FROM events WHERE project_id = ? AND external_id = ?",
+        [project.id, normalized.external_id]
+      )
+      eventId = existing?.id ?? (yield* idempotentEventId(project.id, normalized.external_id))
+    } else {
+      eventId = yield* newId("evt")
+    }
+    yield* queue.send({
+      _tag: "IngestEvent",
+      version: QUEUE_COMMAND_VERSION,
+      eventId,
+      projectId: project.id,
+      acceptedAt,
+      event: normalized
+    })
+    return { id: eventId, accepted_at: acceptedAt, status: "queued" }
+  })
+
+interface PendingPushJob {
+  readonly subscription_id: string
+}
+
+export const processIngestEvent = (
+  command: IngestEventCommand
+): Effect.Effect<void, EventError, Database | PushQueue | AppConfig> =>
   Effect.gen(function*() {
     const db = yield* Database
     const queue = yield* PushQueue
-    const createdAt = nowIso()
-    const normalized = yield* decodeCreateEventInput(input)
+    const project = yield* db.first<ProjectRow>(
+      "projects.get_for_ingestion",
+      "SELECT * FROM projects WHERE id = ?",
+      [command.projectId]
+    )
+    if (!project) return yield* Effect.fail(projectNotFound("ingest project no longer exists"))
 
-    if (normalized.external_id) {
-      const existing = yield* db.first<{ readonly id: string }>(
-        "events.get_by_external_id",
-        "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1",
-        [project.id, normalized.external_id]
-      )
-      if (existing) return yield* getEvent(existing.id)
-    }
-
+    const normalized = command.event
     const settings = yield* getSettings
     const payload = redactValue(normalized.data ?? {}, settings.redact_keys)
     const data = typeof payload === "object" && payload !== null && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
       : {}
-
     const silenceId = yield* matchSilence(project.id, [
       ["fingerprint", normalized.fingerprint ?? ""],
       ["title", normalized.title],
       ["source", normalized.source ?? ""]
     ])
 
-    const eventId = yield* newId("evt")
-    const shouldNotify = project.notify === 1 && atLeast(normalized.level ?? "info", project.min_level) && !silenceId
-    const subscriptions = shouldNotify ? yield* listEnabledSubscriptionRows : []
-    const messages: ReadonlyArray<PushJobMessage> = subscriptions.map((subscription) => ({
-      eventId,
-      subscriptionId: subscription.id
-    }))
+    yield* db.run(
+      "events.insert_ingested",
+      `INSERT OR IGNORE INTO events
+       (id, external_id, project_id, source, type, level, title, body, fingerprint,
+        payload_json, actions_json, occurred_at, created_at, silence_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        command.eventId,
+        normalized.external_id ?? null,
+        project.id,
+        normalized.source ?? "",
+        normalized.type ?? "",
+        normalized.level ?? "info",
+        normalized.title,
+        normalized.body ?? "",
+        normalized.fingerprint ?? "",
+        JSON.stringify(data),
+        JSON.stringify(normalized.actions ?? []),
+        normalized.occurred_at ?? command.acceptedAt,
+        command.acceptedAt,
+        silenceId
+      ]
+    )
 
-    const statements = [
-      {
-        name: "events.create",
-        sql: `INSERT INTO events
-          (id, external_id, project_id, source, type, level, title, body, fingerprint,
-           payload_json, actions_json, occurred_at, created_at, silence_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        params: [
-          eventId,
-          normalized.external_id ?? null,
-          project.id,
-          normalized.source ?? "",
-          normalized.type ?? "",
-          normalized.level ?? "info",
-          normalized.title,
-          normalized.body ?? "",
-          normalized.fingerprint ?? "",
-          JSON.stringify(data),
-          JSON.stringify(normalized.actions ?? []),
-          normalized.occurred_at ?? createdAt,
-          createdAt,
-          silenceId
-        ]
-      },
-      ...subscriptions.map((subscription) => ({
-        name: "push_jobs.create_pending",
-        sql: `INSERT INTO push_jobs
-          (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-          VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)`,
-        params: [eventId, subscription.id, createdAt, createdAt]
-      }))
-    ]
-
-    yield* db.batch("events.create_with_push_jobs", statements)
-
-    if (messages.length > 0) {
-      const published = yield* queue.sendMany(messages).pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false))
-      )
-      if (published) {
-        const queuedAt = nowIso()
-        yield* db.run(
-          "push_jobs.mark_queued_for_event",
-          "UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ? AND state = 'pending'",
-          [queuedAt, queuedAt, eventId]
+    const stored = normalized.external_id
+      ? yield* db.first<{ readonly id: string }>(
+          "events.get_ingested_by_external_id",
+          "SELECT id FROM events WHERE project_id = ? AND external_id = ?",
+          [project.id, normalized.external_id]
         )
-      }
+      : yield* db.first<{ readonly id: string }>(
+          "events.get_ingested_by_id",
+          "SELECT id FROM events WHERE id = ?",
+          [command.eventId]
+        )
+    if (!stored) return yield* Effect.fail(eventNotFound("ingested event could not be loaded"))
+
+    const shouldNotify = project.notify === 1 &&
+      atLeast(normalized.level ?? "info", project.min_level) && !silenceId
+    if (shouldNotify) {
+      const subscriptions = yield* listEnabledSubscriptionRows
+      yield* db.batch("push_jobs.create_pending_for_ingested_event", subscriptions.map((subscription) => ({
+        name: "push_jobs.create_pending",
+        sql: `INSERT OR IGNORE INTO push_jobs
+          (event_id, subscription_id, state, attempts, available_at, queued_at,
+           lease_until, dead_at, last_error, updated_at)
+          VALUES (?, ?, 'pending', 0, ?, NULL, NULL, NULL, '', ?)`,
+        params: [stored.id, subscription.id, command.acceptedAt, command.acceptedAt]
+      })))
     }
 
-    return yield* getEvent(eventId)
-  })
+    const pending = yield* db.all<PendingPushJob>(
+      "push_jobs.list_pending_for_ingested_event",
+      "SELECT subscription_id FROM push_jobs WHERE event_id = ? AND state = 'pending' ORDER BY subscription_id",
+      [stored.id]
+    )
+    for (const job of pending) {
+      const message = {
+        _tag: "DeliverPush" as const,
+        version: QUEUE_COMMAND_VERSION,
+        eventId: stored.id,
+        subscriptionId: job.subscription_id
+      }
+      yield* queue.send(message)
+      const queuedAt = nowIso()
+      yield* db.run(
+        "push_jobs.mark_queued",
+        `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ?
+         WHERE event_id = ? AND subscription_id = ? AND state = 'pending'`,
+        [queuedAt, queuedAt, stored.id, job.subscription_id]
+      )
+    }
+  }).pipe(Effect.withSpan("EventIngestion.process", { attributes: { eventId: command.eventId } }))
 
 interface Cursor {
   readonly createdAt: string
@@ -469,7 +526,12 @@ export const unsilenceEvent = (
       }))
     ])
 
-    const messages = subscriptions.map((subscription) => ({ eventId, subscriptionId: subscription.id }))
+    const messages = subscriptions.map((subscription) => ({
+      _tag: "DeliverPush" as const,
+      version: QUEUE_COMMAND_VERSION,
+      eventId,
+      subscriptionId: subscription.id
+    }))
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
         Effect.map(() => true),

@@ -4,8 +4,9 @@ import type {
   RepositoryUnavailable
 } from "./errors.js"
 import { nowIso } from "./ids.js"
+import type { DeliverPushCommand } from "./queue-contract.js"
 import { CredentialCrypto, Database, type SqlStatement } from "./services.js"
-import type { EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
+import type { EventRow, PushSubscriptionRow } from "./types.js"
 
 export type PushJobState =
   | "pending"
@@ -29,7 +30,7 @@ export interface PushJobRow {
 }
 
 export interface ClaimedPushJob {
-  readonly message: PushJobMessage
+  readonly message: DeliverPushCommand
   readonly leaseUntil: string
 }
 
@@ -161,7 +162,7 @@ const mapContext = (row: PushContextRow): PushContext => ({
 
 export interface PushDeliveryRepositoryService {
   readonly claim: (
-    message: PushJobMessage
+    message: DeliverPushCommand
   ) => Effect.Effect<ClaimedPushJob | DeferredPushJob | null, RepositoryUnavailable>
   readonly loadClaimedContext: (
     claim: ClaimedPushJob
@@ -183,7 +184,7 @@ export interface PushDeliveryRepositoryService {
     disableSubscription: boolean
   ) => Effect.Effect<void, RepositoryUnavailable | CryptographyUnavailable>
   readonly finalizeDeadLetter: (
-    message: PushJobMessage,
+    message: DeliverPushCommand,
     reason: string
   ) => Effect.Effect<boolean, RepositoryUnavailable | CryptographyUnavailable>
 }

@@ -12,14 +12,11 @@ export interface EventGroup {
   readonly last_seen: string
 }
 
-export interface PushJobMessage {
-  readonly eventId: string
-  readonly subscriptionId: string
-}
+export type { DeliverPushCommand, IngestEventCommand, QueueCommand } from "./queue-contract.js"
 
 export interface Env {
   readonly DB: D1Database
-  readonly PUSH_QUEUE: Queue<PushJobMessage>
+  readonly PUSH_QUEUE: Queue<import("./queue-contract.js").QueueCommand>
   readonly ASSETS: Fetcher
 
   readonly OPS_BASE_URL?: string

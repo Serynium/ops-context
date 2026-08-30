@@ -16,7 +16,8 @@ import {
   type QueueUnavailable,
   type RepositoryUnavailable
 } from "./errors.js"
-import type { Env, PushJobMessage } from "./types.js"
+import type { QueueCommand } from "./queue-contract.js"
+import type { Env } from "./types.js"
 
 export interface SqlStatement {
   readonly name: string
@@ -194,17 +195,17 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
 }
 
 export interface QueueService {
-  readonly send: (message: PushJobMessage) => Effect.Effect<void, QueueUnavailable>
-  readonly sendMany: (messages: ReadonlyArray<PushJobMessage>) => Effect.Effect<void, QueueUnavailable>
+  readonly send: (message: QueueCommand) => Effect.Effect<void, QueueUnavailable>
+  readonly sendMany: (messages: ReadonlyArray<QueueCommand>) => Effect.Effect<void, QueueUnavailable>
 }
 
 export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-context/PushQueue") {
-  static readonly layer = (queue: Queue<PushJobMessage>): Layer.Layer<PushQueue> =>
+  static readonly layer = (queue: Queue<QueueCommand>): Layer.Layer<PushQueue> =>
     Layer.succeed(PushQueue)({
       send: (message) =>
         Effect.tryPromise({
           try: () => queue.send(message),
-          catch: (cause) => queueUnavailable("failed to enqueue push delivery", cause)
+          catch: (cause) => queueUnavailable("Queue did not accept the command; retry the request", cause)
         }),
       sendMany: (messages) =>
         Effect.tryPromise({
@@ -214,7 +215,7 @@ export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-c
               await queue.sendBatch(batch.map((body) => ({ body })))
             }
           },
-          catch: (cause) => queueUnavailable("failed to enqueue push deliveries", cause)
+          catch: (cause) => queueUnavailable("Queue did not accept the commands; retry the request", cause)
         })
     })
 }
