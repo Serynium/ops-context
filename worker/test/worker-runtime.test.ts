@@ -40,6 +40,7 @@ describe("Cloudflare Worker runtime", () => {
       {
         id: "missing-job",
         timestamp: new Date(0),
+        attempts: 0,
         body: {
           eventId: "evt_missing",
           subscriptionId: "sub_missing"
