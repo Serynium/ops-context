@@ -6,6 +6,8 @@ interface D1Metadata {
   readonly duration?: unknown
   readonly rows_read?: unknown
   readonly rows_written?: unknown
+  readonly served_by_region?: unknown
+  readonly served_by_primary?: unknown
   readonly timings?: {
     readonly sql_duration_ms?: unknown
   }
@@ -23,18 +25,24 @@ export const d1SuccessTelemetry = (
   queryName: string,
   operation: DatabaseOperation,
   result: D1ResultLike
-) => ({
-  event: "d1.query",
-  "db.system": "cloudflare-d1",
-  "db.query.name": queryName,
-  "db.operation": operation,
-  "db.rows_returned": result.results?.length ?? 0,
-  "db.rows_read": nonNegativeNumber(result.meta?.rows_read),
-  "db.rows_written": nonNegativeNumber(result.meta?.rows_written),
-  "db.duration_ms": nonNegativeNumber(
-    result.meta?.timings?.sql_duration_ms ?? result.meta?.duration
-  )
-})
+) => {
+  const region = result.meta?.served_by_region
+  const primary = result.meta?.served_by_primary
+  return {
+    event: "d1.query",
+    "db.system": "cloudflare-d1",
+    "db.query.name": queryName,
+    "db.operation": operation,
+    "db.rows_returned": result.results?.length ?? 0,
+    "db.rows_read": nonNegativeNumber(result.meta?.rows_read),
+    "db.rows_written": nonNegativeNumber(result.meta?.rows_written),
+    "db.duration_ms": nonNegativeNumber(
+      result.meta?.timings?.sql_duration_ms ?? result.meta?.duration
+    ),
+    ...(typeof region === "string" ? { "db.served_by_region": region } : {}),
+    ...(typeof primary === "boolean" ? { "db.served_by_primary": primary } : {})
+  }
+}
 
 export const d1FailureTelemetry = (
   queryName: string,

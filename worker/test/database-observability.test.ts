@@ -53,6 +53,19 @@ describe("D1 query observability", () => {
     })
   })
 
+  it("records remote serving location without inventing local values", () => {
+    expect(d1SuccessTelemetry("events.list", "query", result([], {
+      served_by_region: "EEUR",
+      served_by_primary: false
+    }))).toMatchObject({
+      "db.served_by_region": "EEUR",
+      "db.served_by_primary": false
+    })
+    expect(d1SuccessTelemetry("events.list", "query", result([]))).not.toHaveProperty(
+      "db.served_by_region"
+    )
+  })
+
   it("logs metadata without SQL text or bound values", async () => {
     const messages: Array<unknown> = []
     const logger = Logger.make(({ message }) => {

@@ -8,8 +8,15 @@ Every application D1 operation has a stable, low-cardinality query name at the d
 - `db.rows_read`
 - `db.rows_written`
 - `db.duration_ms`
+- `db.served_by_region` and `db.served_by_primary` for remote requests
 
 Failed operations emit `d1.query.failed` with the query name, operation, and a safe `error.class`. SQL text, bound parameters, driver error messages, and event payloads are deliberately excluded from both records.
+
+Remote D1 results also expose `served_by_region` and `served_by_primary`. These fields
+are required for a future read-replication canary, but are unavailable in local
+Workerd tests. Correlate them with the caller region and endpoint wall time; SQL
+duration alone excludes the cross-region trip that replication is intended to avoid.
+See [ADR 0003](decisions/0003-retain-primary-d1-reads.md).
 
 ## Operational views
 
