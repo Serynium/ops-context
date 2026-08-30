@@ -14,7 +14,15 @@ import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
 import { redactValue } from "./redact.js"
-import { AppConfig, CredentialCrypto, Database, PushQueue } from "./services.js"
+import {
+  DeliveriesRepository,
+  EventsRepository,
+  SettingsRepository,
+  SilencesRepository,
+  SubscriptionsRepository,
+  type EventListCriteria
+} from "./repositories.js"
+import { AppConfig, CredentialCrypto, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
@@ -97,36 +105,10 @@ export const toEventView = (row: EventRow): EventView => ({
     : {})
 })
 
-const eventColumns = `
-    e.id,
-    e.external_id,
-    e.project_id,
-    p.name AS project_name,
-    p.slug AS project_slug,
-    p.icon AS project_icon,
-    e.source,
-    e.type,
-    e.level,
-    e.title,
-    e.body,
-    e.fingerprint,
-    e.payload_json,
-    e.actions_json,
-    e.occurred_at,
-    e.created_at,
-    e.silence_id
-`
-
-const eventSelect = `
-  SELECT ${eventColumns}
-  FROM events e
-  JOIN projects p ON p.id = e.project_id
-`
-
-export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | RepositoryUnavailable, Database> =>
+export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | RepositoryUnavailable, EventsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
-    const row = yield* db.first<EventRow>("events.get_by_id", `${eventSelect} WHERE e.id = ?`, [id])
+    const events = yield* EventsRepository
+    const row = yield* events.findById(id)
     if (!row) return yield* Effect.fail(eventNotFound())
     return toEventView(row)
   })
@@ -134,20 +116,16 @@ export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | R
 export const createEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventView, EventError, Database | PushQueue | AppConfig | CredentialCrypto> =>
+): Effect.Effect<EventView, EventError, EventsRepository | DeliveriesRepository | PushQueue | AppConfig | CredentialCrypto | SettingsRepository | SilencesRepository | SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const events = yield* EventsRepository
     const queue = yield* PushQueue
     const createdAt = nowIso()
     const normalized = yield* decodeCreateEventInput(input)
 
     if (normalized.external_id) {
-      const existing = yield* db.first<{ readonly id: string }>(
-        "events.get_by_external_id",
-        "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1",
-        [project.id, normalized.external_id]
-      )
-      if (existing) return yield* getEvent(existing.id)
+      const existing = yield* events.findIdByExternalId(project.id, normalized.external_id)
+      if (existing) return yield* getEvent(existing)
     }
 
     const settings = yield* getSettings
@@ -170,40 +148,22 @@ export const createEventForProject = (
       subscriptionId: subscription.id
     }))
 
-    const statements = [
-      {
-        name: "events.create",
-        sql: `INSERT INTO events
-          (id, external_id, project_id, source, type, level, title, body, fingerprint,
-           payload_json, actions_json, occurred_at, created_at, silence_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        params: [
-          eventId,
-          normalized.external_id ?? null,
-          project.id,
-          normalized.source ?? "",
-          normalized.type ?? "",
-          normalized.level ?? "info",
-          normalized.title,
-          normalized.body ?? "",
-          normalized.fingerprint ?? "",
-          JSON.stringify(data),
-          JSON.stringify(normalized.actions ?? []),
-          normalized.occurred_at ?? createdAt,
-          createdAt,
-          silenceId
-        ]
-      },
-      ...subscriptions.map((subscription) => ({
-        name: "push_jobs.create_pending",
-        sql: `INSERT INTO push_jobs
-          (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-          VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)`,
-        params: [eventId, subscription.id, createdAt, createdAt]
-      }))
-    ]
-
-    yield* db.batch("events.create_with_push_jobs", statements)
+    yield* events.insertWithPushJobs({
+      id: eventId,
+      externalId: normalized.external_id ?? null,
+      projectId: project.id,
+      source: normalized.source ?? "",
+      type: normalized.type ?? "",
+      level: normalized.level ?? "info",
+      title: normalized.title,
+      body: normalized.body ?? "",
+      fingerprint: normalized.fingerprint ?? "",
+      payloadJson: JSON.stringify(data),
+      actionsJson: JSON.stringify(normalized.actions ?? []),
+      occurredAt: normalized.occurred_at ?? createdAt,
+      createdAt,
+      silenceId
+    }, subscriptions.map((subscription) => subscription.id))
 
     if (messages.length > 0) {
       const published = yield* queue.sendMany(messages).pipe(
@@ -212,11 +172,7 @@ export const createEventForProject = (
       )
       if (published) {
         const queuedAt = nowIso()
-        yield* db.run(
-          "push_jobs.mark_queued_for_event",
-          "UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ? AND state = 'pending'",
-          [queuedAt, queuedAt, eventId]
-        )
+        yield* events.markPushJobsQueued(eventId, queuedAt, true)
       }
     }
 
@@ -265,44 +221,16 @@ export interface ListEventsInput {
 
 export const listEvents = (
   input: ListEventsInput
-): Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable, Database> =>
+): Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable, EventsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
-    const conditions: Array<string> = []
-    const params: Array<unknown> = []
+    const events = yield* EventsRepository
 
-    if (input.project) {
-      conditions.push("e.project_id = ?")
-      params.push(input.project)
-    }
     if (input.level) {
       if (!isLevel(input.level)) return yield* Effect.fail(invalidEventQuery("level filter is invalid"))
-      conditions.push("e.level = ?")
-      params.push(input.level)
-    }
-    if (input.source) {
-      conditions.push("e.source = ?")
-      params.push(input.source)
-    }
-    if (input.fingerprint) {
-      conditions.push("e.fingerprint = ?")
-      params.push(input.fingerprint)
-    }
-    if (input.search) {
-      const search = input.search.trim().slice(0, 240)
-      if (search) {
-        const pattern = `%${search}%`
-        conditions.push(
-          "(e.title LIKE ? OR e.body LIKE ? OR e.source LIKE ? OR e.fingerprint LIKE ? OR e.payload_json LIKE ?)"
-        )
-        params.push(pattern, pattern, pattern, pattern, pattern)
-      }
     }
     if (input.silenced !== undefined && input.silenced !== "true" && input.silenced !== "false") {
       return yield* Effect.fail(invalidEventQuery("silenced filter must be true or false"))
     }
-    if (input.silenced === "true") conditions.push("e.silence_id IS NOT NULL")
-    if (input.silenced === "false") conditions.push("e.silence_id IS NULL")
 
     let since: string | undefined
     let until: string | undefined
@@ -315,14 +243,6 @@ export const listEvents = (
     if (since && until && since > until) {
       return yield* Effect.fail(invalidEventQuery("since must not be later than until"))
     }
-    if (since) {
-      conditions.push("e.created_at >= ?")
-      params.push(since)
-    }
-    if (until) {
-      conditions.push("e.created_at <= ?")
-      params.push(until)
-    }
 
     if (input.grouped !== undefined && input.grouped !== "true" && input.grouped !== "false") {
       return yield* Effect.fail(invalidEventQuery("grouped filter must be true or false"))
@@ -333,76 +253,21 @@ export const listEvents = (
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
-
-    let rows: ReadonlyArray<EventRow>
-    if (grouped) {
-      const queryParams = [...params, ...params]
-      let outerCursor = ""
-      if (cursor) {
-        outerCursor = "AND (created_at < ? OR (created_at = ? AND id < ?))"
-        queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
-      }
-      queryParams.push(limit + 1)
-      const fingerprintedConditions = [...conditions, "e.fingerprint <> ''"]
-      const ungroupedConditions = [...conditions, "e.fingerprint = ''"]
-      rows = yield* db.all<EventRow>(
-        "events.list_grouped",
-        `WITH fingerprinted AS (
-           SELECT ${eventColumns},
-             COUNT(*) OVER (
-               PARTITION BY e.project_id, e.fingerprint
-             ) AS group_count,
-             MIN(e.created_at) OVER (
-               PARTITION BY e.project_id, e.fingerprint
-             ) AS group_first_seen,
-             MAX(e.created_at) OVER (
-               PARTITION BY e.project_id, e.fingerprint
-             ) AS group_last_seen,
-             ROW_NUMBER() OVER (
-               PARTITION BY e.project_id, e.fingerprint
-               ORDER BY e.created_at DESC, e.id DESC
-             ) AS group_rank
-           FROM events e
-           JOIN projects p ON p.id = e.project_id
-           WHERE ${fingerprintedConditions.join(" AND ")}
-         ), representatives AS (
-           SELECT * FROM fingerprinted WHERE group_rank = 1
-           UNION ALL
-           SELECT ${eventColumns},
-             1 AS group_count,
-             e.created_at AS group_first_seen,
-             e.created_at AS group_last_seen,
-             1 AS group_rank
-           FROM events e
-           JOIN projects p ON p.id = e.project_id
-           WHERE ${ungroupedConditions.join(" AND ")}
-         )
-         SELECT * FROM representatives
-         WHERE 1 = 1 ${outerCursor}
-         ORDER BY created_at DESC, id DESC
-         LIMIT ?`,
-        queryParams
-      )
-    } else {
-      const queryParams = [...params]
-      const cursorCondition = cursor
-        ? "(e.created_at < ? OR (e.created_at = ? AND e.id < ?))"
-        : ""
-      if (cursor) queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
-      queryParams.push(limit + 1)
-      const allConditions = [
-        ...conditions,
-        ...(cursorCondition ? [cursorCondition] : [])
-      ]
-      rows = yield* db.all<EventRow>(
-        "events.list",
-        `${eventSelect}
-         ${allConditions.length > 0 ? `WHERE ${allConditions.join(" AND ")}` : ""}
-         ORDER BY e.created_at DESC, e.id DESC
-         LIMIT ?`,
-        queryParams
-      )
+    const search = input.search?.trim().slice(0, 240)
+    const criteria: EventListCriteria = {
+      ...(input.project ? { project: input.project } : {}),
+      ...(input.level ? { level: input.level as Level } : {}),
+      ...(input.source ? { source: input.source } : {}),
+      ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
+      ...(search ? { search } : {}),
+      ...(since ? { since } : {}),
+      ...(until ? { until } : {}),
+      ...(input.silenced !== undefined ? { silenced: input.silenced === "true" } : {}),
+      grouped,
+      ...(cursor ? { cursor } : {}),
+      limit: limit + 1
     }
+    const rows = yield* events.list(criteria)
 
     const hasMore = rows.length > limit
     const pageRows = hasMore ? rows.slice(0, limit) : rows
@@ -415,34 +280,18 @@ export const listEvents = (
 
 export const eventDeliveries = (
   eventId: string
-): Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable, Database> =>
+): Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable, EventsRepository | DeliveriesRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const deliveries = yield* DeliveriesRepository
     yield* getEvent(eventId)
-    return yield* db.all<DeliveryRow>(
-      "deliveries.list_for_event",
-      `SELECT
-         d.id,
-         d.event_id,
-         d.subscription_id,
-         COALESCE(s.name, '') AS subscription_name,
-         d.status,
-         d.response_status,
-         d.error,
-         d.attempted_at
-       FROM deliveries d
-       LEFT JOIN push_subscriptions s ON s.id = d.subscription_id
-       WHERE d.event_id = ?
-       ORDER BY d.attempted_at DESC`,
-      [eventId]
-    )
+    return yield* deliveries.listForEvent(eventId)
   })
 
 export const unsilenceEvent = (
   eventId: string
-): Effect.Effect<{ readonly event: EventView; readonly deliveries: ReadonlyArray<DeliveryRow> }, EventNotFound | RepositoryUnavailable | QueueUnavailable, Database | PushQueue> =>
+): Effect.Effect<{ readonly event: EventView; readonly deliveries: ReadonlyArray<DeliveryRow> }, EventNotFound | RepositoryUnavailable | QueueUnavailable, EventsRepository | DeliveriesRepository | SubscriptionsRepository | PushQueue> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const events = yield* EventsRepository
     const queue = yield* PushQueue
     const current = yield* getEvent(eventId)
     if (!current.silenced) {
@@ -451,23 +300,7 @@ export const unsilenceEvent = (
 
     const subscriptions = yield* listEnabledSubscriptionRows
     const now = nowIso()
-    yield* db.batch("events.unsilence_with_push_jobs", [
-      {
-        name: "events.unsilence",
-        sql: "UPDATE events SET silence_id = NULL WHERE id = ?",
-        params: [eventId]
-      },
-      ...subscriptions.map((subscription) => ({
-        name: "push_jobs.upsert_pending",
-        sql: `INSERT INTO push_jobs
-          (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-          VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)
-          ON CONFLICT(event_id, subscription_id) DO UPDATE SET
-            state = 'pending', available_at = excluded.available_at, queued_at = NULL,
-            lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
-        params: [eventId, subscription.id, now, now]
-      }))
-    ])
+    yield* events.unsilenceWithPushJobs(eventId, subscriptions.map((subscription) => subscription.id), now)
 
     const messages = subscriptions.map((subscription) => ({ eventId, subscriptionId: subscription.id }))
     if (messages.length > 0) {
@@ -477,11 +310,7 @@ export const unsilenceEvent = (
       )
       if (published) {
         const queuedAt = nowIso()
-        yield* db.run(
-          "push_jobs.mark_queued_for_event",
-          "UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?",
-          [queuedAt, queuedAt, eventId]
-        )
+        yield* events.markPushJobsQueued(eventId, queuedAt, false)
       }
     }
 
