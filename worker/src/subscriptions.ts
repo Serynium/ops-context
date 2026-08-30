@@ -101,7 +101,7 @@ export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView
   Effect.gen(function*() {
     const db = yield* Database
     const rows = yield* db.all<PushSubscriptionRow>(
-      "SELECT * FROM push_subscriptions ORDER BY created_at DESC"
+      "SELECT * FROM push_subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC"
     )
     return rows.map(toSubscriptionView)
   })
@@ -168,6 +168,7 @@ export const registerSubscription = (
          renewal_credential_issued_at = excluded.renewal_credential_issued_at,
          previous_renewal_credential_hash = NULL,
          previous_renewal_credential_valid_until = NULL,
+         deleted_at = NULL,
          updated_at = excluded.updated_at
        WHERE push_subscriptions.enabled = 1 OR ? = 1`,
       [
@@ -346,7 +347,19 @@ export const deleteSubscription = (id: string): Effect.Effect<void, AppError, Da
   Effect.gen(function*() {
     const db = yield* Database
     yield* findSubscriptionRow(id)
-    yield* db.run("DELETE FROM push_subscriptions WHERE id = ?", [id])
+    const now = nowIso()
+    yield* db.run(
+      `UPDATE push_subscriptions
+       SET enabled = 0,
+           renewal_credential_hash = NULL,
+           renewal_credential_issued_at = NULL,
+           previous_renewal_credential_hash = NULL,
+           previous_renewal_credential_valid_until = NULL,
+           deleted_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [now, now, id]
+    )
   })
 
 export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, AppError, Database> =

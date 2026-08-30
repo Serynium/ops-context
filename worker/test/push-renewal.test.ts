@@ -3,7 +3,12 @@ import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import worker from "../src/index.js"
 import { CredentialCrypto, Database } from "../src/services.js"
-import { registerSubscription, updateSubscription } from "../src/subscriptions.js"
+import {
+  deleteSubscription,
+  listSubscriptions,
+  registerSubscription,
+  updateSubscription
+} from "../src/subscriptions.js"
 
 const subscription = (endpoint: string) => ({
   endpoint,
@@ -250,6 +255,50 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       enabled: true
     })
     expect(reenrolled.renewal_credential).toMatch(/^ops_pwa_/u)
+  })
+
+  it("keeps removed endpoints tombstoned until explicit re-enrollment", async () => {
+    const credential = `ops_pwa_${"j".repeat(43)}`
+    const endpoint = "https://push.example.test/removed-legacy"
+    const id = "sub_renewal_removed_legacy"
+    await seed(id, credential, endpoint)
+    const database = Database.layer(env.DB)
+    const layer = Layer.mergeAll(database, CredentialCrypto.layer)
+    const input = {
+      enrollment_key: `ops_enroll_${"x".repeat(43)}`,
+      subscription: subscription(endpoint)
+    }
+
+    await Effect.runPromise(deleteSubscription(id).pipe(Effect.provide(database)))
+    await expect(Effect.runPromise(
+      registerSubscription({ ...input, reactivate: false }, "test agent").pipe(Effect.provide(layer))
+    )).rejects.toMatchObject({ code: "subscription_disabled", status: 400 })
+    await expect(Effect.runPromise(listSubscriptions.pipe(Effect.provide(database)))).resolves.not.toContainEqual(
+      expect.objectContaining({ id })
+    )
+
+    const tombstone = await env.DB.prepare(
+      `SELECT enabled, deleted_at, renewal_credential_hash
+       FROM push_subscriptions WHERE id = ?`
+    ).bind(id).first<{
+      readonly enabled: number
+      readonly deleted_at: string | null
+      readonly renewal_credential_hash: string | null
+    }>()
+    expect(tombstone).toMatchObject({
+      enabled: 0,
+      renewal_credential_hash: null
+    })
+    expect(tombstone?.deleted_at).not.toBeNull()
+
+    const reenrolled = await Effect.runPromise(
+      registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
+    )
+    expect(reenrolled.subscription).toMatchObject({ id, enabled: true })
+    const restored = await env.DB.prepare(
+      "SELECT deleted_at FROM push_subscriptions WHERE id = ?"
+    ).bind(id).first<{ readonly deleted_at: string | null }>()
+    expect(restored?.deleted_at).toBeNull()
   })
 
   it("rejects replay after rotating the credential", async () => {
