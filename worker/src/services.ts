@@ -6,7 +6,16 @@ import {
   d1SuccessTelemetry,
   type DatabaseOperation
 } from "./database-observability.js"
-import { internal, type AppError } from "./errors.js"
+import {
+  cryptographyUnavailable,
+  deliveryTemporarilyUnavailable,
+  queueUnavailable,
+  repositoryUnavailable,
+  type CryptographyUnavailable,
+  type DeliveryTemporarilyUnavailable,
+  type QueueUnavailable,
+  type RepositoryUnavailable
+} from "./errors.js"
 import type { Env, PushJobMessage } from "./types.js"
 
 export interface SqlStatement {
@@ -20,21 +29,21 @@ export interface DatabaseService {
     name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<A | null, AppError>
+  ) => Effect.Effect<A | null, RepositoryUnavailable>
   readonly all: <A extends object>(
     name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<ReadonlyArray<A>, AppError>
+  ) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
   readonly run: (
     name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<D1Result<unknown>, AppError>
+  ) => Effect.Effect<D1Result<unknown>, RepositoryUnavailable>
   readonly batch: (
     name: string,
     statements: ReadonlyArray<SqlStatement>
-  ) => Effect.Effect<void, AppError>
+  ) => Effect.Effect<void, RepositoryUnavailable>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
@@ -49,10 +58,10 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
       operation: DatabaseOperation,
       execute: () => Promise<A>,
       successTelemetry: (result: A) => ReadonlyArray<Record<string, unknown>>
-    ): Effect.Effect<A, AppError> =>
+    ): Effect.Effect<A, RepositoryUnavailable> =>
       Effect.tryPromise({
         try: execute,
-        catch: (cause) => internal(`database ${operation} failed`, cause)
+        catch: (cause) => repositoryUnavailable(`database ${operation} failed`, cause)
       }).pipe(
         Effect.tap((result) =>
           Effect.forEach(successTelemetry(result), (telemetry) =>
@@ -88,15 +97,14 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         "query",
         async () => requireD1Success(await db.prepare(statement).bind(...params).all<A>()),
         (result) => [d1SuccessTelemetry(name, "query", result)]
-      ).pipe(
-        Effect.map((result) => result.results ?? [])
-      )
+      ).pipe(Effect.map((result) => (result.results ?? []) as ReadonlyArray<A>))
 
     const first: DatabaseService["first"] = <A extends object>(
       name: string,
       statement: string,
       params: ReadonlyArray<unknown> = []
-    ) => all<A>(name, statement, params).pipe(Effect.map((rows) => rows[0] ?? null))
+    ) =>
+      all<A>(name, statement, params).pipe(Effect.map((rows) => rows[0] ?? null))
 
     const run: DatabaseService["run"] = (name, statement, params = []) =>
       observe(
@@ -120,9 +128,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         (results) => results.map((result, index) =>
           d1SuccessTelemetry(statements[index]?.name ?? name, "batch", result)
         )
-      ).pipe(
-        Effect.asVoid
-      )
+      ).pipe(Effect.asVoid)
     }
 
     return Layer.succeed(Database)(Database.of({ first, all, run, batch }))
@@ -188,8 +194,8 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
 }
 
 export interface QueueService {
-  readonly send: (message: PushJobMessage) => Effect.Effect<void, AppError>
-  readonly sendMany: (messages: ReadonlyArray<PushJobMessage>) => Effect.Effect<void, AppError>
+  readonly send: (message: PushJobMessage) => Effect.Effect<void, QueueUnavailable>
+  readonly sendMany: (messages: ReadonlyArray<PushJobMessage>) => Effect.Effect<void, QueueUnavailable>
 }
 
 export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-context/PushQueue") {
@@ -198,7 +204,7 @@ export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-c
       send: (message) =>
         Effect.tryPromise({
           try: () => queue.send(message),
-          catch: (cause) => internal("failed to enqueue push delivery", cause)
+          catch: (cause) => queueUnavailable("failed to enqueue push delivery", cause)
         }),
       sendMany: (messages) =>
         Effect.tryPromise({
@@ -208,7 +214,7 @@ export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-c
               await queue.sendBatch(batch.map((body) => ({ body })))
             }
           },
-          catch: (cause) => internal("failed to enqueue push deliveries", cause)
+          catch: (cause) => queueUnavailable("failed to enqueue push deliveries", cause)
         })
     })
 }
@@ -223,9 +229,9 @@ const base64UrlEncode = (bytes: Uint8Array): string => {
 }
 
 export interface CredentialCryptoService {
-  readonly randomToken: (bytes?: number) => Effect.Effect<string, AppError>
-  readonly sha256Hex: (value: string) => Effect.Effect<string, AppError>
-  readonly newId: (prefix: string) => Effect.Effect<string, AppError>
+  readonly randomToken: (bytes?: number) => Effect.Effect<string, CryptographyUnavailable>
+  readonly sha256Hex: (value: string) => Effect.Effect<string, CryptographyUnavailable>
+  readonly newId: (prefix: string) => Effect.Effect<string, CryptographyUnavailable>
 }
 
 export class CredentialCrypto extends Context.Service<CredentialCrypto, CredentialCryptoService>()(
@@ -236,7 +242,7 @@ export class CredentialCrypto extends Context.Service<CredentialCrypto, Credenti
     Effect.gen(function*() {
       const crypto = yield* Crypto.Crypto
       const encoder = new TextEncoder()
-      const mapCryptoError = Effect.mapError((cause: unknown) => internal("cryptographic operation failed", cause))
+      const mapCryptoError = Effect.mapError((cause: unknown) => cryptographyUnavailable("cryptographic operation failed", cause))
 
       const randomToken: CredentialCryptoService["randomToken"] = (bytes = 32) =>
         crypto.randomBytes(bytes).pipe(
@@ -269,7 +275,7 @@ export interface WebPushService {
   readonly send: (
     subscription: PushSubscription,
     message: Omit<PushMessage, "adminContact">
-  ) => Effect.Effect<Response, AppError>
+  ) => Effect.Effect<Response, DeliveryTemporarilyUnavailable>
 }
 
 export class WebPush extends Context.Service<WebPush, WebPushService>()("ops-context/WebPush") {
@@ -295,7 +301,7 @@ export class WebPush extends Context.Service<WebPush, WebPushService>()("ops-con
               body: request.body
             })
           },
-          catch: (cause) => internal("Web Push request failed", cause)
+          catch: (cause) => deliveryTemporarilyUnavailable("Web Push request failed", cause)
         }).pipe(Effect.withSpan("WebPush.send", { attributes: { endpoint: new URL(subscription.endpoint).origin } }))
 
       return WebPush.of({ send })

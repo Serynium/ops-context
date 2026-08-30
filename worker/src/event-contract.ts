@@ -1,5 +1,5 @@
 import { Effect, Schema, SchemaGetter, SchemaIssue } from "effect"
-import { appError, type AppError, type ValidationIssue } from "./errors.js"
+import { invalidEvent, type InvalidEvent, type ValidationIssue } from "./errors.js"
 
 export const EVENT_PAYLOAD_MAX_BYTES = 256 * 1024
 export const EVENT_TITLE_MAX_LENGTH = 240
@@ -245,11 +245,9 @@ export const formatEventValidationIssues = (issue: SchemaIssue.Issue): ReadonlyA
 
 export const decodeCreateEventInput = (
   input: unknown
-): Effect.Effect<CreateEventInput, AppError> =>
+): Effect.Effect<CreateEventInput, InvalidEvent> =>
   Schema.decodeUnknownEffect(CreateEventInputSchema)(input).pipe(
-    Effect.mapError((error) => appError(
-      422,
-      "validation_error",
+    Effect.mapError((error) => invalidEvent(
       "event payload failed validation",
       formatEventValidationIssues(error.issue)
     ))

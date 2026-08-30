@@ -186,13 +186,14 @@ export class AdministratorIdentity extends Context.Service<
           const email = headers.get(ACCESS_EMAIL)?.trim()
           const name = headers.get(ACCESS_NAME)?.trim()
 
+          if (headers.authorization?.startsWith("Bearer ")) {
+            return yield* new ForbiddenError({
+              error: "forbidden",
+              message: "project credentials cannot authorize private surfaces"
+            })
+          }
+
           if (!verified) {
-            if (headers.authorization?.startsWith("Bearer ")) {
-              return yield* new ForbiddenError({
-                error: "forbidden",
-                message: "project credentials cannot authorize private surfaces"
-              })
-            }
             return yield* new UnauthorizedError({
               error: "unauthorized",
               message: "Cloudflare Access authentication is required"

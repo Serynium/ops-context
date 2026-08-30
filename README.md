@@ -326,7 +326,7 @@ Administrator authentication accepts the secure session cookie created by the PW
 The Worker boundary is a standard Cloudflare module handler. Inside that boundary:
 
 - `HttpApi`, endpoint/group schemas, and `HttpApiMiddleware` define and validate the HTTP contract.
-- `Schema.TaggedError` values define declared API failures and status codes.
+- Tagged domain and application errors are mapped to HTTP only by the API adapter; see [docs/errors.md](docs/errors.md).
 - `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
 - `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled maintenance, MCP, and Sentry envelope executions.

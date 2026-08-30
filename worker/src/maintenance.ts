@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { type AppError } from "./errors.js"
+import { type QueueUnavailable, type RepositoryUnavailable } from "./errors.js"
 import { nowIso } from "./ids.js"
 import { AppConfig, Database, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
@@ -18,7 +18,7 @@ export interface MaintenanceResult {
 const changes = (result: D1Result<unknown>): number =>
   (result.meta as { readonly changes?: number }).changes ?? 0
 
-export const runMaintenance: Effect.Effect<MaintenanceResult, AppError, Database | PushQueue | AppConfig> =
+export const runMaintenance: Effect.Effect<MaintenanceResult, RepositoryUnavailable | QueueUnavailable, Database | PushQueue | AppConfig> =
   Effect.gen(function*() {
     const db = yield* Database
     const queue = yield* PushQueue

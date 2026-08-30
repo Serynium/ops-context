@@ -14,6 +14,8 @@ All notable changes to Ops Context are recorded here.
 
 - Bounded Web Push delivery attempts with explicit `retrying`, `sent`, and terminal `dead` job states. Queue delayed retry is the ordinary retry authority, while the dead-letter Queue records an operator-visible terminal outcome.
 - Workers-runtime reliability tests covering duplicate Queue delivery, lease reclamation, retry exhaustion, delayed-retry/Cron separation, unpublished-job recovery, and DLQ handling.
+- Deterministic Workerd integration coverage for concurrent delivery claims, atomic event/job creation, external-id idempotency, lost-publication recovery, provider failures, cascade deletion, Queue ack/retry outcomes, and the Access/same-origin boundary.
+- Separate fast Node unit-test and Cloudflare Workers integration-test commands for local development and CI.
 - Administrator status now reports the number of terminal `dead_jobs`.
 - D1 migration `0004_push_retry_state` for the new delivery state machine and indexes.
 

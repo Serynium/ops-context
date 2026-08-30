@@ -1,5 +1,12 @@
 import { Effect } from "effect"
-import { invalid, notFound, type AppError } from "./errors.js"
+import {
+  invalidSubscription,
+  subscriptionNotFound,
+  type CryptographyUnavailable,
+  type InvalidSubscription,
+  type RepositoryUnavailable,
+  type SubscriptionNotFound
+} from "./errors.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database } from "./services.js"
 import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
@@ -38,9 +45,9 @@ export const toSubscriptionView = (row: PushSubscriptionRow): PushSubscriptionVi
 })
 
 const validateSubscription = (subscription: BrowserPushSubscription): void => {
-  if (!subscription || typeof subscription !== "object") throw invalid("subscription is required")
+  if (!subscription || typeof subscription !== "object") throw invalidSubscription("subscription is required")
   if (typeof subscription.endpoint !== "string" || !subscription.endpoint.startsWith("https://")) {
-    throw invalid("subscription endpoint must be an HTTPS URL")
+    throw invalidSubscription("subscription endpoint must be an HTTPS URL")
   }
   if (
     !subscription.keys ||
@@ -49,11 +56,11 @@ const validateSubscription = (subscription: BrowserPushSubscription): void => {
     subscription.keys.p256dh.length < 20 ||
     subscription.keys.auth.length < 8
   ) {
-    throw invalid("subscription encryption keys are missing")
+    throw invalidSubscription("subscription encryption keys are missing")
   }
 }
 
-export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, AppError, Database> =
+export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, RepositoryUnavailable, Database> =
   Effect.gen(function*() {
     const db = yield* Database
     const rows = yield* db.all<PushSubscriptionRow>(
@@ -65,7 +72,7 @@ export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView
 
 export const findSubscriptionRow = (
   id: string
-): Effect.Effect<PushSubscriptionRow, AppError, Database> =>
+): Effect.Effect<PushSubscriptionRow, SubscriptionNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const row = yield* db.first<PushSubscriptionRow>(
@@ -73,22 +80,22 @@ export const findSubscriptionRow = (
       "SELECT * FROM push_subscriptions WHERE id = ?",
       [id]
     )
-    if (!row) return yield* Effect.fail(notFound("push subscription not found"))
+    if (!row) return yield* Effect.fail(subscriptionNotFound())
     return row
   })
 
 export const registerSubscription = (
   input: RegisterSubscriptionInput,
   userAgent: string
-): Effect.Effect<PushSubscriptionView, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable | CryptographyUnavailable, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* Effect.try({
       try: () => validateSubscription(input.subscription),
       catch: (cause) =>
-        typeof cause === "object" && cause !== null && (cause as { _tag?: unknown })._tag === "AppError"
-          ? (cause as AppError)
-          : invalid("push subscription is invalid")
+        typeof cause === "object" && cause !== null && (cause as { _tag?: unknown })._tag === "InvalidSubscription"
+          ? (cause as InvalidSubscription)
+          : invalidSubscription("push subscription is invalid")
     })
 
     const now = nowIso()
@@ -131,19 +138,19 @@ export const registerSubscription = (
       "SELECT * FROM push_subscriptions WHERE endpoint = ?",
       [input.subscription.endpoint]
     )
-    if (!row) return yield* Effect.fail(notFound("push subscription could not be saved"))
+    if (!row) return yield* Effect.fail(subscriptionNotFound("push subscription could not be saved"))
     return toSubscriptionView(row)
   })
 
 export const updateSubscription = (
   id: string,
   patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
-): Effect.Effect<PushSubscriptionView, AppError, Database> =>
+): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const current = yield* findSubscriptionRow(id)
     const name = patch.name === undefined ? current.name : patch.name.trim().slice(0, 120)
-    if (!name) return yield* Effect.fail(invalid("subscription name cannot be empty"))
+    if (!name) return yield* Effect.fail(invalidSubscription("subscription name cannot be empty"))
     const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
     yield* db.run(
       "subscriptions.update",
@@ -153,14 +160,14 @@ export const updateSubscription = (
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })
 
-export const deleteSubscription = (id: string): Effect.Effect<void, AppError, Database> =>
+export const deleteSubscription = (id: string): Effect.Effect<void, SubscriptionNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* findSubscriptionRow(id)
     yield* db.run("subscriptions.delete", "DELETE FROM push_subscriptions WHERE id = ?", [id])
   })
 
-export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, AppError, Database> =
+export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, RepositoryUnavailable, Database> =
   Effect.gen(function*() {
     const db = yield* Database
     return yield* db.all<PushSubscriptionRow>(

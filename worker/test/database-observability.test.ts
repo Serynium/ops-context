@@ -4,7 +4,7 @@ import {
   D1StructuredLoggerLive,
   d1SuccessTelemetry
 } from "../src/database-observability.js"
-import type { AppError } from "../src/errors.js"
+import type { RepositoryUnavailable } from "../src/errors.js"
 import { Database, type DatabaseService } from "../src/services.js"
 
 const result = <A>(results: A[], overrides: Partial<D1Meta> = {}): D1Result<A> => ({
@@ -30,7 +30,7 @@ const unsuccessfulResult = <A>(results: A[] = []): D1Result<A> => ({
 
 const unsuccessfulOperationCases: ReadonlyArray<readonly [
   string,
-  (database: DatabaseService) => Effect.Effect<unknown, AppError>
+  (database: DatabaseService) => Effect.Effect<unknown, RepositoryUnavailable>
 ]> = [
   ["read", (database) => database.all("events.list", "SELECT * FROM events")],
   ["write", (database) => database.run("events.create", "INSERT INTO events DEFAULT VALUES")]
