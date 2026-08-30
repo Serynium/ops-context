@@ -22,6 +22,7 @@ import {
   ProjectAuthorizationLive,
   SameOriginLive
 } from "./middleware.js"
+import { SentryEndpoint } from "./sentry.js"
 import {
   InfrastructureLive,
   WebPush
@@ -94,7 +95,8 @@ export const makeLayers = (env: Env) => {
   )
   const maintenance = Maintenance.layer.pipe(Layer.provide(infrastructure))
   const mcp = McpEndpoint.layer.pipe(Layer.provide(base))
-  const programs = Layer.mergeAll(delivery, maintenance, mcp)
+  const sentry = SentryEndpoint.layer.pipe(Layer.provide(base))
+  const programs = Layer.mergeAll(delivery, maintenance, mcp, sentry)
 
   return { http, programs } as const
 }

@@ -3,6 +3,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { Maintenance, PushDelivery } from "./application.js"
 import { makeLayers } from "./layers.js"
 import { McpEndpoint } from "./mcp.js"
+import { isSentryEnvelopePath, SentryEndpoint } from "./sentry.js"
 import type { Env, PushJobMessage } from "./types.js"
 
 interface WebHandler {
@@ -14,7 +15,7 @@ interface IsolateRuntime {
   readonly db: D1Database
   readonly queue: Queue<PushJobMessage>
   readonly http: WebHandler
-  readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance | McpEndpoint, never>
+  readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance | McpEndpoint | SentryEndpoint, never>
 }
 
 let cached: IsolateRuntime | undefined
@@ -56,6 +57,16 @@ export default {
         )
       } catch (cause) {
         console.error("unhandled MCP defect", cause)
+        return internalResponse()
+      }
+    }
+    if (isSentryEnvelopePath(pathname)) {
+      try {
+        return await runtimeFor(env).programs.runPromise(
+          Effect.flatMap(SentryEndpoint, (sentry) => sentry.handle(request))
+        )
+      } catch (cause) {
+        console.error("unhandled Sentry defect", cause)
         return internalResponse()
       }
     }
