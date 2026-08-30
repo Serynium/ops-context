@@ -1,6 +1,9 @@
 import { Effect, Logger } from "effect"
-import { describe, expect, it } from "vitest"
-import { d1SuccessTelemetry } from "../src/database-observability.js"
+import { describe, expect, it, vi } from "vitest"
+import {
+  D1StructuredLoggerLive,
+  d1SuccessTelemetry
+} from "../src/database-observability.js"
 import { Database } from "../src/services.js"
 
 const result = <A>(results: A[], overrides: Partial<D1Meta> = {}): D1Result<A> => ({
@@ -66,6 +69,33 @@ describe("D1 query observability", () => {
     expect(serialized).toContain("db.rows_read")
     expect(serialized).not.toContain("SELECT id")
     expect(serialized).not.toContain("secret-external-id")
+  })
+
+  it("forwards telemetry as a top-level structured console record", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          all: () => Promise.resolve(result([{ id: "evt_1" }]))
+        })
+      })
+    } as unknown as D1Database
+
+    await Effect.runPromise(
+      Effect.flatMap(Database, (database) =>
+        database.all("events.list", "SELECT * FROM events")
+      ).pipe(
+        Effect.provide(Database.layer(db)),
+        Effect.provide(D1StructuredLoggerLive)
+      )
+    )
+
+    expect(consoleLog).toHaveBeenCalledWith(expect.objectContaining({
+      event: "d1.query",
+      "db.query.name": "events.list",
+      "db.rows_read": 12
+    }))
+    consoleLog.mockRestore()
   })
 
   it("classifies failures without logging driver error messages", async () => {

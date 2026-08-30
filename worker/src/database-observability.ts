@@ -1,3 +1,5 @@
+import { Logger } from "effect"
+
 export type DatabaseOperation = "query" | "write" | "batch"
 
 interface D1Metadata {
@@ -43,4 +45,26 @@ export const d1FailureTelemetry = (
   "db.query.name": queryName,
   "db.operation": operation,
   "error.class": `d1_${operation}_failed`
+})
+
+const isD1Telemetry = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  (value.event === "d1.query" || value.event === "d1.query.failed")
+
+const d1StructuredLogger = Logger.make(({ logLevel, message }) => {
+  const messages = Array.isArray(message) ? message : [message]
+  for (const value of messages) {
+    if (!isD1Telemetry(value)) continue
+    if (logLevel === "Error" || logLevel === "Fatal") {
+      console.error(value)
+    } else {
+      console.log(value)
+    }
+  }
+})
+
+export const D1StructuredLoggerLive = Logger.layer([d1StructuredLogger], {
+  mergeWithExisting: true
 })
