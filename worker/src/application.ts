@@ -66,9 +66,17 @@ import {
 import { runRetention, type RetentionResult } from "./retention.js"
 import type { DeliverPushCommand, IngestEventCommand } from "./queue-contract.js"
 import {
+  DeliveriesRepository,
+  EventsRepository,
+  ProjectsRepository,
+  SettingsRepository,
+  SilencesRepository,
+  SubscriptionsRepository,
+  SystemRepository
+} from "./repositories.js"
+import {
   AppConfig,
   CredentialCrypto,
-  Database,
   PushQueue,
   WebPush
 } from "./services.js"
@@ -110,24 +118,21 @@ export class Projects extends Context.Service<Projects, {
   static readonly layer = Layer.effect(
     Projects,
     Effect.gen(function*() {
-      const database = yield* Database
+      const repository = yield* ProjectsRepository
       const crypto = yield* CredentialCrypto
-      const run = <A, E>(effect: Effect.Effect<A, E, Database | CredentialCrypto>) =>
+      const run = <A, E>(effect: Effect.Effect<A, E, ProjectsRepository | CredentialCrypto>) =>
         effect.pipe(
-          Effect.provideService(Database, database),
+          Effect.provideService(ProjectsRepository, repository),
           Effect.provideService(CredentialCrypto, crypto)
         )
-      const runDb = <A, E>(effect: Effect.Effect<A, E, Database>) =>
-        Effect.provideService(effect, Database, database)
+      const runRepository = <A, E>(effect: Effect.Effect<A, E, ProjectsRepository>) =>
+        Effect.provideService(effect, ProjectsRepository, repository)
 
       return Projects.of({
-        list: runDb(listProjects).pipe(Effect.withSpan("Projects.list")),
-        get: Effect.fn("Projects.get")((id: string) => runDb(getProject(id))),
-        findRow: Effect.fn("Projects.findRow")((id: string) => runDb(findProjectRow(id))),
-        firstRow: database.first<ProjectRow>(
-          "projects.get_first_created",
-          "SELECT * FROM projects ORDER BY created_at LIMIT 1"
-        ),
+        list: runRepository(listProjects).pipe(Effect.withSpan("Projects.list")),
+        get: Effect.fn("Projects.get")((id: string) => runRepository(getProject(id))),
+        findRow: Effect.fn("Projects.findRow")((id: string) => runRepository(findProjectRow(id))),
+        firstRow: repository.findFirst,
         authenticate: Effect.fn("Projects.authenticate")((apiKey: string) =>
           run(authenticateProject(apiKey))
         ),
@@ -135,9 +140,9 @@ export class Projects extends Context.Service<Projects, {
           run(createProject(input))
         ),
         update: Effect.fn("Projects.update")((id: string, patch: UpdateProjectInput) =>
-          runDb(updateProject(id, patch))
+          runRepository(updateProject(id, patch))
         ),
-        delete: Effect.fn("Projects.delete")((id: string) => runDb(deleteProject(id))),
+        delete: Effect.fn("Projects.delete")((id: string) => runRepository(deleteProject(id))),
         rotateKey: Effect.fn("Projects.rotateKey")((id: string) => run(rotateProjectKey(id)))
       })
     })
@@ -160,16 +165,20 @@ export class Events extends Context.Service<Events, {
   static readonly layer = Layer.effect(
     Events,
     Effect.gen(function*() {
-      const database = yield* Database
+      const eventsRepository = yield* EventsRepository
+      const deliveriesRepository = yield* DeliveriesRepository
+      const settingsRepository = yield* SettingsRepository
+      const silencesRepository = yield* SilencesRepository
+      const subscriptionsRepository = yield* SubscriptionsRepository
       const queue = yield* PushQueue
       const config = yield* AppConfig
       const crypto = yield* CredentialCrypto
-      const run = <A, E>(effect: Effect.Effect<
-        A,
-        E,
-        Database | PushQueue | AppConfig | CredentialCrypto
-      >) => effect.pipe(
-        Effect.provideService(Database, database),
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(EventsRepository, eventsRepository),
+        Effect.provideService(DeliveriesRepository, deliveriesRepository),
+        Effect.provideService(SettingsRepository, settingsRepository),
+        Effect.provideService(SilencesRepository, silencesRepository),
+        Effect.provideService(SubscriptionsRepository, subscriptionsRepository),
         Effect.provideService(PushQueue, queue),
         Effect.provideService(AppConfig, config),
         Effect.provideService(CredentialCrypto, crypto)
@@ -177,22 +186,19 @@ export class Events extends Context.Service<Events, {
 
       return Events.of({
         create: Effect.fn("Events.create")((project: ProjectRow, input: CreateEventInput) =>
-          run(enqueueEventForProject(project, input))
+          provide(enqueueEventForProject(project, input))
         ),
         list: Effect.fn("Events.list")((input: ListEventsInput) =>
-          Effect.provideService(listEvents(input), Database, database)
+          provide(listEvents(input))
         ),
         get: Effect.fn("Events.get")((id: string) =>
-          Effect.provideService(getEvent(id), Database, database)
+          provide(getEvent(id))
         ),
         deliveries: Effect.fn("Events.deliveries")((id: string) =>
-          Effect.provideService(eventDeliveries(id), Database, database)
+          provide(eventDeliveries(id))
         ),
         unsilence: Effect.fn("Events.unsilence")((id: string) =>
-          unsilenceEvent(id).pipe(
-            Effect.provideService(Database, database),
-            Effect.provideService(PushQueue, queue)
-          )
+          provide(unsilenceEvent(id))
         )
       })
     })
@@ -214,21 +220,22 @@ export class Subscriptions extends Context.Service<Subscriptions, {
   static readonly layer = Layer.effect(
     Subscriptions,
     Effect.gen(function*() {
-      const database = yield* Database
+      const repository = yield* SubscriptionsRepository
       const crypto = yield* CredentialCrypto
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(SubscriptionsRepository, repository),
+        Effect.provideService(CredentialCrypto, crypto)
+      )
       return Subscriptions.of({
-        list: Effect.provideService(listSubscriptions, Database, database),
+        list: provide(listSubscriptions),
         register: Effect.fn("Subscriptions.register")((input, userAgent) =>
-          registerSubscription(input, userAgent).pipe(
-            Effect.provideService(Database, database),
-            Effect.provideService(CredentialCrypto, crypto)
-          )
+          provide(registerSubscription(input, userAgent))
         ),
         update: Effect.fn("Subscriptions.update")((id, patch) =>
-          Effect.provideService(updateSubscription(id, patch), Database, database)
+          provide(updateSubscription(id, patch))
         ),
         delete: Effect.fn("Subscriptions.delete")((id: string) =>
-          Effect.provideService(deleteSubscription(id), Database, database)
+          provide(deleteSubscription(id))
         )
       })
     })
@@ -249,34 +256,34 @@ export class Silences extends Context.Service<Silences, {
   static readonly layer = Layer.effect(
     Silences,
     Effect.gen(function*() {
-      const database = yield* Database
+      const repository = yield* SilencesRepository
+      const projectsRepository = yield* ProjectsRepository
       const crypto = yield* CredentialCrypto
-      const list = Effect.provideService(listSilences, Database, database)
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(SilencesRepository, repository),
+        Effect.provideService(ProjectsRepository, projectsRepository),
+        Effect.provideService(CredentialCrypto, crypto)
+      )
+      const list = provide(listSilences)
       return Silences.of({
         list,
         listSummary: Effect.gen(function*() {
           const silences = yield* list
-          const count = yield* database.first<{ readonly count: number }>(
-            "events.count_silenced",
-            "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL"
-          )
+          const count = yield* repository.countSilencedEvents
           return {
             silences,
             fields: ["fingerprint", "title", "source"] as const,
-            silenced_events: count?.count ?? 0
+            silenced_events: count
           }
         }).pipe(Effect.withSpan("Silences.listSummary")),
         get: Effect.fn("Silences.get")((id: string) =>
-          Effect.provideService(getSilence(id), Database, database)
+          provide(getSilence(id))
         ),
         create: Effect.fn("Silences.create")((input: CreateSilenceInput) =>
-          createSilence(input).pipe(
-            Effect.provideService(Database, database),
-            Effect.provideService(CredentialCrypto, crypto)
-          )
+          provide(createSilence(input))
         ),
         delete: Effect.fn("Silences.delete")((id: string) =>
-          Effect.provideService(deleteSilence(id), Database, database)
+          provide(deleteSilence(id))
         )
       })
     })
@@ -290,19 +297,18 @@ export class Settings extends Context.Service<Settings, {
   static readonly layer = Layer.effect(
     Settings,
     Effect.gen(function*() {
-      const database = yield* Database
+      const repository = yield* SettingsRepository
       const config = yield* AppConfig
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(SettingsRepository, repository),
+        Effect.provideService(AppConfig, config)
+      )
       return Settings.of({
-        get: getSettings.pipe(
-          Effect.provideService(Database, database),
-          Effect.provideService(AppConfig, config),
+        get: provide(getSettings).pipe(
           Effect.withSpan("Settings.get")
         ),
         update: Effect.fn("Settings.update")((patch: SettingsPatch) =>
-          updateSettings(patch).pipe(
-            Effect.provideService(Database, database),
-            Effect.provideService(AppConfig, config)
-          )
+          provide(updateSettings(patch))
         )
       })
     })
@@ -321,13 +327,14 @@ export class System extends Context.Service<System, {
   static readonly layer = Layer.effect(
     System,
     Effect.gen(function*() {
-      const database = yield* Database
+      const systemRepository = yield* SystemRepository
+      const deliveriesRepository = yield* DeliveriesRepository
       const config = yield* AppConfig
       const settings = yield* Settings
       const projects = yield* Projects
       const events = yield* Events
 
-      const health = database.first<{ readonly ok: number }>("system.health", "SELECT 1 AS ok").pipe(
+      const health = systemRepository.health.pipe(
         Effect.map(() => ({ status: "ok" })),
         Effect.withSpan("System.health")
       )
@@ -337,33 +344,8 @@ export class System extends Context.Service<System, {
         : Effect.fail(pushNotConfigured())
 
       const status = Effect.fn("System.status")(function*(origin: string) {
-        const counts = yield* database.first<{
-          readonly projects: number
-          readonly events: number
-          readonly subscriptions: number
-          readonly enabled_subscriptions: number
-          readonly dead_jobs: number
-          readonly failed_ingests: number
-        }>(
-          "system.status_counts",
-          `SELECT
-             (SELECT COUNT(*) FROM projects) AS projects,
-             (SELECT COUNT(*) FROM events) AS events,
-             (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
-             (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
-             (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs,
-             (SELECT COUNT(*) FROM ingestion_failures) AS failed_ingests`
-        )
-
-        const lastPush = yield* database.first<DeliveryRow>(
-          "deliveries.get_latest",
-          `SELECT d.id, d.event_id, d.subscription_id,
-                  COALESCE(s.name, '') AS subscription_name,
-                  d.status, d.response_status, d.error, d.attempted_at
-           FROM deliveries d
-           LEFT JOIN push_subscriptions s ON s.id = d.subscription_id
-           ORDER BY d.attempted_at DESC LIMIT 1`
-        )
+        const counts = yield* systemRepository.counts
+        const lastPush = yield* deliveriesRepository.latest
         const currentSettings = yield* settings.get
 
         return {
@@ -378,12 +360,12 @@ export class System extends Context.Service<System, {
             ),
             subject: config.vapidSubject
           },
-          projects: counts?.projects ?? 0,
-          events: counts?.events ?? 0,
-          subscriptions: counts?.subscriptions ?? 0,
-          enabled_subscriptions: counts?.enabled_subscriptions ?? 0,
-          dead_jobs: counts?.dead_jobs ?? 0,
-          failed_ingests: counts?.failed_ingests ?? 0,
+          projects: counts.projects,
+          events: counts.events,
+          subscriptions: counts.subscriptions,
+          enabled_subscriptions: counts.enabled_subscriptions,
+          dead_jobs: counts.dead_jobs,
+          failed_ingests: counts.failed_ingests,
           last_push: lastPush,
           retention_days: currentSettings.retention_days,
           setup_completed: currentSettings.setup_completed,
@@ -452,20 +434,25 @@ export class EventIngestion extends Context.Service<EventIngestion, {
   static readonly layer = Layer.effect(
     EventIngestion,
     Effect.gen(function*() {
-      const database = yield* Database
+      const eventsRepository = yield* EventsRepository
+      const projectsRepository = yield* ProjectsRepository
+      const settingsRepository = yield* SettingsRepository
+      const silencesRepository = yield* SilencesRepository
+      const subscriptionsRepository = yield* SubscriptionsRepository
       const queue = yield* PushQueue
       const config = yield* AppConfig
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(ProjectsRepository, projectsRepository),
+        Effect.provideService(EventsRepository, eventsRepository),
+        Effect.provideService(SettingsRepository, settingsRepository),
+        Effect.provideService(SilencesRepository, silencesRepository),
+        Effect.provideService(SubscriptionsRepository, subscriptionsRepository),
+        Effect.provideService(PushQueue, queue),
+        Effect.provideService(AppConfig, config)
+      )
       return EventIngestion.of({
-        process: (message) => processIngestEvent(message).pipe(
-          Effect.provideService(Database, database),
-          Effect.provideService(PushQueue, queue),
-          Effect.provideService(AppConfig, config)
-        ),
-        deadLetter: (message) => processIngestDeadLetter(message).pipe(
-          Effect.provideService(Database, database),
-          Effect.provideService(PushQueue, queue),
-          Effect.provideService(AppConfig, config)
-        )
+        process: (message) => provide(processIngestEvent(message)),
+        deadLetter: (message) => provide(processIngestDeadLetter(message))
       })
     })
   )
@@ -477,11 +464,13 @@ export class Retention extends Context.Service<Retention, {
   static readonly layer = Layer.effect(
     Retention,
     Effect.gen(function*() {
-      const database = yield* Database
+      const eventsRepository = yield* EventsRepository
+      const settingsRepository = yield* SettingsRepository
       const config = yield* AppConfig
       return Retention.of({
         run: runRetention.pipe(
-          Effect.provideService(Database, database),
+          Effect.provideService(EventsRepository, eventsRepository),
+          Effect.provideService(SettingsRepository, settingsRepository),
           Effect.provideService(AppConfig, config)
         )
       })

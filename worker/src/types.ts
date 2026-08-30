@@ -73,9 +73,9 @@ export interface EventRow {
   readonly occurred_at: string
   readonly created_at: string
   readonly silence_id: string | null
-  readonly group_count?: number
-  readonly group_first_seen?: string
-  readonly group_last_seen?: string
+  readonly group_count?: number | undefined
+  readonly group_first_seen?: string | undefined
+  readonly group_last_seen?: string | undefined
 }
 
 export interface EventView {

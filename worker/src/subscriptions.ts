@@ -8,7 +8,8 @@ import {
   type SubscriptionNotFound
 } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { CredentialCrypto, Database } from "./services.js"
+import { SubscriptionsRepository } from "./repositories.js"
+import { CredentialCrypto } from "./services.js"
 import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
 
 export interface BrowserPushSubscription {
@@ -60,26 +61,19 @@ const validateSubscription = (subscription: BrowserPushSubscription): void => {
   }
 }
 
-export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, RepositoryUnavailable, Database> =
+export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, RepositoryUnavailable, SubscriptionsRepository> =
   Effect.gen(function*() {
-    const db = yield* Database
-    const rows = yield* db.all<PushSubscriptionRow>(
-      "subscriptions.list",
-      "SELECT * FROM push_subscriptions ORDER BY created_at DESC"
-    )
+    const subscriptions = yield* SubscriptionsRepository
+    const rows = yield* subscriptions.list
     return rows.map(toSubscriptionView)
   })
 
 export const findSubscriptionRow = (
   id: string
-): Effect.Effect<PushSubscriptionRow, SubscriptionNotFound | RepositoryUnavailable, Database> =>
+): Effect.Effect<PushSubscriptionRow, SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
-    const row = yield* db.first<PushSubscriptionRow>(
-      "subscriptions.get_by_id",
-      "SELECT * FROM push_subscriptions WHERE id = ?",
-      [id]
-    )
+    const subscriptions = yield* SubscriptionsRepository
+    const row = yield* subscriptions.findById(id)
     if (!row) return yield* Effect.fail(subscriptionNotFound())
     return row
   })
@@ -87,9 +81,9 @@ export const findSubscriptionRow = (
 export const registerSubscription = (
   input: RegisterSubscriptionInput,
   userAgent: string
-): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable | CryptographyUnavailable, Database | CredentialCrypto> =>
+): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable | CryptographyUnavailable, SubscriptionsRepository | CredentialCrypto> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const subscriptions = yield* SubscriptionsRepository
     yield* Effect.try({
       try: () => validateSubscription(input.subscription),
       catch: (cause) =>
@@ -99,45 +93,14 @@ export const registerSubscription = (
     })
 
     const now = nowIso()
-    const existing = yield* db.first<PushSubscriptionRow>(
-      "subscriptions.get_by_endpoint",
-      "SELECT * FROM push_subscriptions WHERE endpoint = ?",
-      [input.subscription.endpoint]
-    )
+    const existing = yield* subscriptions.findByEndpoint(input.subscription.endpoint)
     const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
 
-    yield* db.run(
-      "subscriptions.upsert",
-      `INSERT INTO push_subscriptions
-       (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-       ON CONFLICT(endpoint) DO UPDATE SET
-         name = excluded.name,
-         p256dh = excluded.p256dh,
-         auth = excluded.auth,
-         user_agent = excluded.user_agent,
-         enabled = 1,
-         last_seen_at = excluded.last_seen_at,
-         updated_at = excluded.updated_at`,
-      [
-        id,
-        name,
-        input.subscription.endpoint,
-        input.subscription.keys.p256dh,
-        input.subscription.keys.auth,
-        userAgent.slice(0, 512),
-        now,
-        existing?.created_at ?? now,
-        now
-      ]
-    )
+    yield* subscriptions.upsert({ id, name, endpoint: input.subscription.endpoint, p256dh: input.subscription.keys.p256dh,
+      auth: input.subscription.keys.auth, userAgent: userAgent.slice(0, 512), now, createdAt: existing?.created_at ?? now })
 
-    const row = yield* db.first<PushSubscriptionRow>(
-      "subscriptions.get_by_endpoint",
-      "SELECT * FROM push_subscriptions WHERE endpoint = ?",
-      [input.subscription.endpoint]
-    )
+    const row = yield* subscriptions.findByEndpoint(input.subscription.endpoint)
     if (!row) return yield* Effect.fail(subscriptionNotFound("push subscription could not be saved"))
     return toSubscriptionView(row)
   })
@@ -145,33 +108,26 @@ export const registerSubscription = (
 export const updateSubscription = (
   id: string,
   patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
-): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable, Database> =>
+): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const subscriptions = yield* SubscriptionsRepository
     const current = yield* findSubscriptionRow(id)
     const name = patch.name === undefined ? current.name : patch.name.trim().slice(0, 120)
     if (!name) return yield* Effect.fail(invalidSubscription("subscription name cannot be empty"))
     const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
-    yield* db.run(
-      "subscriptions.update",
-      "UPDATE push_subscriptions SET name = ?, enabled = ?, updated_at = ? WHERE id = ?",
-      [name, enabled, nowIso(), id]
-    )
+    yield* subscriptions.update(id, name, enabled, nowIso())
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })
 
-export const deleteSubscription = (id: string): Effect.Effect<void, SubscriptionNotFound | RepositoryUnavailable, Database> =>
+export const deleteSubscription = (id: string): Effect.Effect<void, SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
+    const subscriptions = yield* SubscriptionsRepository
     yield* findSubscriptionRow(id)
-    yield* db.run("subscriptions.delete", "DELETE FROM push_subscriptions WHERE id = ?", [id])
+    yield* subscriptions.delete(id)
   })
 
-export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, RepositoryUnavailable, Database> =
+export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, RepositoryUnavailable, SubscriptionsRepository> =
   Effect.gen(function*() {
-    const db = yield* Database
-    return yield* db.all<PushSubscriptionRow>(
-      "subscriptions.list_enabled",
-      "SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY created_at"
-    )
+    const subscriptions = yield* SubscriptionsRepository
+    return yield* subscriptions.listEnabled
   })

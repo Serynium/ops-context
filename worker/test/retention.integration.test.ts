@@ -2,7 +2,8 @@ import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { runRetention } from "../src/retention.js"
-import { AppConfig, Database, type ConfigService } from "../src/services.js"
+import { D1RepositoriesLive } from "../src/repositories.js"
+import { AppConfig, type ConfigService } from "../src/services.js"
 
 const config: ConfigService = {
   baseUrl: "https://ops.example.com",
@@ -45,7 +46,7 @@ describe("scheduled retention", () => {
 
   it("prunes only expired events without any Queue dependency", async () => {
     const result = await Effect.runPromise(runRetention.pipe(Effect.provide(
-      Layer.mergeAll(Database.layer(env.DB), Layer.succeed(AppConfig)(config))
+      Layer.mergeAll(D1RepositoriesLive(env.DB), Layer.succeed(AppConfig)(config))
     )))
     expect(result).toEqual({ prunedEvents: 1 })
     const ids = await env.DB.prepare("SELECT id FROM events ORDER BY id").all<{ id: string }>()

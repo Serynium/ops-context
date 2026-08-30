@@ -1,64 +1,31 @@
 import { Effect } from "effect"
 import { invalidSettings, type InvalidSettings, type RepositoryUnavailable } from "./errors.js"
 import { DEFAULT_REDACT_KEYS } from "./redact.js"
-import { AppConfig, Database } from "./services.js"
+import { SettingsRepository } from "./repositories.js"
+import { AppConfig } from "./services.js"
 import type { SettingsView } from "./types.js"
 import { nowIso } from "./ids.js"
 
-interface SettingRow {
-  readonly key: string
-  readonly value: string
-}
-
-const requiredSettingKeys = [
-  "retention_days",
-  "redact_keys",
-  "setup_completed",
-  "mcp_enabled"
-] as const
-
-const setValue = (key: string, value: string): Effect.Effect<void, RepositoryUnavailable, Database> =>
+const setValue = (key: "retention_days" | "redact_keys" | "setup_completed" | "mcp_enabled", value: string): Effect.Effect<void, RepositoryUnavailable, SettingsRepository> =>
   Effect.gen(function*() {
-    const db = yield* Database
-    yield* db.run(
-      "settings.upsert",
-      `INSERT INTO settings (key, value, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      [key, value, nowIso()]
-    )
+    const settings = yield* SettingsRepository
+    yield* settings.set(key, value, nowIso())
   })
 
-const parseList = (value: string | null): ReadonlyArray<string> => {
-  if (!value) return []
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []
-  } catch {
-    return value.split(",").map((entry) => entry.trim()).filter(Boolean)
-  }
-}
-
-export const getSettings: Effect.Effect<SettingsView, RepositoryUnavailable, Database | AppConfig> =
+export const getSettings: Effect.Effect<SettingsView, RepositoryUnavailable, SettingsRepository | AppConfig> =
   Effect.gen(function*() {
     const config = yield* AppConfig
-    const db = yield* Database
-    const rows = yield* db.all<SettingRow>(
-      "settings.load",
-      `SELECT key, value FROM settings
-       WHERE key IN (${requiredSettingKeys.map(() => "?").join(", ")})`,
-      requiredSettingKeys
-    )
-    const values = new Map(rows.map((row) => [row.key, row.value]))
-    const retentionText = values.get("retention_days") ?? null
+    const settings = yield* SettingsRepository
+    const values = yield* settings.get
+    const retentionText = values.retentionDays
 
     const parsedRetention = Number.parseInt(retentionText ?? "", 10)
     return {
       retention_days: Number.isInteger(parsedRetention) ? parsedRetention : config.defaultRetentionDays,
-      redact_keys: parseList(values.get("redact_keys") ?? null),
+      redact_keys: values.redactKeys,
       default_redact_keys: DEFAULT_REDACT_KEYS,
-      setup_completed: values.get("setup_completed") === "true",
-      mcp_enabled: values.get("mcp_enabled") === "true",
+      setup_completed: values.setupCompleted === "true",
+      mcp_enabled: values.mcpEnabled === "true",
       mcp_access_configured: Boolean(config.mcpHost && config.accessMcpAudience)
     }
   })
@@ -70,7 +37,7 @@ export interface SettingsPatch {
   readonly mcp_enabled?: boolean | undefined
 }
 
-export const updateSettings = (patch: SettingsPatch): Effect.Effect<SettingsView, InvalidSettings | RepositoryUnavailable, Database | AppConfig> =>
+export const updateSettings = (patch: SettingsPatch): Effect.Effect<SettingsView, InvalidSettings | RepositoryUnavailable, SettingsRepository | AppConfig> =>
   Effect.gen(function*() {
     if (patch.retention_days !== undefined) {
       if (!Number.isInteger(patch.retention_days) || patch.retention_days < 0 || patch.retention_days > 3650) {

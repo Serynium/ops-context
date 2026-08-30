@@ -26,6 +26,7 @@ import {
 import { SentryEndpoint } from "./sentry.js"
 import { D1StructuredLoggerLive } from "./database-observability.js"
 import { PushDeliveryRepository } from "./push-repository.js"
+import { D1RepositoriesLive } from "./repositories.js"
 import {
   InfrastructureLive,
   WebPush
@@ -59,7 +60,7 @@ const HttpSupportLive = (() => {
 })()
 
 export const makeLayers = (env: Env) => {
-  const infrastructure = InfrastructureLive(env)
+  const infrastructure = Layer.merge(InfrastructureLive(env), D1RepositoriesLive(env.DB))
 
   const identity = AdministratorIdentity.layer.pipe(
     Layer.provide(infrastructure)

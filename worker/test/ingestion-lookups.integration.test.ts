@@ -4,13 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { D1StructuredLoggerLive } from "../src/database-observability.js"
 import { processIngestEvent } from "../src/events.js"
 import { QUEUE_COMMAND_VERSION } from "../src/queue-contract.js"
-import { AppConfig, Database, PushQueue } from "../src/services.js"
+import { D1RepositoriesLive } from "../src/repositories.js"
+import { AppConfig, PushQueue } from "../src/services.js"
 import { getSettings } from "../src/settings.js"
 import { matchSilence, type SilenceField } from "../src/silences.js"
 import type { ProjectRow } from "../src/types.js"
 
-const database = Layer.merge(Database.layer(env.DB), D1StructuredLoggerLive)
-const infrastructure = Layer.merge(database, AppConfig.layer(env))
+const repositories = Layer.merge(D1RepositoriesLive(env.DB), D1StructuredLoggerLive)
+const infrastructure = Layer.merge(repositories, AppConfig.layer(env))
 
 const isQueryLog = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null &&
@@ -75,7 +76,7 @@ describe("event-ingestion lookups", () => {
           source: "integration-test"
         }
       }).pipe(Effect.provide(Layer.mergeAll(
-        Database.layer(env.DB),
+        D1RepositoriesLive(env.DB),
         AppConfig.layer(env),
         PushQueue.layer(env.PUSH_QUEUE),
         D1StructuredLoggerLive
@@ -145,7 +146,7 @@ describe("event-ingestion lookups", () => {
       )
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
       const matched = await Effect.runPromise(
-        matchSilence("prj_lookup", candidates).pipe(Effect.provide(database))
+        matchSilence("prj_lookup", candidates).pipe(Effect.provide(repositories))
       )
 
       const expected = mask & 1
@@ -177,7 +178,7 @@ describe("event-ingestion lookups", () => {
         ["fingerprint", ""],
         ["title", "Shared title"],
         ["source", ""]
-      ]).pipe(Effect.provide(database))
+      ]).pipe(Effect.provide(repositories))
     )
 
     expect(matched).toBe("sil_project")
@@ -190,7 +191,7 @@ describe("event-ingestion lookups", () => {
         ["fingerprint", ""],
         ["title", ""],
         ["source", ""]
-      ]).pipe(Effect.provide(database))
+      ]).pipe(Effect.provide(repositories))
     )
 
     expect(matched).toBeNull()

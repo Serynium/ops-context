@@ -17,13 +17,12 @@ import {
   type IngestEventCommand,
   type QueueCommand
 } from "../src/queue-contract.js"
+import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
 import {
   AppConfig,
   CredentialCrypto,
-  Database,
   PushQueue,
-  type ConfigService,
-  type DatabaseService
+  type ConfigService
 } from "../src/services.js"
 import type { ProjectRow } from "../src/types.js"
 
@@ -103,7 +102,7 @@ const reset = async (): Promise<void> => {
 const ingestionLayer = (
   send: (message: QueueCommand) => Effect.Effect<void, ReturnType<typeof queueUnavailable>>
 ) => Layer.mergeAll(
-  Database.layer(env.DB),
+  D1RepositoriesLive(env.DB),
   Layer.succeed(AppConfig)(config),
   Layer.succeed(PushQueue)({
     send,
@@ -116,7 +115,7 @@ describe("Queue-first event ingestion", () => {
 
   it("returns a retryable failure when the acceptance Queue send fails", async () => {
     const layer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
@@ -146,16 +145,17 @@ describe("Queue-first event ingestion", () => {
                'Legacy event', '', '', '{}', '[]', ?, ?, NULL, ?)`
     ).bind(project.id, legacyCreatedAt, legacyCreatedAt, legacyCreatedAt).run()
 
-    const failure = () => repositoryUnavailable("simulated D1 outage")
-    const failedDatabase: DatabaseService = {
-      first: () => Effect.fail(failure()),
-      all: () => Effect.fail(failure()),
-      run: () => Effect.fail(failure()),
-      batch: () => Effect.fail(failure())
-    }
+    const liveEvents = await Effect.runPromise(EventsRepository.pipe(
+      Effect.provide(D1RepositoriesLive(env.DB))
+    ))
+    const failedEvents = EventsRepository.of({
+      ...liveEvents,
+      findIdByExternalId: () => Effect.fail(repositoryUnavailable("simulated D1 outage"))
+    })
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
-      Layer.succeed(Database)(failedDatabase),
+      D1RepositoriesLive(env.DB),
+      Layer.succeed(EventsRepository)(failedEvents),
       Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
@@ -184,7 +184,7 @@ describe("Queue-first event ingestion", () => {
       Effect.provide(ingestionLayer(() => Effect.void))
     ))
     const resolved = await Effect.runPromise(getEvent(first.id).pipe(
-      Effect.provide(Database.layer(env.DB))
+      Effect.provide(D1RepositoriesLive(env.DB))
     ))
     expect(resolved.id).toBe("evt_legacy_random")
   })
@@ -273,7 +273,7 @@ describe("Queue-first event ingestion", () => {
   it("keeps external_id stable across producer retries and contains no reusable credentials", async () => {
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
@@ -309,7 +309,7 @@ describe("Queue-first event ingestion", () => {
   it("keeps the complete ingestion command below the Queue message ceiling", async () => {
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
-      Database.layer(env.DB),
+      D1RepositoriesLive(env.DB),
       Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
