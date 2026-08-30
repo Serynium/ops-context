@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect"
 import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
+import { D1StructuredLoggerLive } from "./database-observability.js"
 import type { EventPage, ListEventsInput } from "./events.js"
 import {
   GetEventArguments,
@@ -96,7 +97,9 @@ const errorMessage = (error: unknown): string => {
 
 const runEffect = async <A>(effect: Effect.Effect<A, ApiFailure>): Promise<A> => {
   try {
-    return await Effect.runPromise(effect)
+    return await Effect.runPromise(
+      effect.pipe(Effect.provide(D1StructuredLoggerLive))
+    )
   } catch (error) {
     throw new Error(errorMessage(error))
   }
