@@ -178,6 +178,10 @@ export const enqueueEventForProject = (
       const existing = yield* db.first<{ readonly id: string }>(
         "SELECT id FROM events WHERE project_id = ? AND external_id = ?",
         [project.id, normalized.external_id]
+      ).pipe(
+        // Preserve IDs created by pre-Queue releases when D1 is healthy, but
+        // never make durable Queue acceptance depend on this compatibility read.
+        Effect.catchTag("RepositoryUnavailable", () => Effect.succeed(null))
       )
       eventId = existing?.id ?? (yield* idempotentEventId(project.id, normalized.external_id))
     } else {

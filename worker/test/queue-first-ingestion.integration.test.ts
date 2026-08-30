@@ -7,7 +7,7 @@ import {
   processIngestEvent,
   unsilenceEvent
 } from "../src/events.js"
-import { queueUnavailable } from "../src/errors.js"
+import { queueUnavailable, repositoryUnavailable } from "../src/errors.js"
 import {
   encodedQueueCommandBytes,
   QUEUE_COMMAND_MAX_BYTES,
@@ -21,7 +21,8 @@ import {
   CredentialCrypto,
   Database,
   PushQueue,
-  type ConfigService
+  type ConfigService,
+  type DatabaseService
 } from "../src/services.js"
 import type { ProjectRow } from "../src/types.js"
 
@@ -132,6 +133,40 @@ describe("Queue-first event ingestion", () => {
     if (Result.isFailure(result)) expect(result.failure._tag).toBe("QueueUnavailable")
     const rows = await env.DB.prepare("SELECT COUNT(*) AS count FROM events").first<{ count: number }>()
     expect(rows?.count).toBe(0)
+  })
+
+  it("accepts deterministic external IDs when the compatibility D1 read is unavailable", async () => {
+    const failure = () => repositoryUnavailable("simulated D1 outage")
+    const failedDatabase: DatabaseService = {
+      namedAll: () => Effect.fail(failure()),
+      first: () => Effect.fail(failure()),
+      all: () => Effect.fail(failure()),
+      run: () => Effect.fail(failure()),
+      batch: () => Effect.fail(failure())
+    }
+    const accepted: QueueCommand[] = []
+    const layer = Layer.mergeAll(
+      Layer.succeed(Database)(failedDatabase),
+      Layer.succeed(AppConfig)(config),
+      CredentialCrypto.layer,
+      Layer.succeed(PushQueue)({
+        send: (message) => Effect.sync(() => accepted.push(message)).pipe(Effect.asVoid),
+        sendMany: () => Effect.void
+      })
+    )
+
+    const first = await Effect.runPromise(enqueueEventForProject(project, {
+      title: "D1-independent acceptance",
+      external_id: "stable-during-outage"
+    }).pipe(Effect.provide(layer)))
+    const second = await Effect.runPromise(enqueueEventForProject(project, {
+      title: "D1-independent acceptance",
+      external_id: "stable-during-outage"
+    }).pipe(Effect.provide(layer)))
+
+    expect(first.id).toBe(second.id)
+    expect(first.status).toBe("queued")
+    expect(accepted).toHaveLength(2)
   })
 
   it("persists duplicate ingest delivery once and publishes one job per subscription", async () => {
