@@ -1,8 +1,9 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type {
   CryptographyUnavailable,
   RepositoryUnavailable
 } from "./errors.js"
+import { repositoryUnavailable } from "./errors.js"
 import { nowIso } from "./ids.js"
 import { CredentialCrypto, Database, type SqlStatement } from "./services.js"
 import type { EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
@@ -80,6 +81,66 @@ interface PushContextRow {
   readonly subscription_created_at: string
   readonly subscription_updated_at: string
 }
+
+const PushJobStateSchema = Schema.Literals(["pending", "queued", "sending", "retrying", "sent", "dead"])
+const nullableString = Schema.NullOr(Schema.String)
+const storedJson = (validate: (value: unknown) => boolean) => Schema.String.pipe(
+  Schema.refine((value): value is string => {
+    try {
+      return validate(JSON.parse(value) as unknown)
+    } catch {
+      return false
+    }
+  }, { message: "stored JSON is invalid" })
+)
+const PushContextRowSchema = Schema.Struct({
+  job_event_id: Schema.String,
+  job_subscription_id: Schema.String,
+  job_state: PushJobStateSchema,
+  job_attempts: Schema.Number,
+  job_available_at: Schema.String,
+  job_queued_at: nullableString,
+  job_lease_until: nullableString,
+  job_dead_at: nullableString,
+  job_last_error: Schema.String,
+  job_updated_at: Schema.String,
+  event_external_id: nullableString,
+  event_project_id: Schema.String,
+  project_name: Schema.String,
+  project_slug: Schema.String,
+  project_icon: Schema.String,
+  event_source: Schema.String,
+  event_type: Schema.String,
+  event_level: Schema.Literals(["info", "success", "warning", "error", "critical"]),
+  event_title: Schema.String,
+  event_body: Schema.String,
+  event_fingerprint: Schema.String,
+  event_payload_json: storedJson((value) => typeof value === "object" && value !== null && !Array.isArray(value)),
+  event_actions_json: storedJson((value) => Array.isArray(value) && value.length <= 3 && value.every((entry) =>
+    typeof entry === "object" && entry !== null &&
+    typeof (entry as { readonly label?: unknown }).label === "string" &&
+    typeof (entry as { readonly url?: unknown }).url === "string"
+  )),
+  event_occurred_at: Schema.String,
+  event_created_at: Schema.String,
+  event_silence_id: nullableString,
+  subscription_name: Schema.String,
+  subscription_endpoint: Schema.String,
+  subscription_p256dh: Schema.String,
+  subscription_auth: Schema.String,
+  subscription_user_agent: Schema.String,
+  subscription_enabled: Schema.Number,
+  subscription_last_seen_at: nullableString,
+  subscription_created_at: Schema.String,
+  subscription_updated_at: Schema.String
+})
+const DeferredPushJobSchema = Schema.Struct({ state: PushJobStateSchema, available_at: Schema.String })
+const PushJobStateRowSchema = Schema.Struct({ state: PushJobStateSchema })
+
+const decodeRow = <A>(schema: Schema.Schema<A>, row: unknown): Effect.Effect<A, RepositoryUnavailable> =>
+  Schema.decodeUnknownEffect(schema)(row).pipe(
+    Effect.mapError(() => repositoryUnavailable("repository read failed"))
+  ) as Effect.Effect<A, RepositoryUnavailable>
 
 const deliveryInsert = (
   id: string,
@@ -222,15 +283,13 @@ export class PushDeliveryRepository extends Context.Service<
           // A delayed Queue message should not normally arrive early, but acknowledging one
           // would orphan a retrying job because maintenance deliberately does not republish it.
           // Only the failed-claim path pays for this diagnostic read.
-          const deferred = yield* db.first<{
-            readonly state: PushJobState
-            readonly available_at: string
-          }>(
+          const deferredRaw = yield* db.first<Record<string, unknown>>(
             "push_jobs.get_deferred",
             `SELECT state, available_at FROM push_jobs
              WHERE event_id = ? AND subscription_id = ?`,
             [message.eventId, message.subscriptionId]
           )
+          const deferred = deferredRaw === null ? null : yield* decodeRow(DeferredPushJobSchema, deferredRaw)
           return deferred &&
               (deferred.state === "pending" ||
                 deferred.state === "queued" ||
@@ -241,7 +300,7 @@ export class PushDeliveryRepository extends Context.Service<
         })
 
       const loadClaimedContext: PushDeliveryRepositoryService["loadClaimedContext"] = (claimed) =>
-        db.first<PushContextRow>(
+        db.first<Record<string, unknown>>(
           "push_jobs.get_claimed_context",
           `SELECT
              j.event_id AS job_event_id,
@@ -286,7 +345,9 @@ export class PushDeliveryRepository extends Context.Service<
            WHERE j.event_id = ? AND j.subscription_id = ?
              AND j.state = 'sending' AND j.lease_until = ?`,
           [claimed.message.eventId, claimed.message.subscriptionId, claimed.leaseUntil]
-        ).pipe(Effect.map((row) => row === null ? null : mapContext(row)))
+        ).pipe(Effect.flatMap((row) => row === null
+          ? Effect.succeed(null)
+          : decodeRow(PushContextRowSchema, row).pipe(Effect.map(mapContext))))
 
       const finalizeSuccess: PushDeliveryRepositoryService["finalizeSuccess"] = (
         claimed,
@@ -396,12 +457,13 @@ export class PushDeliveryRepository extends Context.Service<
         message,
         reason
       ) => Effect.gen(function*() {
-        const existing = yield* db.first<{ readonly state: PushJobState }>(
+        const existingRaw = yield* db.first<Record<string, unknown>>(
           "push_jobs.get_for_dead_letter",
           `SELECT state FROM push_jobs
            WHERE event_id = ? AND subscription_id = ?`,
           [message.eventId, message.subscriptionId]
         )
+        const existing = existingRaw === null ? null : yield* decodeRow(PushJobStateRowSchema, existingRaw)
         if (!existing || existing.state === "sent" || existing.state === "dead") return false
 
         const now = nowIso()
