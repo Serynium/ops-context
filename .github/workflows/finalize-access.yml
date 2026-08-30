@@ -1,0 +1,41 @@
+name: Finalize Cloudflare Access identity
+
+on:
+  push:
+    branches: [security/cloudflare-access]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  verify-and-merge:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/cloudflare-access
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: |
+          grep -q 'authenticateAccessRequest' worker/src/access.ts
+          grep -q 'authenticateAccessRequest' worker/src/middleware.ts
+          grep -q 'bridgeAccessIdentityToMcp' worker/src/index.ts
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: |
+          rm -f .github/workflows/implement-issue-15.yml
+          rm -f .github/workflows/finalize-access.yml
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: remove Access branch automation"
+            git push
+          fi
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge 28 --repo Serynium/ops-context --squash --delete-branch
