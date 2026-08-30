@@ -1,6 +1,15 @@
 import { Effect } from "effect"
 import { decodeCreateEventInput, type CreateEventInput } from "./event-contract.js"
-import { invalid, notFound, type AppError } from "./errors.js"
+import {
+  eventNotFound,
+  invalidEventQuery,
+  type CryptographyUnavailable,
+  type EventNotFound,
+  type InvalidEvent,
+  type InvalidEventQuery,
+  type QueueUnavailable,
+  type RepositoryUnavailable
+} from "./errors.js"
 import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
@@ -29,6 +38,9 @@ export interface EventPage {
   readonly events: ReadonlyArray<EventView>
   readonly next_cursor?: string | undefined
 }
+
+export type EventError = InvalidEvent | InvalidEventQuery | EventNotFound |
+  RepositoryUnavailable | QueueUnavailable | CryptographyUnavailable
 
 const parsePayload = (value: string): Record<string, unknown> => {
   try {
@@ -111,18 +123,18 @@ const eventSelect = `
   JOIN projects p ON p.id = e.project_id
 `
 
-export const getEvent = (id: string): Effect.Effect<EventView, AppError, Database> =>
+export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const row = yield* db.first<EventRow>(`${eventSelect} WHERE e.id = ?`, [id])
-    if (!row) return yield* Effect.fail(notFound("event not found"))
+    if (!row) return yield* Effect.fail(eventNotFound())
     return toEventView(row)
   })
 
 export const createEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventView, AppError, Database | PushQueue | AppConfig | CredentialCrypto> =>
+): Effect.Effect<EventView, EventError, Database | PushQueue | AppConfig | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const queue = yield* PushQueue
@@ -227,9 +239,9 @@ const decodeCursor = (value: string): Cursor | null => {
 }
 
 const normalizeFilterTime = (value: string, name: "since" | "until"): string => {
-  if (!rfc3339.test(value)) throw invalid(`${name} must be an RFC 3339 timestamp`)
+  if (!rfc3339.test(value)) throw invalidEventQuery(`${name} must be an RFC 3339 timestamp`)
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) throw invalid(`${name} must be an RFC 3339 timestamp`)
+  if (Number.isNaN(date.getTime())) throw invalidEventQuery(`${name} must be an RFC 3339 timestamp`)
   return date.toISOString()
 }
 
@@ -249,7 +261,7 @@ export interface ListEventsInput {
 
 export const listEvents = (
   input: ListEventsInput
-): Effect.Effect<EventPage, AppError, Database> =>
+): Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const conditions: Array<string> = []
@@ -260,7 +272,7 @@ export const listEvents = (
       params.push(input.project)
     }
     if (input.level) {
-      if (!isLevel(input.level)) return yield* Effect.fail(invalid("level filter is invalid"))
+      if (!isLevel(input.level)) return yield* Effect.fail(invalidEventQuery("level filter is invalid"))
       conditions.push("e.level = ?")
       params.push(input.level)
     }
@@ -283,7 +295,7 @@ export const listEvents = (
       }
     }
     if (input.silenced !== undefined && input.silenced !== "true" && input.silenced !== "false") {
-      return yield* Effect.fail(invalid("silenced filter must be true or false"))
+      return yield* Effect.fail(invalidEventQuery("silenced filter must be true or false"))
     }
     if (input.silenced === "true") conditions.push("e.silence_id IS NOT NULL")
     if (input.silenced === "false") conditions.push("e.silence_id IS NULL")
@@ -294,10 +306,10 @@ export const listEvents = (
       since = input.since ? normalizeFilterTime(input.since, "since") : undefined
       until = input.until ? normalizeFilterTime(input.until, "until") : undefined
     } catch (cause) {
-      return yield* Effect.fail(cause as AppError)
+      return yield* Effect.fail(cause as InvalidEventQuery)
     }
     if (since && until && since > until) {
-      return yield* Effect.fail(invalid("since must not be later than until"))
+      return yield* Effect.fail(invalidEventQuery("since must not be later than until"))
     }
     if (since) {
       conditions.push("e.created_at >= ?")
@@ -309,11 +321,11 @@ export const listEvents = (
     }
 
     if (input.grouped !== undefined && input.grouped !== "true" && input.grouped !== "false") {
-      return yield* Effect.fail(invalid("grouped filter must be true or false"))
+      return yield* Effect.fail(invalidEventQuery("grouped filter must be true or false"))
     }
     const grouped = input.grouped === "true"
     const cursor = input.before ? decodeCursor(input.before) : null
-    if (input.before && !cursor) return yield* Effect.fail(invalid("before cursor is invalid"))
+    if (input.before && !cursor) return yield* Effect.fail(invalidEventQuery("before cursor is invalid"))
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
@@ -389,7 +401,7 @@ export const listEvents = (
 
 export const eventDeliveries = (
   eventId: string
-): Effect.Effect<ReadonlyArray<DeliveryRow>, AppError, Database> =>
+): Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     yield* getEvent(eventId)
@@ -413,7 +425,7 @@ export const eventDeliveries = (
 
 export const unsilenceEvent = (
   eventId: string
-): Effect.Effect<{ readonly event: EventView; readonly deliveries: ReadonlyArray<DeliveryRow> }, AppError, Database | PushQueue> =>
+): Effect.Effect<{ readonly event: EventView; readonly deliveries: ReadonlyArray<DeliveryRow> }, EventNotFound | RepositoryUnavailable | QueueUnavailable, Database | PushQueue> =>
   Effect.gen(function*() {
     const db = yield* Database
     const queue = yield* PushQueue

@@ -45,7 +45,7 @@ const context = (
   },
   waitUntil: () => undefined,
   passThroughOnException: () => undefined
-}) as ExecutionContextWithAccess
+}) as unknown as ExecutionContextWithAccess
 
 const authenticate = (
   request: Request,
@@ -85,7 +85,7 @@ describe("Cloudflare Access identity boundary", () => {
       {
         waitUntil: () => undefined,
         passThroughOnException: () => undefined
-      } as ExecutionContextWithAccess
+      } as unknown as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({
@@ -109,7 +109,7 @@ describe("Cloudflare Access identity boundary", () => {
       {
         waitUntil: () => undefined,
         passThroughOnException: () => undefined
-      } as ExecutionContextWithAccess
+      } as unknown as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({

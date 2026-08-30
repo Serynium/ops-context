@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { createEventForProject } from "../src/events.js"
-import { internal } from "../src/errors.js"
+import { deliveryTemporarilyUnavailable, queueUnavailable } from "../src/errors.js"
 import { runMaintenance } from "../src/maintenance.js"
 import {
   processDeadLetterMessage,
@@ -49,7 +49,7 @@ const runtimeLayer = (
   Layer.succeed(WebPush)({
     send: () => Effect.sync(onSend).pipe(
       Effect.flatMap(() => response instanceof Error
-        ? Effect.fail(internal(response.message, response))
+        ? Effect.fail(deliveryTemporarilyUnavailable(response.message, response))
         : Effect.succeed(response))
     )
   })
@@ -72,10 +72,10 @@ const queueLayer = (
   failPublication = false
 ) => Layer.succeed(PushQueue)({
   send: (item) => failPublication
-    ? Effect.fail(internal("test Queue publication failed"))
+    ? Effect.fail(queueUnavailable("test Queue publication failed"))
     : Effect.sync(() => published.push(item)).pipe(Effect.asVoid),
   sendMany: (items) => failPublication
-    ? Effect.fail(internal("test Queue publication failed"))
+    ? Effect.fail(queueUnavailable("test Queue publication failed"))
     : Effect.sync(() => published.push(...items)).pipe(Effect.asVoid)
 })
 

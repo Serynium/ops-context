@@ -4,7 +4,7 @@ import {
   EventActionOutputSchema,
   EventLevel
 } from "./event-contract.js"
-import { validationIssuesFromCause, type AppError } from "./errors.js"
+import type { ApplicationError } from "./errors.js"
 
 export const Level = EventLevel
 export type Level = typeof Level.Type
@@ -316,28 +316,38 @@ export const CommonErrors = [
   ServiceUnavailableError
 ] as const
 
-export const toApiFailure = (error: AppError): ApiFailure => {
-  const fields = { error: error.code, message: error.message }
-  switch (error.status) {
-    case 400:
-      return new BadRequestError(fields)
-    case 401:
-      return new UnauthorizedError(fields)
-    case 403:
-      return new ForbiddenError(fields)
-    case 404:
-      return new NotFoundError(fields)
-    case 409:
-      return new ConflictError(fields)
-    case 413:
-      return new PayloadTooLargeError(fields)
-    case 422: {
-      const issues = validationIssuesFromCause(error.cause)
-      return new InvalidError({ ...fields, ...(issues ? { issues } : {}) })
-    }
-    case 503:
-      return new ServiceUnavailableError(fields)
-    default:
+export const toApiFailure = (failure: ApplicationError): ApiFailure => {
+  switch (failure._tag) {
+    case "InvalidEvent":
+      return new InvalidError({
+        error: failure.issues ? "validation_error" : "invalid",
+        message: failure.message,
+        ...(failure.issues ? { issues: failure.issues } : {})
+      })
+    case "InvalidProject":
+    case "InvalidSubscription":
+    case "InvalidSilence":
+    case "InvalidSettings":
+    case "InvalidEventQuery":
+      return new InvalidError({ error: "invalid", message: failure.message })
+    case "ProjectNotFound":
+    case "EventNotFound":
+    case "SubscriptionNotFound":
+    case "SilenceNotFound":
+    case "InvalidProjectCredential":
+      return new NotFoundError({ error: "not_found", message: failure.message })
+    case "DuplicateExternalId":
+    case "ProjectDeletionConflict":
+      return new ConflictError({ error: "conflict", message: failure.message })
+    case "DeliveryTemporarilyUnavailable":
+    case "PushNotConfigured":
+      return new ServiceUnavailableError({
+        error: failure._tag === "PushNotConfigured" ? "push_not_configured" : "service_unavailable",
+        message: failure._tag === "PushNotConfigured" ? failure.message : "delivery is temporarily unavailable"
+      })
+    case "RepositoryUnavailable":
+    case "QueueUnavailable":
+    case "CryptographyUnavailable":
       return new InternalError({ error: "internal", message: "something went wrong" })
   }
 }

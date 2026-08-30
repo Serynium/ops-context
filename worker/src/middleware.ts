@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Redacted } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
 import { AdministratorIdentity, type AccessPrincipal } from "./access.js"
-import { CommonErrors } from "./api-models.js"
+import { CommonErrors, toApiFailure } from "./api-models.js"
 import { Projects } from "./application.js"
 import type { ProjectRow } from "./types.js"
 
@@ -70,6 +70,7 @@ export const ProjectAuthorizationLive = Layer.effect(
     return ProjectAuthorization.of({
       bearer: (httpEffect, { credential }) =>
         projects.authenticate(Redacted.value(credential)).pipe(
+          Effect.mapError(toApiFailure),
           Effect.flatMap((project) =>
             Effect.provideService(httpEffect, CurrentProject, project)
           )
