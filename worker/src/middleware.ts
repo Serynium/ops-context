@@ -1,13 +1,14 @@
 import { Context, Effect, Layer, Redacted } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
+import { AdministratorIdentity, type AccessPrincipal } from "./access.js"
 import { CommonErrors } from "./api-models.js"
-import { Auth, Projects } from "./application.js"
+import { Projects } from "./application.js"
 import type { ProjectRow } from "./types.js"
 
-export class CurrentAdmin extends Context.Service<CurrentAdmin, {
-  readonly authenticated: true
-}>()("ops-context/CurrentAdmin") {}
+export class CurrentAdmin extends Context.Service<CurrentAdmin, AccessPrincipal>()(
+  "ops-context/CurrentAdmin"
+) {}
 
 export class CurrentProject extends Context.Service<CurrentProject, ProjectRow>()(
   "ops-context/CurrentProject"
@@ -35,15 +36,15 @@ export class ProjectAuthorization extends HttpApiMiddleware.Service<ProjectAutho
 export const AdminAuthorizationLive = Layer.effect(
   AdminAuthorization,
   Effect.gen(function*() {
-    const auth = yield* Auth
+    const identity = yield* AdministratorIdentity
     return AdminAuthorization.of((httpEffect) =>
       Effect.gen(function*() {
         const request = yield* HttpServerRequest.HttpServerRequest
-        yield* auth.requireAdmin(request)
+        const principal = yield* identity.authenticateHttp(request, "app")
         return yield* Effect.provideService(
           httpEffect,
           CurrentAdmin,
-          { authenticated: true }
+          principal
         )
       }))
   })
@@ -52,11 +53,11 @@ export const AdminAuthorizationLive = Layer.effect(
 export const SameOriginLive = Layer.effect(
   SameOrigin,
   Effect.gen(function*() {
-    const auth = yield* Auth
+    const identity = yield* AdministratorIdentity
     return SameOrigin.of((httpEffect) =>
       Effect.gen(function*() {
         const request = yield* HttpServerRequest.HttpServerRequest
-        yield* auth.requireSameOrigin(request)
+        yield* identity.requireSameOrigin(request)
         return yield* httpEffect
       }))
   })
