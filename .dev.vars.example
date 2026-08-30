@@ -1,6 +1,7 @@
 OPS_ADMIN_USER=admin
 OPS_RETENTION_DAYS=90
 OPS_BASE_URL=http://localhost:8787
+OPS_MCP_TOKEN=replace-with-at-least-16-random-characters
 ADMIN_PASSWORD_HASH=pbkdf2-sha256$310000$REPLACE_SALT$REPLACE_HASH
 VAPID_PUBLIC_KEY=REPLACE_WITH_PUBLIC_KEY
 VAPID_PRIVATE_JWK={"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."}
