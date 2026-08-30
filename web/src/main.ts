@@ -897,12 +897,17 @@ installButton.addEventListener("click", async () => {
 
 const boot = async (): Promise<void> => {
   if ("serviceWorker" in navigator) {
-    await navigator.serviceWorker.register("/sw.js", { scope: "/" })
-    const registration = await navigator.serviceWorker.ready
-    const subscription = await registration.pushManager?.getSubscription()
-    const renewal = await readPushRenewalCredential()
-    if (subscription && renewal?.credential && Notification.permission === "granted") {
-      pushButton.textContent = "Push enabled"
+    try {
+      await navigator.serviceWorker.register("/sw.js", { scope: "/" })
+      const registration = await navigator.serviceWorker.ready
+      const subscription = await registration.pushManager?.getSubscription()
+      const renewal = await readPushRenewalCredential()
+      if (subscription && renewal?.credential && Notification.permission === "granted") {
+        pushButton.textContent = "Push enabled"
+      }
+    } catch {
+      pushButton.textContent = "Push unavailable"
+      pushButton.disabled = true
     }
   }
 
