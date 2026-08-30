@@ -18,6 +18,9 @@ export default defineConfig(async () => {
           configPath: path.join(root, "wrangler.jsonc")
         },
         miniflare: {
+          // Keep tests on the newest date supported by the plugin's pinned
+          // workerd build. Production keeps its own date in wrangler.jsonc.
+          compatibilityDate: "2026-08-27",
           bindings: {
             TEST_MIGRATIONS: migrations,
             ADMIN_PASSWORD_HASH: "pbkdf2-sha256$100000$dGVzdC1zYWx0$dGVzdC1oYXNo",
