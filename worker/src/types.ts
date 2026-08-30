@@ -23,12 +23,13 @@ export interface Env {
   readonly ASSETS: Fetcher
 
   readonly OPS_BASE_URL?: string
-  readonly OPS_ADMIN_USER: string
+  readonly OPS_APP_HOST?: string
+  readonly OPS_MCP_HOST?: string
+  readonly OPS_ACCESS_APP_AUD?: string
+  readonly OPS_ACCESS_MCP_AUD?: string
   readonly OPS_RETENTION_DAYS?: string
   readonly OPS_PUSH_MAX_ATTEMPTS?: string
-  readonly OPS_MCP_TOKEN?: string
 
-  readonly ADMIN_PASSWORD_HASH: string
   readonly VAPID_PUBLIC_KEY: string
   readonly VAPID_PRIVATE_JWK: string
   readonly VAPID_SUBJECT: string
@@ -153,5 +154,5 @@ export interface SettingsView {
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
   readonly mcp_enabled: boolean
-  readonly mcp_token_set: boolean
+  readonly mcp_access_configured: boolean
 }
