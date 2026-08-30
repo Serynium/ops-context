@@ -80,7 +80,15 @@ export interface Settings {
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
   readonly mcp_enabled: boolean
-  readonly mcp_token_set: boolean
+  readonly mcp_access_configured: boolean
+}
+
+export interface AccessIdentity {
+  readonly subject: string
+  readonly kind: "user" | "service-token"
+  readonly audience: string
+  readonly email?: string
+  readonly name?: string
 }
 
 export interface Status {
@@ -99,6 +107,7 @@ export interface Status {
   readonly retention_days: number
   readonly setup_completed: boolean
   readonly admin_auth: boolean
+  readonly admin_auth_provider: "cloudflare-access"
 }
 
 export class ApiError extends Error {
@@ -117,9 +126,15 @@ export const setUnauthorizedHandler = (handler: () => void): void => {
 }
 
 const request = async <A>(method: string, path: string, body?: unknown): Promise<A> => {
-  const init: RequestInit = { method, credentials: "same-origin" }
+  const headers = new Headers({ "x-requested-with": "XMLHttpRequest" })
+  const init: RequestInit = {
+    method,
+    credentials: "same-origin",
+    headers
+  }
   if (body !== undefined) {
-    init.headers = { "content-type": "application/json", "x-ops-context": "pwa" }
+    headers.set("content-type", "application/json")
+    headers.set("x-ops-context", "pwa")
     init.body = JSON.stringify(body)
   }
 
@@ -152,10 +167,7 @@ const eventsRequest = (params: Record<string, string | undefined> = {}): Promise
 }
 
 export const api = {
-  me: () => request<{ auth_required: boolean; authenticated: boolean }>("GET", "/api/v1/auth/me"),
-  login: (username: string, password: string) =>
-    request<{ auth_required: boolean; authenticated: boolean }>("POST", "/api/v1/auth/login", { username, password }),
-  logout: () => request<void>("POST", "/api/v1/auth/logout", {}),
+  accessIdentity: () => request<AccessIdentity>("GET", "/api/v1/access/me"),
 
   events: eventsRequest,
   event: (id: string) => request<EventItem>("GET", `/api/v1/events/${encodeURIComponent(id)}`),
