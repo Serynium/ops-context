@@ -90,29 +90,60 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
 
 export interface ConfigService {
   readonly baseUrl?: string
-  readonly adminUser: string
+  readonly appOrigin: string
+  readonly appHost: string
+  readonly mcpHost?: string
+  readonly accessAppAudience?: string
+  readonly accessMcpAudience?: string
   readonly defaultRetentionDays: number
   readonly maxPushAttempts: number
-  readonly adminPasswordHash: string
   readonly vapidPublicKey: string
   readonly vapidPrivateJwk: string
   readonly vapidSubject: string
-  readonly mcpToken?: string
+}
+
+const hostFromUrl = (value: string | undefined): string => {
+  if (!value) return ""
+  try {
+    return new URL(value).host.toLowerCase()
+  } catch {
+    return ""
+  }
+}
+
+const originFromUrl = (value: string | undefined, host: string): string => {
+  if (value) {
+    try {
+      return new URL(value).origin
+    } catch {
+      // The empty origin below makes private mutations fail closed.
+    }
+  }
+  return host ? `https://${host}` : ""
 }
 
 export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-context/AppConfig") {
-  static readonly layer = (env: Env): Layer.Layer<AppConfig> =>
-    Layer.succeed(AppConfig)({
-      ...(env.OPS_BASE_URL ? { baseUrl: env.OPS_BASE_URL } : {}),
-      adminUser: env.OPS_ADMIN_USER,
+  static readonly layer = (env: Env): Layer.Layer<AppConfig> => {
+    const baseUrl = env.OPS_BASE_URL?.trim()
+    const appHost = env.OPS_APP_HOST?.trim().toLowerCase() || hostFromUrl(baseUrl)
+    const mcpHost = env.OPS_MCP_HOST?.trim().toLowerCase()
+    const accessAppAudience = env.OPS_ACCESS_APP_AUD?.trim()
+    const accessMcpAudience = env.OPS_ACCESS_MCP_AUD?.trim()
+
+    return Layer.succeed(AppConfig)({
+      ...(baseUrl ? { baseUrl } : {}),
+      appOrigin: originFromUrl(baseUrl, appHost),
+      appHost,
+      ...(mcpHost ? { mcpHost } : {}),
+      ...(accessAppAudience ? { accessAppAudience } : {}),
+      ...(accessMcpAudience ? { accessMcpAudience } : {}),
       defaultRetentionDays: Number.parseInt(env.OPS_RETENTION_DAYS ?? "90", 10) || 90,
       maxPushAttempts: Math.min(20, Math.max(1, Number.parseInt(env.OPS_PUSH_MAX_ATTEMPTS ?? "6", 10) || 6)),
-      adminPasswordHash: env.ADMIN_PASSWORD_HASH,
       vapidPublicKey: env.VAPID_PUBLIC_KEY,
       vapidPrivateJwk: env.VAPID_PRIVATE_JWK,
-      vapidSubject: env.VAPID_SUBJECT,
-      ...(env.OPS_MCP_TOKEN ? { mcpToken: env.OPS_MCP_TOKEN } : {})
+      vapidSubject: env.VAPID_SUBJECT
     })
+  }
 }
 
 export interface QueueService {
@@ -148,13 +179,6 @@ const base64UrlEncode = (bytes: Uint8Array): string => {
   let binary = ""
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "")
-}
-
-const base64UrlDecode = (value: string): Uint8Array => {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/")
-  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4)
-  const binary = atob(padded)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
 export interface CredentialCryptoService {
@@ -200,57 +224,6 @@ export class CredentialCrypto extends Context.Service<CredentialCrypto, Credenti
   )
 }
 
-export interface PasswordHasherService {
-  readonly verify: (password: string, encoded: string) => Effect.Effect<boolean, AppError>
-}
-
-export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHasherService>()(
-  "ops-context/PasswordHasher"
-) {
-  static readonly layer: Layer.Layer<PasswordHasher> = Layer.succeed(PasswordHasher)({
-    verify: (password, encoded) =>
-      Effect.tryPromise({
-        try: async () => {
-          const [algorithm, iterationsText, saltText, expectedText] = encoded.split("$")
-          if (algorithm !== "pbkdf2-sha256" || !iterationsText || !saltText || !expectedText) {
-            throw new Error("ADMIN_PASSWORD_HASH has an invalid format")
-          }
-          const iterations = Number.parseInt(iterationsText, 10)
-          if (!Number.isInteger(iterations) || iterations < 100_000) {
-            throw new Error("ADMIN_PASSWORD_HASH uses an unsafe iteration count")
-          }
-
-          const saltBytes = base64UrlDecode(saltText)
-          const expectedBytes = base64UrlDecode(expectedText)
-          const salt = Uint8Array.from(saltBytes).buffer
-          const expected = Uint8Array.from(expectedBytes)
-          const passwordBytes = Uint8Array.from(new TextEncoder().encode(password))
-          const key = await globalThis.crypto.subtle.importKey(
-            "raw",
-            passwordBytes,
-            "PBKDF2",
-            false,
-            ["deriveBits"]
-          )
-          const derived = new Uint8Array(
-            await globalThis.crypto.subtle.deriveBits(
-              { name: "PBKDF2", hash: "SHA-256", salt, iterations },
-              key,
-              expected.byteLength * 8
-            )
-          )
-          if (derived.length !== expected.length) return false
-          let different = 0
-          for (let index = 0; index < derived.length; index += 1) {
-            different |= derived[index]! ^ expected[index]!
-          }
-          return different === 0
-        },
-        catch: (cause) => internal("failed to verify administrator password", cause)
-      })
-  })
-}
-
 export interface WebPushService {
   readonly send: (
     subscription: PushSubscription,
@@ -294,6 +267,5 @@ export const InfrastructureLive = (env: Env) =>
     Database.layer(env.DB),
     AppConfig.layer(env),
     PushQueue.layer(env.PUSH_QUEUE),
-    CredentialCrypto.layer,
-    PasswordHasher.layer
+    CredentialCrypto.layer
   )
