@@ -28,12 +28,18 @@ const readRenewalCredential = async () => {
   }
 }
 
-const storeRenewalCredential = async (value) => {
+const storeRenewalCredential = async (value, expectedCredential) => {
   const database = await openCredentialDatabase()
   try {
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(CREDENTIAL_STORE, "readwrite")
-      transaction.objectStore(CREDENTIAL_STORE).put(value, CREDENTIAL_KEY)
+      const store = transaction.objectStore(CREDENTIAL_STORE)
+      const request = store.get(CREDENTIAL_KEY)
+      request.onsuccess = () => {
+        if (request.result?.credential === expectedCredential && !request.result?.revoked) {
+          store.put(value, CREDENTIAL_KEY)
+        }
+      }
       transaction.oncomplete = () => resolve()
       transaction.onerror = () => reject(transaction.error || new Error("could not store push credential"))
     })
@@ -77,7 +83,7 @@ const renewSubscription = async (subscription) => {
         credential: result.renewal_credential,
         pending: false,
         revoked: false
-      })
+      }, renewal.credential)
       return
     } catch (cause) {
       lastError = cause
