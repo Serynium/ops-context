@@ -4,6 +4,10 @@ All notable changes to Ops Context are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Sentry SDK ingestion through `POST /api/{id}/envelope/`. Server-side Sentry clients can use an Ops Context project API key as the DSN public key; exception and message events reuse the existing redaction, silence, grouping, D1, durable push-job, and Queue delivery pipeline. Gzip and deflate envelopes, Sentry fingerprints, curated event context, and non-error item ignoring are supported.
+
 ### Changed
 
 - Replaced the application-level Zod MCP schemas with Effect Schema contracts adapted through Standard Schema V1. HTTP and MCP boundaries now share the same schema system, and `zod` is no longer a direct dependency.
