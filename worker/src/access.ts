@@ -51,7 +51,7 @@ export interface CloudflareAccessContext {
   readonly getIdentity: () => Promise<CloudflareAccessIdentity | null>
 }
 
-export type ExecutionContextWithAccess = ExecutionContext & {
+export interface ExecutionContextWithAccess {
   readonly access?: CloudflareAccessContext
 }
 
@@ -103,7 +103,7 @@ export const attachCloudflareAccess = async (
   for (const name of internalHeaders) headers.delete(name)
 
   const surface = surfaceFor(request, env)
-  const access = (context as { readonly access?: CloudflareAccessContext }).access
+  const access = context.access
   if (!surface || !access) {
     return suppliedInternalHeader ? recreateRequest(request, headers) : request
   }
@@ -113,7 +113,8 @@ export const attachCloudflareAccess = async (
     return recreateRequest(request, headers)
   }
 
-  const identity = await access.getIdentity().catch(() => null)
+  const identity = await access.getIdentity().catch(() => null) as
+    CloudflareAccessIdentity | null
   const email = identity?.email?.trim()
   const name = identity?.name?.trim() || identity?.common_name?.trim()
   const subject = identity?.id?.trim() || identity?.sub?.trim() || email || `service:${access.aud}`
@@ -225,14 +226,15 @@ export class AdministratorIdentity extends Context.Service<
             })
           }
 
-          return {
+          const principal: AccessPrincipal = {
             subject,
-            kind: kind as AccessPrincipalKind,
+            kind,
             audience,
             surface: requiredSurface,
             ...(email ? { email } : {}),
             ...(name ? { name } : {})
           }
+          return principal
         }).pipe(Effect.withSpan("AdministratorIdentity.authenticate"))
 
       const requireSameOrigin = Effect.fn("AdministratorIdentity.requireSameOrigin")(

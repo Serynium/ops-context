@@ -19,18 +19,16 @@ const accessContext = (): ExecutionContextWithAccess => ({
       email: "operator@example.com",
       name: "Test operator"
     })
-  },
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined
-}) as unknown as ExecutionContextWithAccess
+  }
+})
 
 const fetchWorker = (
   request: Request,
-  context: ExecutionContext = executionContext()
+  context: ExecutionContext | ExecutionContextWithAccess = executionContext()
 ): Promise<Response> => worker.fetch(
   request as Parameters<typeof worker.fetch>[0],
   env,
-  context
+  context as ExecutionContext
 )
 
 const sha256Hex = async (value: string): Promise<string> => {
