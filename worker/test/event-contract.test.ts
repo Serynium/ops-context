@@ -51,6 +51,14 @@ describe("event ingestion contract", () => {
     expect(input.fingerprint).toHaveLength(EVENT_FINGERPRINT_MAX_LENGTH)
   })
 
+  it("requires external IDs to be non-empty when supplied", async () => {
+    const error = await captureValidation({
+      title: "Blank external id",
+      external_id: "   "
+    })
+    expect(issuePaths(error)).toContainEqual(["external_id"])
+  })
+
   it("rejects over-limit fields instead of silently truncating them", async () => {
     const titleError = await captureValidation({
       title: "t".repeat(EVENT_TITLE_MAX_LENGTH + 1)
