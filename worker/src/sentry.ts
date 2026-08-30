@@ -26,6 +26,11 @@ export interface MappedSentryEvent {
   readonly input: CreateEventInput
 }
 
+export const isRetryableSentryIngestionFailure = (failure: { readonly _tag: string }): boolean =>
+  failure._tag === "QueueUnavailable" ||
+  failure._tag === "RepositoryUnavailable" ||
+  failure._tag === "CryptographyUnavailable"
+
 type JsonRecord = Record<string, unknown>
 
 export class SentryRequestError extends Error {
@@ -580,18 +585,27 @@ export class SentryEndpoint extends Context.Service<SentryEndpoint, {
             if (!mapped) continue
 
             const created = yield* events.create(authenticated.project, mapped.input).pipe(
-              Effect.map(() => true),
+              Effect.map(() => ({ _tag: "Accepted" as const })),
               Effect.catch((error) =>
                 Effect.sync(() => {
                   console.warn("sentry.event_rejected", {
                     projectId: authenticated.project.id,
                     error: errorMessage(error)
                   })
-                  return false
+                  return isRetryableSentryIngestionFailure(error)
+                    ? { _tag: "RetryableFailure" as const }
+                    : { _tag: "Rejected" as const }
                 })
               )
             )
-            if (!created) continue
+            if (created._tag === "RetryableFailure") {
+              return secureJson(
+                { error: "service_unavailable", message: "event Queue acceptance failed; retry the envelope" },
+                503,
+                { "retry-after": "5" }
+              )
+            }
+            if (created._tag === "Rejected") continue
             if (!firstId) firstId = mapped.eventId
             stored++
           }

@@ -3,6 +3,7 @@ import { Effect, Layer, Result } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   enqueueEventForProject,
+  getEvent,
   processIngestDeadLetter,
   processIngestEvent,
   unsilenceEvent
@@ -136,6 +137,15 @@ describe("Queue-first event ingestion", () => {
   })
 
   it("accepts deterministic external IDs when the compatibility D1 read is unavailable", async () => {
+    const legacyCreatedAt = new Date(0).toISOString()
+    await env.DB.prepare(
+      `INSERT INTO events
+       (id, external_id, project_id, source, type, level, title, body, fingerprint,
+        payload_json, actions_json, occurred_at, created_at, silence_id, fanout_completed_at)
+       VALUES ('evt_legacy_random', 'stable-during-outage', ?, '', '', 'info',
+               'Legacy event', '', '', '{}', '[]', ?, ?, NULL, ?)`
+    ).bind(project.id, legacyCreatedAt, legacyCreatedAt, legacyCreatedAt).run()
+
     const failure = () => repositoryUnavailable("simulated D1 outage")
     const failedDatabase: DatabaseService = {
       namedAll: () => Effect.fail(failure()),
@@ -167,6 +177,17 @@ describe("Queue-first event ingestion", () => {
     expect(first.id).toBe(second.id)
     expect(first.status).toBe("queued")
     expect(accepted).toHaveLength(2)
+
+    const acceptedCommand = accepted[0]
+    expect(acceptedCommand?._tag).toBe("IngestEvent")
+    if (acceptedCommand?._tag !== "IngestEvent") throw new Error("missing ingestion command")
+    await Effect.runPromise(processIngestEvent(acceptedCommand).pipe(
+      Effect.provide(ingestionLayer(() => Effect.void))
+    ))
+    const resolved = await Effect.runPromise(getEvent(first.id).pipe(
+      Effect.provide(Database.layer(env.DB))
+    ))
+    expect(resolved.id).toBe("evt_legacy_random")
   })
 
   it("persists duplicate ingest delivery once and publishes one job per subscription", async () => {

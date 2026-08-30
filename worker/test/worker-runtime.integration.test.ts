@@ -67,6 +67,7 @@ describe("Cloudflare Worker runtime", () => {
     expect(names).toEqual(
       expect.arrayContaining([
         "deliveries",
+        "event_aliases",
         "events",
         "ingestion_failures",
         "projects",

@@ -134,7 +134,15 @@ const eventSelect = `
 export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
-    const row = yield* db.first<EventRow>("events.get_by_id", `${eventSelect} WHERE e.id = ?`, [id])
+    const row = yield* db.first<EventRow>(
+      "events.get_by_id_or_alias",
+      `${eventSelect}
+       WHERE e.id = COALESCE(
+         (SELECT event_id FROM event_aliases WHERE alias_id = ?),
+         ?
+       )`,
+      [id, id]
+    )
     if (!row) return yield* Effect.fail(eventNotFound())
     return toEventView(row)
   })
@@ -321,6 +329,15 @@ export const processIngestEvent = (
           [command.eventId]
         )
     if (!stored) return yield* Effect.fail(eventNotFound("ingested event could not be loaded"))
+
+    if (stored.id !== command.eventId) {
+      yield* db.run(
+        "event_aliases.insert",
+        `INSERT OR IGNORE INTO event_aliases (alias_id, event_id, created_at)
+         VALUES (?, ?, ?)`,
+        [command.eventId, stored.id, command.acceptedAt]
+      )
+    }
 
     yield* publishPendingPushJobs(stored.id)
   }).pipe(Effect.withSpan("EventIngestion.process", { attributes: { eventId: command.eventId } }))
@@ -558,7 +575,7 @@ export const eventDeliveries = (
 ): Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
-    yield* getEvent(eventId)
+    const event = yield* getEvent(eventId)
     return yield* db.all<DeliveryRow>(
       "deliveries.list_for_event",
       `SELECT
@@ -574,7 +591,7 @@ export const eventDeliveries = (
        LEFT JOIN push_subscriptions s ON s.id = d.subscription_id
        WHERE d.event_id = ?
        ORDER BY d.attempted_at DESC`,
-      [eventId]
+      [event.id]
     )
   })
 
@@ -584,9 +601,10 @@ export const unsilenceEvent = (
   Effect.gen(function*() {
     const db = yield* Database
     const current = yield* getEvent(eventId)
+    const resolvedEventId = current.id
     if (!current.silenced) {
-      yield* publishPendingPushJobs(eventId)
-      return { event: current, deliveries: yield* eventDeliveries(eventId) }
+      yield* publishPendingPushJobs(resolvedEventId)
+      return { event: current, deliveries: yield* eventDeliveries(resolvedEventId) }
     }
 
     const subscriptions = yield* listEnabledSubscriptionRows
@@ -595,7 +613,7 @@ export const unsilenceEvent = (
       {
         name: "events.unsilence",
         sql: "UPDATE events SET silence_id = NULL WHERE id = ?",
-        params: [eventId]
+        params: [resolvedEventId]
       },
       ...subscriptions.map((subscription) => ({
         name: "push_jobs.upsert_pending",
@@ -605,14 +623,14 @@ export const unsilenceEvent = (
           ON CONFLICT(event_id, subscription_id) DO UPDATE SET
             state = 'pending', available_at = excluded.available_at, queued_at = NULL,
             lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
-        params: [eventId, subscription.id, now, now]
+        params: [resolvedEventId, subscription.id, now, now]
       }))
     ])
 
-    yield* publishPendingPushJobs(eventId)
+    yield* publishPendingPushJobs(resolvedEventId)
 
     return {
-      event: yield* getEvent(eventId),
-      deliveries: yield* eventDeliveries(eventId)
+      event: yield* getEvent(resolvedEventId),
+      deliveries: yield* eventDeliveries(resolvedEventId)
     }
   })
