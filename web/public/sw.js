@@ -1,4 +1,4 @@
-const CACHE = "ops-context-v1"
+const CACHE = "ops-context-v2"
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 
 self.addEventListener("install", (event) => {
@@ -16,7 +16,12 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request
   const url = new URL(request.url)
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return
+  if (
+    request.method !== "GET" ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/mcp"
+  ) return
 
   if (request.mode === "navigate") {
     event.respondWith(
@@ -45,7 +50,8 @@ self.addEventListener("push", (event) => {
     body: "Something happened in one of your systems.",
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",
-    data: { url: "/" }
+    data: { url: "/", actionUrls: {} },
+    actions: []
   }
 
   try {
@@ -60,18 +66,27 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close()
-  const target = new URL(event.notification.data?.url || "/", self.location.origin).href
-  event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
-      for (const client of clients) {
-        if ("focus" in client) {
-          if ("navigate" in client) await client.navigate(target)
-          return client.focus()
-        }
+  const data = event.notification.data || {}
+  const actionUrls = data.actionUrls && typeof data.actionUrls === "object" ? data.actionUrls : {}
+  const requested = event.action && typeof actionUrls[event.action] === "string"
+    ? actionUrls[event.action]
+    : data.url || "/"
+  const target = new URL(requested, self.location.origin)
+
+  event.waitUntil((async () => {
+    if (target.origin !== self.location.origin) {
+      return self.clients.openWindow(target.href)
+    }
+
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true })
+    for (const client of clients) {
+      if ("focus" in client) {
+        if ("navigate" in client) await client.navigate(target.href)
+        return client.focus()
       }
-      return self.clients.openWindow(target)
-    })
-  )
+    }
+    return self.clients.openWindow(target.href)
+  })())
 })
 
 self.addEventListener("pushsubscriptionchange", (event) => {
