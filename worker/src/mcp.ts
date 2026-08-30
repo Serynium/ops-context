@@ -1,5 +1,6 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server"
 import { Context, Effect, Layer } from "effect"
+import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
 import type { EventPage, ListEventsInput } from "./events.js"
@@ -11,12 +12,6 @@ import {
   SearchEventsArguments,
   type EventFilterArguments
 } from "./mcp-schemas.js"
-import {
-  AppConfig,
-  CredentialCrypto,
-  Database,
-  PasswordHasher
-} from "./services.js"
 import type { EventView } from "./types.js"
 
 const readOnlyAnnotations = {
@@ -107,34 +102,6 @@ const runEffect = async <A>(effect: Effect.Effect<A, ApiFailure>): Promise<A> =>
   }
 }
 
-const parseCookies = (request: Request): Readonly<Record<string, string>> => {
-  const cookies: Record<string, string> = {}
-  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
-    const separator = part.indexOf("=")
-    if (separator < 1) continue
-    const key = part.slice(0, separator).trim()
-    const raw = part.slice(separator + 1).trim()
-    try {
-      cookies[key] = decodeURIComponent(raw)
-    } catch {
-      cookies[key] = raw
-    }
-  }
-  return cookies
-}
-
-const parseBasic = (header: string): { readonly username: string; readonly password: string } | undefined => {
-  try {
-    const decoded = atob(header.slice("Basic ".length))
-    const separator = decoded.indexOf(":")
-    return separator < 0
-      ? undefined
-      : { username: decoded.slice(0, separator), password: decoded.slice(separator + 1) }
-  } catch {
-    return undefined
-  }
-}
-
 const secureResponse = (response: Response): Response => {
   const headers = new Headers(response.headers)
   headers.set("cache-control", "no-store")
@@ -147,6 +114,14 @@ const secureResponse = (response: Response): Response => {
   })
 }
 
+const accessFailureResponse = (failure: ApiFailure): Response => {
+  const status = failure._tag === "ForbiddenError" ? 403 : 401
+  return secureResponse(Response.json(
+    { error: failure.error, message: failure.message },
+    { status }
+  ))
+}
+
 export class McpEndpoint extends Context.Service<McpEndpoint, {
   readonly handle: (request: Request) => Effect.Effect<Response>
 }>()("ops-context/McpEndpoint") {
@@ -156,10 +131,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       const projects = yield* Projects
       const events = yield* Events
       const settings = yield* Settings
-      const config = yield* AppConfig
-      const database = yield* Database
-      const credentials = yield* CredentialCrypto
-      const passwordHasher = yield* PasswordHasher
+      const identity = yield* AdministratorIdentity
 
       const resolveProject = async (value: string | undefined) => {
         const selector = trimmed(value)
@@ -299,80 +271,13 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
         onerror: (error) => console.error("MCP protocol error", error)
       })
 
-      const hasAdminSession = Effect.fn("Mcp.hasAdminSession")(function*(request: Request) {
-        const token = parseCookies(request).ops_session
-        if (!token) return false
-        const tokenHash = yield* credentials.sha256Hex(token).pipe(Effect.catch(() => Effect.succeed("")))
-        if (!tokenHash) return false
-        const row = yield* database.first<{ readonly token_hash: string }>(
-          "SELECT token_hash FROM admin_sessions WHERE token_hash = ? AND expires_at > ?",
-          [tokenHash, new Date().toISOString()]
-        ).pipe(Effect.catch(() => Effect.succeed(null)))
-        return row !== null
-      })
-
-      const hasBasicCredentials = Effect.fn("Mcp.hasBasicCredentials")(function*(request: Request) {
-        const authorization = request.headers.get("authorization")
-        if (!authorization?.startsWith("Basic ")) return false
-        const parsed = parseBasic(authorization)
-        if (!parsed || parsed.username !== config.adminUser) return false
-        return yield* passwordHasher.verify(parsed.password, config.adminPasswordHash).pipe(
-          Effect.catch(() => Effect.succeed(false))
+      const authorize = (request: Request) =>
+        identity.authenticateRequest(request, "mcp").pipe(
+          Effect.map((principal) => ({ ok: true as const, principal })),
+          Effect.catch((failure: ApiFailure) =>
+            Effect.succeed({ ok: false as const, response: accessFailureResponse(failure) })
+          )
         )
-      })
-
-      const bearerDecision = Effect.fn("Mcp.bearerDecision")(function*(request: Request) {
-        const authorization = request.headers.get("authorization")
-        if (!authorization?.startsWith("Bearer ")) return "none" as const
-        const presented = authorization.slice("Bearer ".length).trim()
-        if (!presented) return "invalid" as const
-
-        if (config.mcpToken && config.mcpToken.length >= 16) {
-          const [presentedHash, configuredHash] = yield* Effect.all([
-            credentials.sha256Hex(presented),
-            credentials.sha256Hex(config.mcpToken)
-          ]).pipe(Effect.catch(() => Effect.succeed(["", ""] as const)))
-          if (presentedHash && presentedHash === configuredHash) return "mcp" as const
-        }
-
-        const projectKey = yield* projects.authenticate(presented).pipe(
-          Effect.as(true),
-          Effect.catch(() => Effect.succeed(false))
-        )
-        return projectKey ? "project-key" as const : "invalid" as const
-      })
-
-      const authorize = Effect.fn("Mcp.authorize")(function*(request: Request) {
-        const bearer = yield* bearerDecision(request)
-        if (bearer === "mcp") return { ok: true as const, clientId: "mcp-token" }
-        if (bearer === "project-key") {
-          return {
-            ok: false as const,
-            response: secureResponse(Response.json(
-              { error: "forbidden", message: "project API keys cannot access MCP" },
-              { status: 403 }
-            ))
-          }
-        }
-        if (bearer === "invalid") {
-          return {
-            ok: false as const,
-            response: secureResponse(Response.json(
-              { error: "unauthorized", message: "invalid MCP bearer token" },
-              { status: 401 }
-            ))
-          }
-        }
-        if (yield* hasAdminSession(request)) return { ok: true as const, clientId: "admin-session" }
-        if (yield* hasBasicCredentials(request)) return { ok: true as const, clientId: "admin-basic" }
-        return {
-          ok: false as const,
-          response: secureResponse(Response.json(
-            { error: "unauthorized", message: "MCP authentication is required" },
-            { status: 401 }
-          ))
-        }
-      })
 
       const handle = (request: Request): Effect.Effect<Response> =>
         Effect.gen(function*() {
@@ -388,6 +293,12 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             return secureResponse(Response.json(
               { error: "not_found", message: "MCP is disabled" },
               { status: 404 }
+            ))
+          }
+          if (!currentSettings.mcp_access_configured) {
+            return secureResponse(Response.json(
+              { error: "service_unavailable", message: "MCP Cloudflare Access is not configured" },
+              { status: 503 }
             ))
           }
 
@@ -407,8 +318,8 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
           return yield* Effect.tryPromise({
             try: async () => secureResponse(await handler.fetch(request, {
               authInfo: {
-                token: "validated-by-ops-context",
-                clientId: access.clientId,
+                token: "cloudflare-access",
+                clientId: access.principal.subject,
                 scopes: ["events:read"]
               }
             })),
