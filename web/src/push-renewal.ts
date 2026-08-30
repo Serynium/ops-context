@@ -1,6 +1,9 @@
 export interface PushRenewalCredential {
-  readonly installation_id: string
-  readonly credential: string
+  readonly installation_id?: string
+  readonly credential?: string
+  readonly enrollment_key?: string
+  readonly pending?: boolean
+  readonly revoked?: boolean
 }
 
 const DATABASE_NAME = "ops-context-pwa"
@@ -17,15 +20,57 @@ const openDatabase = (): Promise<IDBDatabase> =>
     request.onerror = () => reject(request.error ?? new Error("could not open push credential storage"))
   })
 
-export const storePushRenewalCredential = async (value: PushRenewalCredential): Promise<void> => {
+const randomEnrollmentKey = (): string => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  let binary = ""
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return `ops_enroll_${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "")}`
+}
+
+export const beginPushEnrollment = async (force: boolean): Promise<string> => {
+  const database = await openDatabase()
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readwrite")
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.get(RECORD_KEY)
+      let enrollmentKey = ""
+      request.onsuccess = () => {
+        const current = request.result as PushRenewalCredential | undefined
+        if (current?.enrollment_key && (!force || current.pending)) {
+          enrollmentKey = current.enrollment_key
+          return
+        }
+        enrollmentKey = randomEnrollmentKey()
+        store.put({ enrollment_key: enrollmentKey, pending: true }, RECORD_KEY)
+      }
+      transaction.oncomplete = () => resolve(enrollmentKey)
+      transaction.onerror = () => reject(transaction.error ?? new Error("could not store push credential"))
+      transaction.onabort = () => reject(transaction.error ?? new Error("push credential storage was aborted"))
+    })
+  } finally {
+    database.close()
+  }
+}
+
+export const completePushEnrollment = async (
+  enrollmentKey: string,
+  value: Omit<PushRenewalCredential, "enrollment_key" | "pending" | "revoked">
+): Promise<void> => {
   const database = await openDatabase()
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite")
-      transaction.objectStore(STORE_NAME).put(value, RECORD_KEY)
+      const store = transaction.objectStore(STORE_NAME)
+      const request = store.get(RECORD_KEY)
+      request.onsuccess = () => {
+        const current = request.result as PushRenewalCredential | undefined
+        if (current?.enrollment_key === enrollmentKey) {
+          store.put({ ...value, enrollment_key: enrollmentKey }, RECORD_KEY)
+        }
+      }
       transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error ?? new Error("could not store push credential"))
-      transaction.onabort = () => reject(transaction.error ?? new Error("push credential storage was aborted"))
+      transaction.onerror = () => reject(transaction.error ?? new Error("could not complete push enrollment"))
     })
   } finally {
     database.close()
@@ -45,14 +90,14 @@ export const readPushRenewalCredential = async (): Promise<PushRenewalCredential
   }
 }
 
-export const clearPushRenewalCredential = async (installationId: string): Promise<void> => {
+export const revokePushRenewalCredential = async (installationId: string): Promise<void> => {
   const current = await readPushRenewalCredential()
   if (current?.installation_id !== installationId) return
   const database = await openDatabase()
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite")
-      transaction.objectStore(STORE_NAME).delete(RECORD_KEY)
+      transaction.objectStore(STORE_NAME).put({ installation_id: installationId, revoked: true }, RECORD_KEY)
       transaction.oncomplete = () => resolve()
       transaction.onerror = () => reject(transaction.error ?? new Error("could not clear push credential"))
     })

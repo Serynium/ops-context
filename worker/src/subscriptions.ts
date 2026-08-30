@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { conflict, invalid, notFound, unauthorized, type AppError } from "./errors.js"
-import { randomToken, sha256Hex } from "./crypto.js"
+import { sha256Hex } from "./crypto.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database } from "./services.js"
 import type { PushSubscriptionRow, PushSubscriptionView } from "./types.js"
@@ -16,6 +16,7 @@ export interface BrowserPushSubscription {
 
 export interface RegisterSubscriptionInput {
   readonly name?: string | undefined
+  readonly enrollment_key: string
   readonly subscription: BrowserPushSubscription
 }
 
@@ -61,11 +62,6 @@ const validateSubscription = (subscription: BrowserPushSubscription): void => {
     throw invalid("subscription encryption keys are missing")
   }
 }
-
-const issueRenewalCredential = Effect.gen(function*() {
-  const credential = `${RENEWAL_CREDENTIAL_PREFIX}${yield* randomToken(32)}`
-  return { credential, hash: yield* sha256Hex(credential) }
-})
 
 const deriveRenewalCredential = (
   credential: string,
@@ -120,7 +116,11 @@ export const registerSubscription = (
     )
     const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
-    const renewal = yield* issueRenewalCredential
+    if (!input.enrollment_key.startsWith("ops_enroll_") || input.enrollment_key.length < 54) {
+      return yield* Effect.fail(invalid("a high-entropy PWA enrollment key is required"))
+    }
+    const credential = yield* deriveRenewalCredential(input.enrollment_key, id, input.subscription.endpoint)
+    const credentialHash = yield* sha256Hex(credential)
 
     yield* db.run(
       `INSERT INTO push_subscriptions
@@ -147,7 +147,7 @@ export const registerSubscription = (
         input.subscription.keys.auth,
         userAgent.slice(0, 512),
         now,
-        renewal.hash,
+        credentialHash,
         now,
         existing?.created_at ?? now,
         now
@@ -159,7 +159,7 @@ export const registerSubscription = (
       [input.subscription.endpoint]
     )
     if (!row) return yield* Effect.fail(notFound("push subscription could not be saved"))
-    return { subscription: toSubscriptionView(row), renewal_credential: renewal.credential }
+    return { subscription: toSubscriptionView(row), renewal_credential: credential }
   })
 
 export const renewSubscription = (

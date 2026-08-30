@@ -11,9 +11,10 @@ import {
   type Silence
 } from "./api.js"
 import {
-  clearPushRenewalCredential,
+  beginPushEnrollment,
+  completePushEnrollment,
   readPushRenewalCredential,
-  storePushRenewalCredential
+  revokePushRenewalCredential
 } from "./push-renewal.js"
 
 type View = "inbox" | "projects" | "push" | "silences" | "settings"
@@ -607,8 +608,9 @@ const enablePush = async (): Promise<void> => {
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToBytes(public_key)
   })
-  const enrollment = await api.registerPush(defaultDeviceName(), subscription.toJSON())
-  await storePushRenewalCredential({
+  const enrollmentKey = await beginPushEnrollment(true)
+  const enrollment = await api.registerPush(defaultDeviceName(), enrollmentKey, subscription.toJSON())
+  await completePushEnrollment(enrollmentKey, {
     installation_id: enrollment.subscription.id,
     credential: enrollment.renewal_credential
   })
@@ -620,10 +622,12 @@ const provisionExistingPushCredential = async (): Promise<void> => {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return
   const registration = await navigator.serviceWorker.ready
   const subscription = await registration.pushManager.getSubscription()
-  if (!subscription || await readPushRenewalCredential()) return
+  const current = await readPushRenewalCredential()
+  if (!subscription || current?.credential || current?.revoked) return
 
-  const enrollment = await api.registerPush(defaultDeviceName(), subscription.toJSON())
-  await storePushRenewalCredential({
+  const enrollmentKey = await beginPushEnrollment(false)
+  const enrollment = await api.registerPush(defaultDeviceName(), enrollmentKey, subscription.toJSON())
+  await completePushEnrollment(enrollmentKey, {
     installation_id: enrollment.subscription.id,
     credential: enrollment.renewal_credential
   })
@@ -673,10 +677,10 @@ const renderPush = async (): Promise<void> => {
         } else if (button.dataset.pushAction === "toggle") {
           const enabled = button.dataset.pushEnabled !== "true"
           await api.updatePush(id, { enabled })
-          if (!enabled) await clearPushRenewalCredential(id)
+          if (!enabled) await revokePushRenewalCredential(id)
         } else if (button.dataset.pushAction === "delete" && window.confirm("Remove this push subscription?")) {
           await api.deletePush(id)
-          await clearPushRenewalCredential(id)
+          await revokePushRenewalCredential(id)
         }
         await renderPush()
       } catch (cause) { notify(errorMessage(cause)) }
@@ -869,7 +873,10 @@ const boot = async (): Promise<void> => {
     await navigator.serviceWorker.register("/sw.js", { scope: "/" })
     const registration = await navigator.serviceWorker.ready
     const subscription = await registration.pushManager?.getSubscription()
-    if (subscription && Notification.permission === "granted") pushButton.textContent = "Push enabled"
+    const renewal = await readPushRenewalCredential()
+    if (subscription && renewal?.credential && Notification.permission === "granted") {
+      pushButton.textContent = "Push enabled"
+    }
   }
 
   const view = new URL(location.href).searchParams.get("view")

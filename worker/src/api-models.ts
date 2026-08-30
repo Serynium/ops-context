@@ -205,6 +205,7 @@ export const BrowserPushSubscription = Schema.Struct({
 
 export const RegisterSubscriptionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
+  enrollment_key: Schema.String,
   subscription: BrowserPushSubscription
 })
 

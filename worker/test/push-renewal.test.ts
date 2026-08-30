@@ -66,14 +66,24 @@ describe.sequential("installation-scoped push renewal credentials", () => {
   })
 
   it("returns a one-time credential at enrollment while storing only its hash", async () => {
-    const result = await Effect.runPromise(
-      registerSubscription(
-        { name: "Enrollment", subscription: subscription("https://push.example.test/enrollment") },
-        "test agent"
-      ).pipe(Effect.provide(Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)))
+    const enrollmentKey = `ops_enroll_${"z".repeat(43)}`
+    const input = {
+      name: "Enrollment",
+      enrollment_key: enrollmentKey,
+      subscription: subscription("https://push.example.test/enrollment")
+    }
+    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const enroll = () => Effect.runPromise(
+      registerSubscription(input, "test agent").pipe(Effect.provide(layer))
     )
+    const result = await enroll()
+    const duplicate = await enroll()
 
     expect(result.renewal_credential).toMatch(/^ops_pwa_[A-Za-z0-9_-]{40,}$/u)
+    expect(duplicate).toMatchObject({
+      subscription: { id: result.subscription.id },
+      renewal_credential: result.renewal_credential
+    })
     const row = await env.DB.prepare(
       "SELECT renewal_credential_hash FROM push_subscriptions WHERE id = ?"
     ).bind(result.subscription.id).first<{ readonly renewal_credential_hash: string }>()

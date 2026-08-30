@@ -72,8 +72,11 @@ const renewSubscription = async (subscription) => {
         throw new Error("push renewal returned an invalid credential response")
       }
       await storeRenewalCredential({
+        ...renewal,
         installation_id: result.subscription.id,
-        credential: result.renewal_credential
+        credential: result.renewal_credential,
+        pending: false,
+        revoked: false
       })
       return
     } catch (cause) {
