@@ -59,6 +59,18 @@ const eventPayloadLimitResponse = (): Response =>
     `event request body must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes`
   )
 
+const cancelRequestBody = async (
+  body: ReadableStream<Uint8Array> | null,
+  reason: string
+): Promise<void> => {
+  if (body === null) return
+  try {
+    await body.cancel(reason)
+  } catch {
+    // The peer may already have closed or errored the request stream.
+  }
+}
+
 const eventRequestExceedsLimit = async (
   request: Request,
   pathname: string
@@ -69,14 +81,36 @@ const eventRequestExceedsLimit = async (
   if (contentLength !== null) {
     const declaredBytes = Number(contentLength)
     if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_PAYLOAD_MAX_BYTES) {
+      await cancelRequestBody(request.body, "event request body too large")
       return true
     }
   }
 
-  // The application limit is deliberately small. Reading a clone here ensures
-  // chunked requests cannot bypass the limit while leaving the original body
-  // available for Effect HttpApi decoding.
-  return (await request.clone().arrayBuffer()).byteLength > EVENT_PAYLOAD_MAX_BYTES
+  // Probe a tee of the request incrementally. The untouched branch remains
+  // available to Effect HttpApi when the body is valid. On overflow, cancel
+  // both branches so the isolate never consumes the rest of an untrusted body.
+  const probe = request.clone()
+  const reader = probe.body?.getReader()
+  if (reader === undefined) return false
+
+  let receivedBytes = 0
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) return false
+
+      receivedBytes += chunk.value.byteLength
+      if (receivedBytes <= EVENT_PAYLOAD_MAX_BYTES) continue
+
+      await Promise.allSettled([
+        reader.cancel("event request body too large"),
+        cancelRequestBody(request.body, "event request body too large")
+      ])
+      return true
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 export default {
