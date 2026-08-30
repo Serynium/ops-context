@@ -47,9 +47,12 @@
   },
 
   "vars": {
-    "OPS_ADMIN_USER": "admin",
     "OPS_RETENTION_DAYS": "90",
     "OPS_PUSH_MAX_ATTEMPTS": "6",
-    "OPS_BASE_URL": "https://ops.example.com"
+    "OPS_BASE_URL": "https://ops.example.com",
+    "OPS_APP_HOST": "ops.example.com",
+    "OPS_ACCESS_APP_AUD": "test-app-audience",
+    "OPS_MCP_HOST": "mcp.ops.example.com",
+    "OPS_ACCESS_MCP_AUD": "test-mcp-audience"
   }
 }
