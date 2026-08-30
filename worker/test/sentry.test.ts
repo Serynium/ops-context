@@ -39,7 +39,9 @@ const envelope = (
 const gzip = async (body: Uint8Array): Promise<ArrayBuffer> => {
   const input = new ReadableStream<BufferSource>({
     start(controller) {
-      controller.enqueue(body)
+      const buffer = new ArrayBuffer(body.byteLength)
+      new Uint8Array(buffer).set(body)
+      controller.enqueue(buffer)
       controller.close()
     }
   })
