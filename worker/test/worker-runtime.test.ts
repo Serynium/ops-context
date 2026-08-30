@@ -35,6 +35,21 @@ describe("Cloudflare Worker runtime", () => {
     await expect(response.json()).resolves.toEqual({ status: "ok" })
   })
 
+  it("rejects event request bodies above the application limit before authentication", async () => {
+    const request = new Request("https://ops.example.com/api/v1/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Oversized", body: "x".repeat(256 * 1_024) })
+    }) as Parameters<typeof worker.fetch>[0]
+
+    const response = await worker.fetch(request, env)
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toEqual({
+      error: "payload_too_large",
+      message: "event request body must not exceed 262144 bytes"
+    })
+  })
+
   it("acknowledges a Queue message whose durable job no longer exists", async () => {
     const batch = createMessageBatch<PushJobMessage>("ops-context-push", [
       {

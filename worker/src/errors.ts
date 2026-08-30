@@ -1,3 +1,8 @@
+export interface ValidationIssue {
+  readonly path: ReadonlyArray<string | number>
+  readonly message: string
+}
+
 export interface AppError {
   readonly _tag: "AppError"
   readonly status: number
@@ -36,3 +41,15 @@ export const internal = (message: string, cause?: unknown): AppError =>
 
 export const isAppError = (value: unknown): value is AppError =>
   typeof value === "object" && value !== null && (value as { _tag?: unknown })._tag === "AppError"
+
+export const validationIssuesFromCause = (
+  cause: unknown
+): ReadonlyArray<ValidationIssue> | undefined => {
+  if (!Array.isArray(cause)) return undefined
+  const issues = cause.filter((value): value is ValidationIssue =>
+    typeof value === "object" && value !== null &&
+    Array.isArray((value as { readonly path?: unknown }).path) &&
+    typeof (value as { readonly message?: unknown }).message === "string"
+  )
+  return issues.length === cause.length ? issues : undefined
+}

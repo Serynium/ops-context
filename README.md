@@ -193,6 +193,8 @@ Levels are `info`, `success`, `warning`, `error`, and `critical`.
 
 Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
+The raw event body is limited to **256 KiB**. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
+
 ### Sentry SDKs — drop-in DSN
 
 Ops Context accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Set the SDK DSN to the Ops Context origin and use a project API key as the DSN public key:

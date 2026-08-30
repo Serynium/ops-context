@@ -1,6 +1,7 @@
 import { Effect, ManagedRuntime } from "effect"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { Maintenance, PushDelivery } from "./application.js"
+import { EVENT_PAYLOAD_MAX_BYTES } from "./event-contract.js"
 import { makeLayers } from "./layers.js"
 import { McpEndpoint } from "./mcp.js"
 import { isSentryEnvelopePath, SentryEndpoint } from "./sentry.js"
@@ -34,18 +35,49 @@ const runtimeFor = (env: Env): IsolateRuntime => {
   return next
 }
 
-const internalResponse = (): Response =>
-  new Response(
-    JSON.stringify({ error: "internal", message: "something went wrong" }),
-    {
-      status: 500,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff"
-      }
+const jsonErrorResponse = (
+  status: number,
+  error: string,
+  message: string
+): Response =>
+  new Response(JSON.stringify({ error, message }), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
     }
+  })
+
+const internalResponse = (): Response =>
+  jsonErrorResponse(500, "internal", "something went wrong")
+
+const eventPayloadLimitResponse = (): Response =>
+  jsonErrorResponse(
+    413,
+    "payload_too_large",
+    `event request body must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes`
   )
+
+const eventRequestExceedsLimit = async (
+  request: Request,
+  pathname: string
+): Promise<boolean> => {
+  if (request.method !== "POST" || pathname !== "/api/v1/events") return false
+
+  const contentLength = request.headers.get("content-length")
+  if (contentLength !== null) {
+    const declaredBytes = Number(contentLength)
+    if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_PAYLOAD_MAX_BYTES) {
+      return true
+    }
+  }
+
+  // The application limit is deliberately small. Reading a clone here ensures
+  // chunked requests cannot bypass the limit while leaving the original body
+  // available for Effect HttpApi decoding.
+  return (await request.clone().arrayBuffer()).byteLength > EVENT_PAYLOAD_MAX_BYTES
+}
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -72,6 +104,9 @@ export default {
     }
     if (pathname === "/health" || pathname.startsWith("/api/")) {
       try {
+        if (await eventRequestExceedsLimit(request, pathname)) {
+          return eventPayloadLimitResponse()
+        }
         return await runtimeFor(env).http.handler(request)
       } catch (cause) {
         console.error("unhandled API defect", cause)

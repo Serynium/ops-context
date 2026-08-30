@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { decodeCreateEventInput, type CreateEventInput } from "./event-contract.js"
 import { invalid, notFound, type AppError } from "./errors.js"
 import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
@@ -20,29 +21,14 @@ import type {
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
-const forbiddenActionProtocols = new Set(["javascript:", "data:", "file:"])
 const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u
 
-export interface CreateEventInput {
-  readonly external_id?: string | undefined
-  readonly source?: string | undefined
-  readonly type?: string | undefined
-  readonly level?: Level | undefined
-  readonly title: string
-  readonly body?: string | undefined
-  readonly fingerprint?: string | undefined
-  readonly occurred_at?: string | undefined
-  readonly data?: unknown | undefined
-  readonly actions?: ReadonlyArray<EventAction> | undefined
-}
+export type { CreateEventInput } from "./event-contract.js"
 
 export interface EventPage {
   readonly events: ReadonlyArray<EventView>
   readonly next_cursor?: string | undefined
 }
-
-const truncate = (value: unknown, max: number): string =>
-  typeof value === "string" ? value.trim().slice(0, max) : ""
 
 const parsePayload = (value: string): Record<string, unknown> => {
   try {
@@ -67,35 +53,6 @@ const parseActions = (value: string): ReadonlyArray<EventAction> => {
   } catch {
     return []
   }
-}
-
-export const normalizeEventActions = (value: unknown): ReadonlyArray<EventAction> => {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) throw invalid("actions must be an array")
-  if (value.length > 3) throw invalid("actions may contain at most 3 items")
-
-  return value.map((item, index) => {
-    if (!isStoredAction(item)) throw invalid(`action ${index + 1} must contain label and url strings`)
-    const label = item.label.trim()
-    const url = item.url.trim()
-    if (label.length === 0 || label.length > 40) {
-      throw invalid(`action ${index + 1} label must contain 1 to 40 characters`)
-    }
-    if (url.length === 0 || url.length > 2_048) {
-      throw invalid(`action ${index + 1} URL must contain 1 to 2048 characters`)
-    }
-
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      throw invalid(`action ${index + 1} URL must be absolute`)
-    }
-    if (forbiddenActionProtocols.has(parsed.protocol.toLowerCase())) {
-      throw invalid(`action ${index + 1} URL protocol is not allowed`)
-    }
-    return { label, url: parsed.href }
-  })
 }
 
 export const toEventView = (row: EventRow): EventView => ({
@@ -162,33 +119,6 @@ export const getEvent = (id: string): Effect.Effect<EventView, AppError, Databas
     return toEventView(row)
   })
 
-const parseOccurredAt = (value: string | undefined, fallback: string): string => {
-  if (!value) return fallback
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
-}
-
-const normalizeInput = (input: CreateEventInput, createdAt: string): CreateEventInput => {
-  const title = truncate(input.title, 240)
-  if (!title) throw invalid("event title is required")
-  const level = input.level ?? "info"
-  if (!isLevel(level)) throw invalid("event level is invalid")
-
-  const externalId = truncate(input.external_id, 500)
-  return {
-    title,
-    body: truncate(input.body, 8_000),
-    level,
-    source: truncate(input.source, 160),
-    type: truncate(input.type, 160),
-    fingerprint: truncate(input.fingerprint, 500),
-    ...(externalId ? { external_id: externalId } : {}),
-    occurred_at: parseOccurredAt(input.occurred_at, createdAt),
-    ...(input.data === undefined ? {} : { data: input.data }),
-    actions: normalizeEventActions(input.actions)
-  }
-}
-
 export const createEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
@@ -197,13 +127,7 @@ export const createEventForProject = (
     const db = yield* Database
     const queue = yield* PushQueue
     const createdAt = nowIso()
-    const normalized = yield* Effect.try({
-      try: () => normalizeInput(input, createdAt),
-      catch: (cause) =>
-        typeof cause === "object" && cause !== null && (cause as { _tag?: unknown })._tag === "AppError"
-          ? (cause as AppError)
-          : invalid("event payload is invalid")
-    })
+    const normalized = yield* decodeCreateEventInput(input)
 
     if (normalized.external_id) {
       const existing = yield* db.first<{ readonly id: string }>(

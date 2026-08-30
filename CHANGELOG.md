@@ -6,6 +6,9 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- Strict Effect Schema event ingestion with field-level validation issues, calendar-valid RFC 3339 timestamps, HTTP(S)-only actions, bounded structured context, and a 256 KiB raw request limit.
+- Event-ingestion contract documentation and Workers-runtime coverage for oversized bodies.
+
 - Bounded Web Push delivery attempts with explicit `retrying`, `sent`, and terminal `dead` job states. Queue delayed retry is the ordinary retry authority, while the dead-letter Queue records an operator-visible terminal outcome.
 - Workers-runtime reliability tests covering duplicate Queue delivery, lease reclamation, retry exhaustion, delayed-retry/Cron separation, unpublished-job recovery, and DLQ handling.
 - Administrator status now reports the number of terminal `dead_jobs`.
@@ -14,6 +17,8 @@ All notable changes to Ops Context are recorded here.
 - Sentry SDK ingestion through `POST /api/{id}/envelope/`. Server-side Sentry clients can use an Ops Context project API key as the DSN public key; exception and message events reuse the existing redaction, silence, grouping, D1, durable push-job, and Queue delivery pipeline. Gzip and deflate envelopes, Sentry fingerprints, curated event context, and non-error item ignoring are supported.
 
 ### Changed
+
+- Event fields are rejected instead of silently truncated, and invalid `occurred_at` values no longer fall back to the server timestamp. The same contract is enforced by the HTTP boundary and application service.
 
 - Push retry scheduling is bounded by `OPS_PUSH_MAX_ATTEMPTS` (default `6`). Cron reconciliation no longer republishes normal delayed retries or terminal jobs. Delivery-state updates and attempt history are finalized atomically through D1 batches.
 
