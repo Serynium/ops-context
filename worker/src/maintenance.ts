@@ -11,7 +11,6 @@ interface RecoverableJob {
 }
 
 export interface MaintenanceResult {
-  readonly expiredSessions: number
   readonly prunedEvents: number
   readonly recoveredJobs: number
 }
@@ -24,8 +23,6 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, AppError, Database
     const db = yield* Database
     const queue = yield* PushQueue
     const now = nowIso()
-
-    const sessions = yield* db.run("DELETE FROM admin_sessions WHERE expires_at <= ?", [now])
     const settings = yield* getSettings
 
     let prunedEvents = 0
@@ -75,7 +72,6 @@ export const runMaintenance: Effect.Effect<MaintenanceResult, AppError, Database
     }
 
     return {
-      expiredSessions: changes(sessions),
       prunedEvents,
       recoveredJobs: messages.length
     }
