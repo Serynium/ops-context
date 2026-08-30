@@ -223,6 +223,17 @@ describe("Queue-first event ingestion", () => {
     })
   })
 
+  it("rejects tagged delivery commands with an unsupported version", async () => {
+    const result = await Effect.runPromise(decodeQueueCommand({
+      _tag: "DeliverPush",
+      version: 2,
+      eventId: "evt_future",
+      subscriptionId: "sub_future"
+    }).pipe(Effect.result))
+
+    expect(Result.isFailure(result)).toBe(true)
+  })
+
   it("recovers a consumer failure after D1 commit without retention or repair Cron", async () => {
     let calls = 0
     const firstLayer = ingestionLayer((message) => {

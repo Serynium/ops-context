@@ -14,7 +14,14 @@ SET state = 'dead',
     dead_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
     last_error = 'terminalized during Queue-first ingestion migration; delivery was not durably queued',
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-WHERE state IN ('pending', 'sending');
+WHERE state = 'pending'
+   OR (
+     state = 'sending'
+     AND (
+       lease_until IS NULL
+       OR lease_until < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     )
+   );
 
 CREATE TABLE ingestion_failures (
   event_id    TEXT PRIMARY KEY,
