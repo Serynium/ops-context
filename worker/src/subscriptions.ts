@@ -25,6 +25,7 @@ export interface SubscriptionCredentialResult {
 }
 
 const RENEWAL_CREDENTIAL_PREFIX = "ops_pwa_"
+const RENEWAL_RETRY_GRACE_MS = 5 * 60 * 1_000
 
 const endpointHost = (endpoint: string): string => {
   try {
@@ -65,6 +66,16 @@ const issueRenewalCredential = Effect.gen(function*() {
   const credential = `${RENEWAL_CREDENTIAL_PREFIX}${yield* randomToken(32)}`
   return { credential, hash: yield* sha256Hex(credential) }
 })
+
+const deriveRenewalCredential = (
+  credential: string,
+  id: string,
+  endpoint: string
+): Effect.Effect<string, AppError, CredentialCrypto> =>
+  Effect.map(
+    sha256Hex(`${credential}\u0000${id}\u0000${endpoint}`),
+    (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
+  )
 
 export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, AppError, Database> =
   Effect.gen(function*() {
@@ -125,6 +136,8 @@ export const registerSubscription = (
          last_seen_at = excluded.last_seen_at,
          renewal_credential_hash = excluded.renewal_credential_hash,
          renewal_credential_issued_at = excluded.renewal_credential_issued_at,
+         previous_renewal_credential_hash = NULL,
+         previous_renewal_credential_valid_until = NULL,
          updated_at = excluded.updated_at`,
       [
         id,
@@ -168,6 +181,38 @@ export const renewSubscription = (
       return yield* Effect.fail(unauthorized("invalid push renewal credential"))
     }
 
+    const current = yield* db.first<PushSubscriptionRow>(
+      "SELECT * FROM push_subscriptions WHERE id = ?",
+      [id]
+    )
+    if (!current || current.enabled !== 1) {
+      return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+    }
+
+    const credentialHash = yield* sha256Hex(credential)
+    const now = nowIso()
+
+    if (
+      current.previous_renewal_credential_hash === credentialHash &&
+      current.previous_renewal_credential_valid_until !== null &&
+      current.previous_renewal_credential_valid_until >= now &&
+      current.endpoint === subscription.endpoint
+    ) {
+      const retryCredential = yield* deriveRenewalCredential(credential, id, subscription.endpoint)
+      const retryHash = yield* sha256Hex(retryCredential)
+      if (current.renewal_credential_hash !== retryHash) {
+        return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+      }
+      return {
+        subscription: toSubscriptionView(current),
+        renewal_credential: retryCredential
+      }
+    }
+
+    if (current.renewal_credential_hash !== credentialHash) {
+      return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+    }
+
     const endpointOwner = yield* db.first<{ readonly id: string }>(
       "SELECT id FROM push_subscriptions WHERE endpoint = ?",
       [subscription.endpoint]
@@ -176,12 +221,15 @@ export const renewSubscription = (
       return yield* Effect.fail(conflict("push endpoint belongs to another installation"))
     }
 
-    const credentialHash = yield* sha256Hex(credential)
-    const next = yield* issueRenewalCredential
-    const now = nowIso()
+    const nextCredential = yield* deriveRenewalCredential(credential, id, subscription.endpoint)
+    const nextHash = yield* sha256Hex(nextCredential)
+
+    const retryValidUntil = new Date(Date.now() + RENEWAL_RETRY_GRACE_MS).toISOString()
     const result = yield* db.run(
       `UPDATE push_subscriptions
        SET endpoint = ?, p256dh = ?, auth = ?, user_agent = ?, last_seen_at = ?,
+           previous_renewal_credential_hash = renewal_credential_hash,
+           previous_renewal_credential_valid_until = ?,
            renewal_credential_hash = ?, renewal_credential_issued_at = ?, updated_at = ?
        WHERE id = ? AND enabled = 1 AND renewal_credential_hash = ?`,
       [
@@ -190,7 +238,8 @@ export const renewSubscription = (
         subscription.keys.auth,
         userAgent.slice(0, 512),
         now,
-        next.hash,
+        retryValidUntil,
+        nextHash,
         now,
         now,
         id,
@@ -203,7 +252,7 @@ export const renewSubscription = (
 
     return {
       subscription: toSubscriptionView(yield* findSubscriptionRow(id)),
-      renewal_credential: next.credential
+      renewal_credential: nextCredential
     }
   })
 
@@ -217,14 +266,19 @@ export const updateSubscription = (
     const name = patch.name === undefined ? current.name : patch.name.trim().slice(0, 120)
     if (!name) return yield* Effect.fail(invalid("subscription name cannot be empty"))
     const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
+    if (current.enabled === 0 && enabled === 1) {
+      return yield* Effect.fail(invalid("disabled subscriptions must be re-enrolled from their installation"))
+    }
     yield* db.run(
       `UPDATE push_subscriptions
        SET name = ?, enabled = ?,
            renewal_credential_hash = CASE WHEN ? = 1 THEN renewal_credential_hash ELSE NULL END,
            renewal_credential_issued_at = CASE WHEN ? = 1 THEN renewal_credential_issued_at ELSE NULL END,
+           previous_renewal_credential_hash = CASE WHEN ? = 1 THEN previous_renewal_credential_hash ELSE NULL END,
+           previous_renewal_credential_valid_until = CASE WHEN ? = 1 THEN previous_renewal_credential_valid_until ELSE NULL END,
            updated_at = ?
        WHERE id = ?`,
-      [name, enabled, enabled, enabled, nowIso(), id]
+      [name, enabled, enabled, enabled, enabled, enabled, nowIso(), id]
     )
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })

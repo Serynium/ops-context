@@ -10,7 +10,11 @@ import {
   type PushDevice,
   type Silence
 } from "./api.js"
-import { clearPushRenewalCredential, storePushRenewalCredential } from "./push-renewal.js"
+import {
+  clearPushRenewalCredential,
+  readPushRenewalCredential,
+  storePushRenewalCredential
+} from "./push-renewal.js"
 
 type View = "inbox" | "projects" | "push" | "silences" | "settings"
 
@@ -612,6 +616,19 @@ const enablePush = async (): Promise<void> => {
   pushButton.textContent = "Push enabled"
 }
 
+const provisionExistingPushCredential = async (): Promise<void> => {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return
+  const registration = await navigator.serviceWorker.ready
+  const subscription = await registration.pushManager.getSubscription()
+  if (!subscription || await readPushRenewalCredential()) return
+
+  const enrollment = await api.registerPush(defaultDeviceName(), subscription.toJSON())
+  await storePushRenewalCredential({
+    installation_id: enrollment.subscription.id,
+    credential: enrollment.renewal_credential
+  })
+}
+
 const pushCard = (device: PushDevice): string => `
   <article class="card">
     <div class="card-head">
@@ -621,7 +638,9 @@ const pushCard = (device: PushDevice): string => `
     <p class="muted">${escapeHtml(device.user_agent || "Unknown browser")}</p>
     <div class="card-actions">
       <button class="button small ghost" data-push-action="rename" data-push-id="${escapeHtml(device.id)}" data-push-name="${escapeHtml(device.name)}">Rename</button>
-      <button class="button small secondary" data-push-action="toggle" data-push-id="${escapeHtml(device.id)}" data-push-enabled="${device.enabled}">${device.enabled ? "Disable" : "Enable"}</button>
+      ${device.enabled
+        ? `<button class="button small secondary" data-push-action="toggle" data-push-id="${escapeHtml(device.id)}" data-push-enabled="true">Disable</button>`
+        : '<span class="muted">Re-enroll from this device</span>'}
       <button class="button small danger" data-push-action="delete" data-push-id="${escapeHtml(device.id)}">Remove</button>
     </div>
   </article>`
@@ -859,7 +878,10 @@ const boot = async (): Promise<void> => {
   try {
     const me = await api.me()
     if (!me.authenticated) showLogin()
-    else await renderCurrentView()
+    else {
+      await provisionExistingPushCredential().catch((cause) => notify(errorMessage(cause)))
+      await renderCurrentView()
+    }
   } catch {
     showLogin()
   }

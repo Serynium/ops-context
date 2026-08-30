@@ -121,7 +121,10 @@ const finalizeDead = (
       statements.push({
         sql: `UPDATE push_subscriptions
               SET enabled = 0, renewal_credential_hash = NULL,
-                  renewal_credential_issued_at = NULL, updated_at = ?
+                  renewal_credential_issued_at = NULL,
+                  previous_renewal_credential_hash = NULL,
+                  previous_renewal_credential_valid_until = NULL,
+                  updated_at = ?
               WHERE id = ?`,
         params: [now, message.subscriptionId]
       })

@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import worker from "../src/index.js"
 import { CredentialCrypto, Database } from "../src/services.js"
-import { registerSubscription } from "../src/subscriptions.js"
+import { registerSubscription, updateSubscription } from "../src/subscriptions.js"
 
 const subscription = (endpoint: string) => ({
   endpoint,
@@ -106,6 +106,16 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     }>()
     expect(row?.endpoint).toBe("https://push.example.test/replacement")
     expect(row?.renewal_credential_hash).toBe(await sha256Hex(body.renewal_credential))
+
+    const retry = await renew(
+      "sub_renewal_valid",
+      credential,
+      "https://push.example.test/replacement"
+    )
+    expect(retry.status).toBe(200)
+    await expect(retry.json()).resolves.toMatchObject({
+      renewal_credential: body.renewal_credential
+    })
   })
 
   it("does not let a credential mutate another installation", async () => {
@@ -136,6 +146,33 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       "https://push.example.test/revoked-new"
     )
     expect(response.status).toBe(401)
+  })
+
+  it("requires re-enrollment instead of enabling a row with a revoked credential", async () => {
+    const credential = `ops_pwa_${"f".repeat(43)}`
+    await seed("sub_renewal_reenable", credential, "https://push.example.test/reenable")
+    const database = Database.layer(env.DB)
+
+    await Effect.runPromise(updateSubscription("sub_renewal_reenable", { enabled: false }).pipe(
+      Effect.provide(database)
+    ))
+    await expect(Effect.runPromise(updateSubscription("sub_renewal_reenable", { enabled: true }).pipe(
+      Effect.provide(database)
+    ))).rejects.toMatchObject({ status: 422 })
+
+    const row = await env.DB.prepare(
+      `SELECT enabled, renewal_credential_hash, previous_renewal_credential_hash
+       FROM push_subscriptions WHERE id = 'sub_renewal_reenable'`
+    ).first<{
+      readonly enabled: number
+      readonly renewal_credential_hash: string | null
+      readonly previous_renewal_credential_hash: string | null
+    }>()
+    expect(row).toMatchObject({
+      enabled: 0,
+      renewal_credential_hash: null,
+      previous_renewal_credential_hash: null
+    })
   })
 
   it("rejects replay after rotating the credential", async () => {
