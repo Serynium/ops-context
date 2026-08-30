@@ -123,9 +123,11 @@ describe("FTS5 event search", () => {
     expect(await searchIds("caf*")).toEqual(["evt_04", "evt_03"])
     expect(await searchIds('"deploy blue"')).toEqual(["evt_04"])
     expect(await searchIds("error-timeout")).toEqual(["evt_01"])
+    expect(await searchIds("error_timeout")).toEqual(["evt_01"])
     expect(await searchIds("afe")).toEqual([])
     expect(await searchIds('alpha" OR cafeteria')).toEqual([])
     expect(compileEventSearchQuery("error-timeout")).toBe('"error" AND "timeout"')
+    expect(compileEventSearchQuery("error_timeout")).toBe('"error" AND "timeout"')
     expect(compileEventSearchQuery("error-time*")).toBe('"error" AND "time"*')
     expect(compileEventSearchQuery('alpha" OR cafeteria')).toBe('"alpha" AND "OR" AND "cafeteria"')
     await expect(run(listEvents({ search: '"unterminated' }))).rejects.toMatchObject({

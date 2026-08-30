@@ -134,6 +134,7 @@ class D1Executor extends Context.Service<D1Executor, {
   readonly all: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
   readonly first: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<A | null, RepositoryUnavailable>
   readonly run: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
+  readonly runCounted: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
   readonly batch: (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/internal/D1Executor") {
   static readonly layer = Layer.effect(
@@ -172,6 +173,20 @@ class D1Executor extends Context.Service<D1Executor, {
           Effect.mapError(() => repositoryFailure("write"))
         )
 
+      const runCounted = (statement: string, params: Params, queryName: string) =>
+        database.batchResults(queryName, [
+          { name: queryName, sql: statement, params },
+          { name: `${queryName}.count`, sql: "SELECT changes() AS count" }
+        ]).pipe(
+          Effect.flatMap((results) => {
+            const count = (results[1]?.results?.[0] as { readonly count?: unknown } | undefined)?.count
+            return typeof count === "number"
+              ? Effect.succeed(count)
+              : Effect.fail(repositoryFailure("decode"))
+          }),
+          Effect.mapError(() => repositoryFailure("write"))
+        )
+
       const batch = (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => {
         if (statements.length === 0) return Effect.void
         return database.batch(queryName, statements.map(({ sql, params }) => ({
@@ -181,7 +196,7 @@ class D1Executor extends Context.Service<D1Executor, {
         }))).pipe(mapFailure("batch"))
       }
 
-      return D1Executor.of({ all, first, run, batch })
+      return D1Executor.of({ all, first, run, runCounted, batch })
     })
   )
 }
@@ -524,12 +539,11 @@ export class EventsRepository extends Context.Service<EventsRepository, {
           params: [eventId, subscriptionId, now, now]
         }))
       ], "events.unsilence_with_push_jobs"),
-      pruneBefore: (cutoff) => db.all(
-        Id,
-        "DELETE FROM events WHERE created_at < ? RETURNING id",
+      pruneBefore: (cutoff) => db.runCounted(
+        "DELETE FROM events WHERE created_at < ?",
         [cutoff],
         "events.prune"
-      ).pipe(Effect.map((rows) => rows.length)),
+      ),
       rebuildGroups: db.batch([
         { sql: "DELETE FROM event_groups" },
         { sql: rebuildEventGroupsSql }

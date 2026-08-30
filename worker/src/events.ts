@@ -344,7 +344,7 @@ export const compileEventSearchQuery = (input: string): string => {
     const raw = input.slice(start, offset)
     const prefix = raw.endsWith("*")
     const values = (prefix ? raw.slice(0, -1) : raw)
-      .match(/[\p{L}\p{M}\p{N}\p{Co}_]+/gu) ?? []
+      .match(/[\p{L}\p{M}\p{N}\p{Co}]+/gu) ?? []
     values.forEach((value, index) => {
       parts.push({ value, prefix: prefix && index === values.length - 1 })
     })
