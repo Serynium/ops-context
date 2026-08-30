@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AdministratorIdentity,
-  attachAccessIdentity,
+  attachCloudflareAccess,
   type AccessPrincipal,
   type ExecutionContextWithAccess
 } from "../src/access.js"
@@ -11,6 +11,7 @@ import type { Env } from "../src/types.js"
 
 const config: ConfigService = {
   baseUrl: "https://ops.example.com",
+  appOrigin: "https://ops.example.com",
   appHost: "ops.example.com",
   mcpHost: "mcp.ops.example.com",
   accessAppAudience: "app-audience",
@@ -44,7 +45,7 @@ const context = (
   },
   waitUntil: () => undefined,
   passThroughOnException: () => undefined
-}) as ExecutionContextWithAccess
+}) as unknown as ExecutionContextWithAccess
 
 const authenticate = (
   request: Request,
@@ -58,7 +59,7 @@ const authenticate = (
 
 describe("Cloudflare Access identity boundary", () => {
   it("accepts a verified user on the configured application host", async () => {
-    const request = await attachAccessIdentity(
+    const request = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/access/me"),
       env,
       context("app-audience", {
@@ -78,13 +79,13 @@ describe("Cloudflare Access identity boundary", () => {
   })
 
   it("rejects a request without a verified Access context", async () => {
-    const request = await attachAccessIdentity(
+    const request = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/access/me"),
       env,
       {
         waitUntil: () => undefined,
         passThroughOnException: () => undefined
-      } as ExecutionContextWithAccess
+      } as unknown as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({
@@ -93,7 +94,7 @@ describe("Cloudflare Access identity boundary", () => {
   })
 
   it("strips spoofed internal identity headers", async () => {
-    const request = await attachAccessIdentity(
+    const request = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/access/me", {
         headers: {
           "x-ops-access-verified": "1",
@@ -108,7 +109,7 @@ describe("Cloudflare Access identity boundary", () => {
       {
         waitUntil: () => undefined,
         passThroughOnException: () => undefined
-      } as ExecutionContextWithAccess
+      } as unknown as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({
@@ -117,7 +118,7 @@ describe("Cloudflare Access identity boundary", () => {
   })
 
   it("rejects alternate hosts and mismatched Access audiences", async () => {
-    const wrongHost = await attachAccessIdentity(
+    const wrongHost = await attachCloudflareAccess(
       new Request("https://bypass.workers.dev/api/v1/status"),
       env,
       context("app-audience", { email: "operator@example.com" })
@@ -126,7 +127,7 @@ describe("Cloudflare Access identity boundary", () => {
       _tag: "UnauthorizedError"
     })
 
-    const wrongAudience = await attachAccessIdentity(
+    const wrongAudience = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/status"),
       env,
       context("other-audience", { email: "operator@example.com" })
@@ -137,7 +138,7 @@ describe("Cloudflare Access identity boundary", () => {
   })
 
   it("allows service tokens on MCP but not the interactive application", async () => {
-    const mcpRequest = await attachAccessIdentity(
+    const mcpRequest = await attachCloudflareAccess(
       new Request("https://mcp.ops.example.com/mcp"),
       env,
       context("mcp-audience", null)
@@ -147,7 +148,7 @@ describe("Cloudflare Access identity boundary", () => {
       surface: "mcp"
     })
 
-    const appRequest = await attachAccessIdentity(
+    const appRequest = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/status"),
       env,
       context("app-audience", null)
@@ -158,12 +159,15 @@ describe("Cloudflare Access identity boundary", () => {
   })
 
   it("does not let project bearer credentials authorize private surfaces", async () => {
-    const request = await attachAccessIdentity(
+    const request = await attachCloudflareAccess(
       new Request("https://ops.example.com/api/v1/status", {
         headers: { authorization: "Bearer ops_proj_not_an_admin_credential" }
       }),
       env,
-      context("app-audience", { email: "operator@example.com" })
+      {
+        waitUntil: () => undefined,
+        passThroughOnException: () => undefined
+      } as unknown as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({

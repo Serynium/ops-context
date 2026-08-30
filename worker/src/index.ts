@@ -119,17 +119,17 @@ const eventRequestExceedsLimit = async (
 
 export default {
   async fetch(request, env, context): Promise<Response> {
-    request = await attachCloudflareAccess(
+    const securedRequest = await attachCloudflareAccess(
       request,
       env,
       context as ExecutionContextWithAccess
     )
 
-    const pathname = new URL(request.url).pathname
+    const pathname = new URL(securedRequest.url).pathname
     if (pathname === "/mcp") {
       try {
         return await runtimeFor(env).programs.runPromise(
-          Effect.flatMap(McpEndpoint, (mcp) => mcp.handle(request))
+          Effect.flatMap(McpEndpoint, (mcp) => mcp.handle(securedRequest))
         )
       } catch (cause) {
         console.error("unhandled MCP defect", cause)
@@ -139,7 +139,7 @@ export default {
     if (isSentryEnvelopePath(pathname)) {
       try {
         return await runtimeFor(env).programs.runPromise(
-          Effect.flatMap(SentryEndpoint, (sentry) => sentry.handle(request))
+          Effect.flatMap(SentryEndpoint, (sentry) => sentry.handle(securedRequest))
         )
       } catch (cause) {
         console.error("unhandled Sentry defect", cause)
@@ -148,16 +148,16 @@ export default {
     }
     if (pathname === "/health" || pathname.startsWith("/api/")) {
       try {
-        if (await eventRequestExceedsLimit(request, pathname)) {
+        if (await eventRequestExceedsLimit(securedRequest, pathname)) {
           return eventPayloadLimitResponse()
         }
-        return await runtimeFor(env).http.handler(request)
+        return await runtimeFor(env).http.handler(securedRequest)
       } catch (cause) {
         console.error("unhandled API defect", cause)
         return internalResponse()
       }
     }
-    return env.ASSETS.fetch(request)
+    return env.ASSETS.fetch(securedRequest)
   },
 
   async queue(batch, env): Promise<void> {

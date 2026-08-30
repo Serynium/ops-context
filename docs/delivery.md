@@ -27,7 +27,7 @@ The D1 `attempts` counter is incremented by the conditional claim. `OPS_PUSH_MAX
 
 ## Retry ownership
 
-A transient delivery failure is persisted as `retrying` with a future `retry_scheduled_until`. The current Queue message is then retried with the corresponding delay.
+A transient delivery failure is persisted as `retrying` with a future `available_at`. The current Queue message is then retried with the corresponding delay.
 
 The scheduled reconciliation query explicitly excludes `retrying` jobs while their retry guard is active. This prevents Queue and scheduled maintenance from both publishing the same ordinary retry.
 
