@@ -1,0 +1,31 @@
+name: Apply issue 5 patch
+
+on:
+  push:
+    branches: [reliability/bounded-push-retries]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: reliability/bounded-push-retries
+          fetch-depth: 0
+      - name: Apply implementation patch
+        run: |
+          gzip --decompress --stdout .github/patches/issue-5.patch.gz > /tmp/issue-5.patch
+          git apply --index /tmp/issue-5.patch
+          git rm .github/patches/issue-5.patch.gz
+          git rm .github/workflows/apply-issue-5.yml
+          git rm .github/workflows/apply-issue-5-valid.yml
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Bound Web Push retries and terminal delivery state"
+          git push
