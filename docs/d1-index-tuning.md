@@ -79,7 +79,7 @@ rows_returned` and request frequency show that its filter is persistently hot.
 
 ## Correctness and query-plan guardrails
 
-`worker/test/d1-index-tuning.test.ts` applies the real migration chain and
+`worker/test/d1-index-tuning.integration.test.ts` applies the real migration chain and
 asserts that event ordering and cursor pagination remain `(created_at DESC, id
 DESC)`, project/level/source filters remain correct, repeated fingerprints are
 grouped, empty fingerprints remain separate, and every measured read family
@@ -105,4 +105,3 @@ uses its intended index. In particular, the recovery plan must contain both
 
    Deploy the previous grouped-query implementation with that forward
    migration. Do not edit or re-run migration `0006` on an existing database.
-
