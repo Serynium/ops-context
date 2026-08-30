@@ -1,64 +1,71 @@
 # Ops Context
 
-A tiny operational event inbox with encrypted PWA push notifications.
+A compact operational event inbox with encrypted PWA push notifications, built on Cloudflare and Effect v4.
 
-Ops Context is the Cloudflare + Effect v4 interpretation of the same idea behind Boop: your software posts an event, it is stored in a clean inbox, and the devices you enrolled receive a native notification. There is no Slack workspace, Telegram bot, mobile app binary, or always-running server.
+Ops Context is the Cloudflare + Effect interpretation of the same idea behind Boop: an application posts an operational event, the event is stored in a focused inbox, and enrolled browser installations receive native notifications. There is no Slack workspace, Telegram bot, native mobile binary, or always-running server to operate.
 
 ## What is implemented
 
-- Effect v4 services and typed error channels around Cloudflare D1, Queues, configuration, authentication, event ingestion, and delivery.
+- Schema-first Effect v4 HTTP API using `HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, tagged errors, services, Layers, and reusable managed runtimes.
+- Cloudflare D1 persistence through `@effect/sql-d1`, including atomic event and durable push-job batches.
 - Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
-- Event ingestion with levels, source, type, fingerprint, arbitrary structured context, recursive sensitive-key redaction, truncation, and optional external-id idempotency.
-- Event list/detail APIs with cursor pagination and filters.
+- Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.
+- Up to three validated event actions, rendered in event details and encrypted Web Push notifications.
+- Fingerprint grouping scoped to each project, including occurrence count, first seen, last seen, and occurrence drill-down.
+- Cursor pagination and filters for project, level, source, fingerprint, search text, RFC 3339 time ranges, grouped state, and silenced state.
+- PWA event export through plain-text copy, sectioned Markdown for coding/operations agents, and the Web Share API.
 - Project CRUD, notification thresholds, enable/disable controls, API-key rotation, and test events.
 - Encrypted standards-based Web Push using VAPID and `@pushforge/builder`, compatible with Cloudflare Workers.
-- Installable PWA with a service worker, offline shell, push subscription management, notification click-through, and iOS Home Screen guidance.
+- Installable PWA with an offline shell, push-subscription management, notification action buttons, tap-through, and iOS Home Screen guidance.
 - Durable push jobs, Cloudflare Queue fan-out, leases, per-attempt delivery records, transient retries, dead-subscription disabling, and Cron recovery.
 - Silence rules by fingerprint, title, or source, including project-specific and global rules.
+- Optional read-only MCP Streamable HTTP endpoint using the official `@modelcontextprotocol/server` TypeScript SDK.
 - D1-backed administrator sessions, same-origin checks, PBKDF2 password verification, secure cookies, retention settings, and scheduled cleanup.
 - Static PWA assets served through Workers Static Assets.
 
-The repository is an initial production-oriented implementation, not a finished 1.0 release. See [ROADMAP.md](ROADMAP.md) for the remaining hardening work.
+The repository is production-oriented but remains pre-1.0. See [ROADMAP.md](ROADMAP.md) for remaining hardening work and [CHANGELOG.md](CHANGELOG.md) for release details.
 
 ## Architecture
 
 ```text
-Apps, CI, cron jobs
-        │
-        │ POST /api/v1/events + project key
-        ▼
-┌─────────────────────────────────────────────┐
-│ Cloudflare Worker                           │
-│                                             │
-│ Native Fetch boundary                       │
-│ Effect v4 services, effects, typed failures │
-│ Admin API + PWA API                         │
-└──────────────┬─────────────────┬────────────┘
-               │                 │
-               ▼                 ▼
-       ┌──────────────┐   ┌────────────────┐
-       │ Cloudflare D1│   │ Cloudflare Queue│
-       │ events/jobs  │   │ push fan-out    │
-       └──────┬───────┘   └───────┬────────┘
-              │                   │
-              │                   ▼
-              │           Browser push services
-              │           FCM / Mozilla / Apple
-              │                   │
-              ▼                   ▼
-       PWA inbox          Installed PWA notification
+Apps, CI, cron jobs                      MCP clients / agents
+        │                                        │
+        │ POST /api/v1/events                    │ POST /mcp
+        │ project bearer key                     │ read-only auth
+        ▼                                        ▼
+┌─────────────────────────────────────────────────────────┐
+│ Cloudflare Worker                                       │
+│                                                         │
+│ Fetch boundary                                          │
+│ Effect HttpApi + schemas + middleware                   │
+│ Effect services + Layers + ManagedRuntime               │
+│ Admin API + PWA API + official MCP TypeScript SDK       │
+└───────────────────┬───────────────────────┬─────────────┘
+                    │                       │
+                    ▼                       ▼
+            ┌──────────────┐       ┌─────────────────┐
+            │ Cloudflare D1│       │ Cloudflare Queue│
+            │ events/jobs  │       │ push fan-out    │
+            └──────┬───────┘       └────────┬────────┘
+                   │                        │
+                   │                        ▼
+                   │                Browser push services
+                   │                FCM / Mozilla / Apple
+                   │                        │
+                   ▼                        ▼
+              PWA inbox          Installed PWA notification
 ```
 
-The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so the five-minute Cron Trigger republishes stale or never-published jobs. Queue consumers use a D1 lease and terminal job states to make at-least-once delivery safe. The Web Push `Topic` is derived from the event id so a push service can replace a duplicate that is still pending.
+The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so the five-minute Cron Trigger republishes stale or never-published jobs. Queue consumers use a D1 lease and terminal job states to make at-least-once processing safe. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending.
 
 ## Requirements
 
 - Node.js 22.12 or newer.
 - pnpm.
 - A Cloudflare account with Workers, D1, Queues, and a domain or `workers.dev` hostname.
-- An HTTPS origin. Push subscriptions do not work on an insecure production origin.
+- An HTTPS production origin. Browser push subscriptions require a secure context.
 
-For iPhone and iPad, users must open the site in Safari, add it to the Home Screen, launch the installed PWA, and grant notification permission from a user gesture.
+On iPhone and iPad, open the site in Safari, add it to the Home Screen, launch the installed PWA, and grant notification permission from a user gesture.
 
 ## Local setup
 
@@ -70,13 +77,13 @@ pnpm secrets -- --subject mailto:you@example.com
 
 Copy the generated values into `.dev.vars`. Never commit `.dev.vars`.
 
-Create local D1 state and run migrations:
+Create local D1 state and apply all migrations:
 
 ```bash
 pnpm exec wrangler d1 migrations apply ops-context --local
 ```
 
-Build the PWA, then launch the Worker:
+Build the PWA and launch the Worker:
 
 ```bash
 pnpm build:web
@@ -110,16 +117,17 @@ pnpm exec wrangler queues create ops-context-push
 pnpm exec wrangler queues create ops-context-push-dlq
 ```
 
-Generate the password hash and VAPID keys:
+Generate the administrator password hash, MCP token, and VAPID keys:
 
 ```bash
 pnpm secrets -- --subject mailto:you@example.com
 ```
 
-Upload each generated value. Wrangler prompts for the value without storing it in shell history:
+Upload each generated value. Wrangler prompts for values without storing them in shell history:
 
 ```bash
 pnpm exec wrangler secret put ADMIN_PASSWORD_HASH
+pnpm exec wrangler secret put OPS_MCP_TOKEN
 pnpm exec wrangler secret put VAPID_PUBLIC_KEY
 pnpm exec wrangler secret put VAPID_PRIVATE_JWK
 pnpm exec wrangler secret put VAPID_SUBJECT
@@ -139,7 +147,7 @@ pnpm deploy
 3. Launch the installed application.
 4. Select **Enable push** and approve notifications.
 5. Go to **Projects**, create a project, and copy its API key.
-6. Use **Send test** to verify end-to-end Queue and Web Push delivery.
+6. Use **Test** on the project row to verify end-to-end Queue and Web Push delivery.
 
 Every browser installation gets its own Web Push subscription. The dashboard can rename, disable, or remove subscriptions.
 
@@ -161,7 +169,13 @@ curl https://ops.example.com/api/v1/events \
       "environment": "production",
       "commit": "7d18b7f",
       "authorization": "this value is redacted before storage"
-    }
+    },
+    "actions": [
+      {
+        "label": "Open run",
+        "url": "https://github.com/example/repository/actions/runs/12345"
+      }
+    ]
   }'
 ```
 
@@ -170,11 +184,13 @@ A successful request returns:
 ```json
 {
   "id": "evt_...",
-  "created_at": "2026-08-29T12:00:00.000Z"
+  "created_at": "2026-08-30T12:00:00.000Z"
 }
 ```
 
 Levels are `info`, `success`, `warning`, `error`, and `critical`.
+
+Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
 ### Shell helper
 
@@ -195,6 +211,51 @@ pg_dump app > backup.sql \
   || ops_event "Backup failed" "$(tail -n 1 backup.log)" error
 ```
 
+## Inbox grouping and filters
+
+Use the PWA’s **Group repeats** toggle, or call:
+
+```http
+GET /api/v1/events?grouped=true
+```
+
+Events with the same non-empty fingerprint are grouped only within their project. The latest occurrence represents the row and includes:
+
+```json
+{
+  "group": {
+    "count": 47,
+    "first_seen": "2026-08-30T09:31:00.000Z",
+    "last_seen": "2026-08-30T10:42:00.000Z"
+  }
+}
+```
+
+Supported event-list query parameters are:
+
+```text
+project, level, source, fingerprint, search,
+since, until, grouped, silenced, before, limit
+```
+
+`since` and `until` use RFC 3339 timestamps and apply to `created_at`. All active filters are applied before fingerprint grouping.
+
+## MCP for agents
+
+The optional `/mcp` endpoint exposes these read-only tools:
+
+```text
+list_projects
+list_events
+search_events
+get_event
+get_event_group
+```
+
+Configure `OPS_MCP_TOKEN`, then enable MCP from **Settings** in the PWA. Authentication accepts the dedicated MCP bearer token, an active administrator session, or administrator HTTP Basic credentials. Project ingestion keys are explicitly refused.
+
+See [docs/mcp.md](docs/mcp.md) for transport details, authentication, and example requests.
+
 ## HTTP API
 
 All JSON errors have the form:
@@ -206,44 +267,56 @@ All JSON errors have the form:
 | Method | Path | Authentication | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | D1 health check |
-| POST | `/api/v1/events` | project bearer key | Create an event |
-| GET | `/api/v1/events` | administrator | List/filter events |
-| GET | `/api/v1/events/:id` | administrator | Read event context |
+| POST | `/api/v1/events` | project bearer key | Create an event, including optional actions |
+| GET | `/api/v1/events` | administrator | List, search, filter, paginate, or group events |
+| GET | `/api/v1/events/:id` | administrator | Read complete event context and actions |
 | GET | `/api/v1/events/:id/deliveries` | administrator | Delivery attempts |
 | POST | `/api/v1/events/:id/unsilence` | administrator | Clear silence and push |
 | GET/POST | `/api/v1/projects` | administrator | List/create projects |
 | GET/PATCH/DELETE | `/api/v1/projects/:id` | administrator | Manage project |
 | POST | `/api/v1/projects/:id/rotate-key` | administrator | Rotate project key |
 | GET | `/api/v1/push/public-key` | none | VAPID public key |
-| GET/POST | `/api/v1/push/subscriptions` | administrator | List/enroll PWA installs |
-| PATCH/DELETE | `/api/v1/push/subscriptions/:id` | administrator | Manage PWA install |
+| GET/POST | `/api/v1/push/subscriptions` | administrator | List/enroll PWA installations |
+| PATCH/DELETE | `/api/v1/push/subscriptions/:id` | administrator | Manage PWA installation |
 | GET/POST | `/api/v1/silences` | administrator | List/create silence rules |
 | GET/DELETE | `/api/v1/silences/:id` | administrator | Read/delete rule |
-| GET/PATCH | `/api/v1/settings` | administrator | Retention and redaction |
+| GET/PATCH | `/api/v1/settings` | administrator | Retention, redaction, setup, and MCP enablement |
 | GET | `/api/v1/status` | administrator | Deployment status and counts |
 | POST | `/api/v1/test` | administrator | Create and push a test event |
+| POST | `/mcp` | MCP bearer or administrator | Read-only MCP Streamable HTTP endpoint |
 
-Administrator authentication accepts the secure session cookie created by the PWA or HTTP Basic credentials. Project bearer keys are explicitly rejected on administrative routes.
+The generated OpenAPI document is available at:
+
+```text
+/api/v1/openapi.json
+```
+
+Administrator authentication accepts the secure session cookie created by the PWA or HTTP Basic credentials. Project bearer keys are explicitly rejected on administrative and MCP routes.
 
 ## Effect v4 structure
 
-The Worker boundary remains a standard Cloudflare module handler. Inside it, application code depends on Effect services:
+The Worker boundary is a standard Cloudflare module handler. Inside that boundary:
 
-- `Database`: D1 queries, writes, and atomic batches.
-- `AppConfig`: validated Worker configuration and secrets.
-- `PushQueue`: Queue publishing.
+- `HttpApi`, endpoint/group schemas, and `HttpApiMiddleware` define and validate the HTTP contract.
+- `Schema.TaggedError` values define declared API failures and status codes.
+- `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, and `McpEndpoint` are narrow Effect services.
+- Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
+- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, Cron, and MCP executions.
+- `@effect/sql-d1` provides the D1 SQL client, while a narrow `Database` service preserves native D1 batch behavior where atomic batches are required.
+- Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
+- The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
 
-Domain modules return `Effect.Effect<A, AppError, Services>` values rather than throwing through normal control flow. The entrypoint supplies the live services per invocation and translates typed failures to the stable JSON error contract.
-
-The code deliberately keeps the D1 binding behind an application service rather than coupling every domain module to Cloudflare globals. This also keeps room for a local SQLite or Durable Object implementation later.
+Domain and application services expose typed Effect programs. Cloudflare bindings and Web APIs are supplied only through infrastructure Layers.
 
 ## Security model
 
-- Project and session credentials are stored only as SHA-256 hashes.
+- Project, session, and MCP credentials are treated as high-entropy secrets. Project and session credentials are stored only as SHA-256 hashes.
 - The administrator password is stored as a PBKDF2-SHA-256 hash with a per-installation salt and at least 310,000 iterations.
 - Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS.
-- Browser administrative mutations are restricted to the same origin.
-- Web Push payloads are encrypted according to the standard Web Push protocol before they are handed to browser push services.
+- Browser administrative mutations are restricted to the configured same origin.
+- MCP checks the request host/origin before protocol dispatch and receives only a validated read-only principal.
+- Web Push payloads are encrypted according to the Web Push protocol before they are handed to browser push services.
+- Event action URLs are validated on ingestion and rendered with safe external-link behavior in the PWA.
 - Common secret-bearing object keys are recursively redacted before event context reaches D1. Operators can add custom keys.
 - Queue consumers disable expired subscriptions after HTTP 404 or 410 responses.
 - The API applies request-size and field-length limits.
@@ -256,9 +329,14 @@ Review [SECURITY.md](SECURITY.md) before exposing an instance publicly.
 pnpm typecheck
 pnpm test
 pnpm build:web
+pnpm build:worker
 ```
 
-The current tests cover pure domain behavior. Worker-runtime integration and D1/Queue contract tests are listed in the roadmap.
+The full check runs strict Worker/PWA type checks, Vitest, a production Vite build, and a Wrangler dry-run Worker bundle:
+
+```bash
+pnpm check
+```
 
 ## License
 

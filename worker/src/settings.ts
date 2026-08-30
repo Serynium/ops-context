@@ -42,13 +42,16 @@ export const getSettings: Effect.Effect<SettingsView, AppError, Database | AppCo
     const retentionText = yield* getValue("retention_days")
     const redactText = yield* getValue("redact_keys")
     const setupText = yield* getValue("setup_completed")
+    const mcpEnabledText = yield* getValue("mcp_enabled")
 
     const parsedRetention = Number.parseInt(retentionText ?? "", 10)
     return {
       retention_days: Number.isInteger(parsedRetention) ? parsedRetention : config.defaultRetentionDays,
       redact_keys: parseList(redactText),
       default_redact_keys: DEFAULT_REDACT_KEYS,
-      setup_completed: setupText === "true"
+      setup_completed: setupText === "true",
+      mcp_enabled: mcpEnabledText === "true",
+      mcp_token_set: Boolean(config.mcpToken && config.mcpToken.length >= 16)
     }
   })
 
@@ -56,6 +59,7 @@ export interface SettingsPatch {
   readonly retention_days?: number | undefined
   readonly redact_keys?: ReadonlyArray<string> | undefined
   readonly setup_completed?: boolean | undefined
+  readonly mcp_enabled?: boolean | undefined
 }
 
 export const updateSettings = (patch: SettingsPatch): Effect.Effect<SettingsView, AppError, Database | AppConfig> =>
@@ -77,6 +81,10 @@ export const updateSettings = (patch: SettingsPatch): Effect.Effect<SettingsView
 
     if (patch.setup_completed !== undefined) {
       yield* setValue("setup_completed", patch.setup_completed ? "true" : "false")
+    }
+
+    if (patch.mcp_enabled !== undefined) {
+      yield* setValue("mcp_enabled", patch.mcp_enabled ? "true" : "false")
     }
 
     return yield* getSettings

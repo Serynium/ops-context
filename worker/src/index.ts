@@ -2,6 +2,7 @@ import { Effect, ManagedRuntime } from "effect"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { Maintenance, PushDelivery } from "./application.js"
 import { makeLayers } from "./layers.js"
+import { McpEndpoint } from "./mcp.js"
 import type { Env, PushJobMessage } from "./types.js"
 
 interface WebHandler {
@@ -13,7 +14,7 @@ interface IsolateRuntime {
   readonly db: D1Database
   readonly queue: Queue<PushJobMessage>
   readonly http: WebHandler
-  readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance, never>
+  readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance | McpEndpoint, never>
 }
 
 let cached: IsolateRuntime | undefined
@@ -48,6 +49,16 @@ const internalResponse = (): Response =>
 export default {
   async fetch(request, env): Promise<Response> {
     const pathname = new URL(request.url).pathname
+    if (pathname === "/mcp") {
+      try {
+        return await runtimeFor(env).programs.runPromise(
+          Effect.flatMap(McpEndpoint, (mcp) => mcp.handle(request))
+        )
+      } catch (cause) {
+        console.error("unhandled MCP defect", cause)
+        return internalResponse()
+      }
+    }
     if (pathname === "/health" || pathname.startsWith("/api/")) {
       try {
         return await runtimeFor(env).http.handler(request)

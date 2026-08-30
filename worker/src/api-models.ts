@@ -10,6 +10,17 @@ export type SilenceField = typeof SilenceField.Type
 
 export const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
 
+export const EventAction = Schema.Struct({
+  label: Schema.String,
+  url: Schema.String
+})
+
+export const EventGroup = Schema.Struct({
+  count: Schema.Int,
+  first_seen: Schema.String,
+  last_seen: Schema.String
+})
+
 export const Project = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -47,10 +58,12 @@ export const Event = Schema.Struct({
   body: Schema.String,
   fingerprint: Schema.String,
   data: JsonObject,
+  actions: Schema.Array(EventAction),
   occurred_at: Schema.String,
   created_at: Schema.String,
   silenced: Schema.Boolean,
-  silence_id: Schema.optional(Schema.String)
+  silence_id: Schema.optional(Schema.String),
+  group: Schema.optional(EventGroup)
 })
 
 export const Delivery = Schema.Struct({
@@ -89,7 +102,9 @@ export const Settings = Schema.Struct({
   retention_days: Schema.Int,
   redact_keys: Schema.Array(Schema.String),
   default_redact_keys: Schema.Array(Schema.String),
-  setup_completed: Schema.Boolean
+  setup_completed: Schema.Boolean,
+  mcp_enabled: Schema.Boolean,
+  mcp_token_set: Schema.Boolean
 })
 
 export const AuthState = Schema.Struct({
@@ -163,13 +178,19 @@ export const CreateEventInput = Schema.Struct({
   body: Schema.optional(Schema.String),
   fingerprint: Schema.optional(Schema.String),
   occurred_at: Schema.optional(Schema.String),
-  data: Schema.optional(Schema.Unknown)
+  data: Schema.optional(Schema.Unknown),
+  actions: Schema.optional(Schema.Array(EventAction))
 })
 
 export const EventListQuery = Schema.Struct({
   project: Schema.optional(Schema.String),
   level: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
+  fingerprint: Schema.optional(Schema.String),
+  search: Schema.optional(Schema.String),
+  since: Schema.optional(Schema.String),
+  until: Schema.optional(Schema.String),
+  grouped: Schema.optional(Schema.String),
   silenced: Schema.optional(Schema.String),
   before: Schema.optional(Schema.String),
   limit: Schema.optional(Schema.String)
@@ -216,7 +237,8 @@ export const CreateSilenceInput = Schema.Struct({
 export const UpdateSettingsInput = Schema.Struct({
   retention_days: Schema.optional(Schema.Int),
   redact_keys: Schema.optional(Schema.Array(Schema.String)),
-  setup_completed: Schema.optional(Schema.Boolean)
+  setup_completed: Schema.optional(Schema.Boolean),
+  mcp_enabled: Schema.optional(Schema.Boolean)
 })
 
 export const TestNotificationInput = Schema.Struct({

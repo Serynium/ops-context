@@ -232,8 +232,8 @@ export class OpsApi extends HttpApi.make("ops-context")
   .add(AdminApiGroup)
   .annotateMerge(OpenApi.annotations({
     title: "Ops Context API",
-    version: "0.2.0",
-    description: "Operational events, browser push subscriptions, silences, and administration."
+    version: "0.3.0",
+    description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and administration."
   }))
 {}
 

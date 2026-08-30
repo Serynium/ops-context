@@ -2,7 +2,7 @@ import { Effect } from "effect"
 import { internal, type AppError } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database, WebPush } from "./services.js"
-import type { EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
+import type { EventAction, EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
 
 interface PushJobRow {
   readonly event_id: string
@@ -27,6 +27,21 @@ const topicFor = (eventId: string): string =>
 
 const responseBody = async (response: Response): Promise<string> =>
   (await response.text()).slice(0, 2_000)
+
+const parseActions = (value: string): ReadonlyArray<EventAction> => {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry) => {
+      if (typeof entry !== "object" || entry === null) return []
+      const label = (entry as { readonly label?: unknown }).label
+      const url = (entry as { readonly url?: unknown }).url
+      return typeof label === "string" && typeof url === "string" ? [{ label, url }] : []
+    }).slice(0, 3)
+  } catch {
+    return []
+  }
+}
 
 const recordAttempt = (
   message: PushJobMessage,
@@ -162,7 +177,7 @@ const loadContext = (
          e.id, e.external_id, e.project_id,
          p.name AS project_name, p.slug AS project_slug, p.icon AS project_icon,
          e.source, e.type, e.level, e.title, e.body, e.fingerprint,
-         e.payload_json, e.occurred_at, e.created_at, e.silence_id
+         e.payload_json, e.actions_json, e.occurred_at, e.created_at, e.silence_id
        FROM events e
        JOIN projects p ON p.id = e.project_id
        WHERE e.id = ?`,
@@ -226,6 +241,14 @@ export const processPushMessage = (
       : context.event.project_name
     const body = context.event.body || context.event.title
     const urgency = context.event.level === "critical" || context.event.level === "error" ? "high" : "normal"
+    const eventActions = parseActions(context.event.actions_json)
+    const notificationActions = eventActions.map((action, index) => ({
+      action: `event-action-${index}`,
+      title: action.label
+    }))
+    const actionUrls = Object.fromEntries(
+      eventActions.map((action, index) => [`event-action-${index}`, action.url])
+    )
 
     const sent = yield* webPush.send(
       {
@@ -242,11 +265,13 @@ export const processPushMessage = (
           icon: "/icons/icon-192.png",
           badge: "/icons/badge-96.png",
           tag: context.event.id,
+          ...(notificationActions.length > 0 ? { actions: notificationActions } : {}),
           data: {
             url: `/?event=${encodeURIComponent(context.event.id)}`,
             eventId: context.event.id,
             projectId: context.event.project_id,
-            level: context.event.level
+            level: context.event.level,
+            actionUrls
           }
         },
         options: {

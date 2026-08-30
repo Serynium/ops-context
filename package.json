@@ -1,6 +1,6 @@
 {
   "name": "ops-context",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "A tiny operational event inbox and PWA Web Push service on Cloudflare, built with Effect v4.",
@@ -9,9 +9,10 @@
     "dev": "wrangler dev",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
+    "build:worker": "wrangler deploy --dry-run --outdir .worker-dist",
     "typecheck": "tsc -p worker/tsconfig.json && tsc -p web/tsconfig.json",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build:web",
+    "check": "pnpm typecheck && pnpm test && pnpm build:web && pnpm build:worker",
     "deploy": "pnpm build:web && wrangler deploy",
     "cf:types": "wrangler types worker-configuration.d.ts",
     "secrets": "node scripts/generate-secrets.mjs"
@@ -19,8 +20,10 @@
   "dependencies": {
     "@effect/platform-browser": "4.0.0-rc.112",
     "@effect/sql-d1": "4.0.0-rc.112",
+    "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
-    "effect": "4.0.0-rc.112"
+    "effect": "4.0.0-rc.112",
+    "zod": "4.2.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260827.1",

@@ -10,6 +10,7 @@ import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
 import type {
   DeliveryRow,
+  EventAction,
   EventRow,
   EventView,
   Level,
@@ -19,6 +20,8 @@ import type {
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
+const forbiddenActionProtocols = new Set(["javascript:", "data:", "file:"])
+const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u
 
 export interface CreateEventInput {
   readonly external_id?: string | undefined
@@ -30,6 +33,7 @@ export interface CreateEventInput {
   readonly fingerprint?: string | undefined
   readonly occurred_at?: string | undefined
   readonly data?: unknown | undefined
+  readonly actions?: ReadonlyArray<EventAction> | undefined
 }
 
 export interface EventPage {
@@ -51,6 +55,49 @@ const parsePayload = (value: string): Record<string, unknown> => {
   }
 }
 
+const isStoredAction = (value: unknown): value is EventAction =>
+  typeof value === "object" && value !== null &&
+  typeof (value as { readonly label?: unknown }).label === "string" &&
+  typeof (value as { readonly url?: unknown }).url === "string"
+
+const parseActions = (value: string): ReadonlyArray<EventAction> => {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed.filter(isStoredAction).slice(0, 3) : []
+  } catch {
+    return []
+  }
+}
+
+export const normalizeEventActions = (value: unknown): ReadonlyArray<EventAction> => {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw invalid("actions must be an array")
+  if (value.length > 3) throw invalid("actions may contain at most 3 items")
+
+  return value.map((item, index) => {
+    if (!isStoredAction(item)) throw invalid(`action ${index + 1} must contain label and url strings`)
+    const label = item.label.trim()
+    const url = item.url.trim()
+    if (label.length === 0 || label.length > 40) {
+      throw invalid(`action ${index + 1} label must contain 1 to 40 characters`)
+    }
+    if (url.length === 0 || url.length > 2_048) {
+      throw invalid(`action ${index + 1} URL must contain 1 to 2048 characters`)
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      throw invalid(`action ${index + 1} URL must be absolute`)
+    }
+    if (forbiddenActionProtocols.has(parsed.protocol.toLowerCase())) {
+      throw invalid(`action ${index + 1} URL protocol is not allowed`)
+    }
+    return { label, url: parsed.href }
+  })
+}
+
 export const toEventView = (row: EventRow): EventView => ({
   id: row.id,
   ...(row.external_id ? { external_id: row.external_id } : {}),
@@ -65,14 +112,23 @@ export const toEventView = (row: EventRow): EventView => ({
   body: row.body,
   fingerprint: row.fingerprint,
   data: parsePayload(row.payload_json),
+  actions: parseActions(row.actions_json),
   occurred_at: row.occurred_at,
   created_at: row.created_at,
   silenced: row.silence_id !== null,
-  ...(row.silence_id ? { silence_id: row.silence_id } : {})
+  ...(row.silence_id ? { silence_id: row.silence_id } : {}),
+  ...(row.fingerprint && row.group_count !== undefined
+    ? {
+        group: {
+          count: Number(row.group_count),
+          first_seen: row.group_first_seen ?? row.created_at,
+          last_seen: row.group_last_seen ?? row.created_at
+        }
+      }
+    : {})
 })
 
-const eventSelect = `
-  SELECT
+const eventColumns = `
     e.id,
     e.external_id,
     e.project_id,
@@ -86,9 +142,14 @@ const eventSelect = `
     e.body,
     e.fingerprint,
     e.payload_json,
+    e.actions_json,
     e.occurred_at,
     e.created_at,
     e.silence_id
+`
+
+const eventSelect = `
+  SELECT ${eventColumns}
   FROM events e
   JOIN projects p ON p.id = e.project_id
 `
@@ -123,7 +184,8 @@ const normalizeInput = (input: CreateEventInput, createdAt: string): CreateEvent
     fingerprint: truncate(input.fingerprint, 500),
     ...(externalId ? { external_id: externalId } : {}),
     occurred_at: parseOccurredAt(input.occurred_at, createdAt),
-    ...(input.data === undefined ? {} : { data: input.data })
+    ...(input.data === undefined ? {} : { data: input.data }),
+    actions: normalizeEventActions(input.actions)
   }
 }
 
@@ -174,8 +236,9 @@ export const createEventForProject = (
     const statements = [
       {
         sql: `INSERT INTO events
-          (id, external_id, project_id, source, type, level, title, body, fingerprint, payload_json, occurred_at, created_at, silence_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, external_id, project_id, source, type, level, title, body, fingerprint,
+           payload_json, actions_json, occurred_at, created_at, silence_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [
           eventId,
           normalized.external_id ?? null,
@@ -187,6 +250,7 @@ export const createEventForProject = (
           normalized.body ?? "",
           normalized.fingerprint ?? "",
           JSON.stringify(data),
+          JSON.stringify(normalized.actions ?? []),
           normalized.occurred_at ?? createdAt,
           createdAt,
           silenceId
@@ -238,10 +302,22 @@ const decodeCursor = (value: string): Cursor | null => {
   }
 }
 
+const normalizeFilterTime = (value: string, name: "since" | "until"): string => {
+  if (!rfc3339.test(value)) throw invalid(`${name} must be an RFC 3339 timestamp`)
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) throw invalid(`${name} must be an RFC 3339 timestamp`)
+  return date.toISOString()
+}
+
 export interface ListEventsInput {
   readonly project?: string | undefined
   readonly level?: string | undefined
   readonly source?: string | undefined
+  readonly fingerprint?: string | undefined
+  readonly search?: string | undefined
+  readonly since?: string | undefined
+  readonly until?: string | undefined
+  readonly grouped?: string | undefined
   readonly silenced?: string | undefined
   readonly before?: string | undefined
   readonly limit?: string | undefined
@@ -268,30 +344,115 @@ export const listEvents = (
       conditions.push("e.source = ?")
       params.push(input.source)
     }
+    if (input.fingerprint) {
+      conditions.push("e.fingerprint = ?")
+      params.push(input.fingerprint)
+    }
+    if (input.search) {
+      const search = input.search.trim().slice(0, 240)
+      if (search) {
+        const pattern = `%${search}%`
+        conditions.push(
+          "(e.title LIKE ? OR e.body LIKE ? OR e.source LIKE ? OR e.fingerprint LIKE ? OR e.payload_json LIKE ?)"
+        )
+        params.push(pattern, pattern, pattern, pattern, pattern)
+      }
+    }
     if (input.silenced !== undefined && input.silenced !== "true" && input.silenced !== "false") {
       return yield* Effect.fail(invalid("silenced filter must be true or false"))
     }
     if (input.silenced === "true") conditions.push("e.silence_id IS NOT NULL")
     if (input.silenced === "false") conditions.push("e.silence_id IS NULL")
 
-    if (input.before) {
-      const cursor = decodeCursor(input.before)
-      if (!cursor) return yield* Effect.fail(invalid("before cursor is invalid"))
-      conditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))")
-      params.push(cursor.createdAt, cursor.createdAt, cursor.id)
+    let since: string | undefined
+    let until: string | undefined
+    try {
+      since = input.since ? normalizeFilterTime(input.since, "since") : undefined
+      until = input.until ? normalizeFilterTime(input.until, "until") : undefined
+    } catch (cause) {
+      return yield* Effect.fail(cause as AppError)
     }
+    if (since && until && since > until) {
+      return yield* Effect.fail(invalid("since must not be later than until"))
+    }
+    if (since) {
+      conditions.push("e.created_at >= ?")
+      params.push(since)
+    }
+    if (until) {
+      conditions.push("e.created_at <= ?")
+      params.push(until)
+    }
+
+    if (input.grouped !== undefined && input.grouped !== "true" && input.grouped !== "false") {
+      return yield* Effect.fail(invalid("grouped filter must be true or false"))
+    }
+    const grouped = input.grouped === "true"
+    const cursor = input.before ? decodeCursor(input.before) : null
+    if (input.before && !cursor) return yield* Effect.fail(invalid("before cursor is invalid"))
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
-    params.push(limit + 1)
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
 
-    const rows = yield* db.all<EventRow>(
-      `${eventSelect}
-       ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
-       ORDER BY e.created_at DESC, e.id DESC
-       LIMIT ?`,
-      params
-    )
+    let rows: ReadonlyArray<EventRow>
+    if (grouped) {
+      const queryParams = [...params]
+      let outerCursor = ""
+      if (cursor) {
+        outerCursor = "AND (created_at < ? OR (created_at = ? AND id < ?))"
+        queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
+      }
+      queryParams.push(limit + 1)
+      rows = yield* db.all<EventRow>(
+        `WITH ranked AS (
+           SELECT ${eventColumns},
+             COUNT(*) OVER (
+               PARTITION BY e.project_id,
+                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+             ) AS group_count,
+             MIN(e.created_at) OVER (
+               PARTITION BY e.project_id,
+                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+             ) AS group_first_seen,
+             MAX(e.created_at) OVER (
+               PARTITION BY e.project_id,
+                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+             ) AS group_last_seen,
+             ROW_NUMBER() OVER (
+               PARTITION BY e.project_id,
+                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+               ORDER BY e.created_at DESC, e.id DESC
+             ) AS group_rank
+           FROM events e
+           JOIN projects p ON p.id = e.project_id
+           ${where}
+         )
+         SELECT * FROM ranked
+         WHERE group_rank = 1 ${outerCursor}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`,
+        queryParams
+      )
+    } else {
+      const queryParams = [...params]
+      const cursorCondition = cursor
+        ? "(e.created_at < ? OR (e.created_at = ? AND e.id < ?))"
+        : ""
+      if (cursor) queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
+      queryParams.push(limit + 1)
+      const allConditions = [
+        ...conditions,
+        ...(cursorCondition ? [cursorCondition] : [])
+      ]
+      rows = yield* db.all<EventRow>(
+        `${eventSelect}
+         ${allConditions.length > 0 ? `WHERE ${allConditions.join(" AND ")}` : ""}
+         ORDER BY e.created_at DESC, e.id DESC
+         LIMIT ?`,
+        queryParams
+      )
+    }
 
     const hasMore = rows.length > limit
     const pageRows = hasMore ? rows.slice(0, limit) : rows

@@ -1,5 +1,16 @@
 export type Level = "info" | "success" | "warning" | "error" | "critical"
 
+export interface EventAction {
+  readonly label: string
+  readonly url: string
+}
+
+export interface EventGroup {
+  readonly count: number
+  readonly first_seen: string
+  readonly last_seen: string
+}
+
 export interface Project {
   readonly id: string
   readonly name: string
@@ -29,10 +40,12 @@ export interface EventItem {
   readonly body: string
   readonly fingerprint: string
   readonly data: Record<string, unknown>
+  readonly actions: ReadonlyArray<EventAction>
   readonly occurred_at: string
   readonly created_at: string
   readonly silenced: boolean
   readonly silence_id?: string
+  readonly group?: EventGroup
 }
 
 export interface EventPage {
@@ -66,6 +79,8 @@ export interface Settings {
   readonly redact_keys: ReadonlyArray<string>
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
+  readonly mcp_enabled: boolean
+  readonly mcp_token_set: boolean
 }
 
 export interface Status {
@@ -108,7 +123,6 @@ const request = async <A>(method: string, path: string, body?: unknown): Promise
   }
 
   const response = await fetch(path, init)
-
   if (response.status === 204) return undefined as A
   const text = await response.text()
   let parsed: unknown = null
@@ -130,18 +144,28 @@ const request = async <A>(method: string, path: string, body?: unknown): Promise
   return parsed as A
 }
 
+const eventsRequest = (params: Record<string, string | undefined> = {}): Promise<EventPage> => {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) if (value) search.set(key, value)
+  return request<EventPage>("GET", `/api/v1/events${search.size ? `?${search}` : ""}`)
+}
+
 export const api = {
   me: () => request<{ auth_required: boolean; authenticated: boolean }>("GET", "/api/v1/auth/me"),
   login: (username: string, password: string) =>
     request<{ auth_required: boolean; authenticated: boolean }>("POST", "/api/v1/auth/login", { username, password }),
   logout: () => request<void>("POST", "/api/v1/auth/logout", {}),
 
-  events: (params: Record<string, string | undefined> = {}) => {
-    const search = new URLSearchParams()
-    for (const [key, value] of Object.entries(params)) if (value) search.set(key, value)
-    return request<EventPage>("GET", `/api/v1/events${search.size ? `?${search}` : ""}`)
-  },
+  events: eventsRequest,
   event: (id: string) => request<EventItem>("GET", `/api/v1/events/${encodeURIComponent(id)}`),
+  eventGroup: (projectId: string, fingerprint: string, params: Record<string, string | undefined> = {}) =>
+    eventsRequest({
+      ...params,
+      project: projectId,
+      fingerprint,
+      grouped: "false",
+      limit: params.limit ?? "100"
+    }),
   unsilence: (id: string) => request<{ event: EventItem }>("POST", `/api/v1/events/${encodeURIComponent(id)}/unsilence`, {}),
 
   projects: () => request<{ projects: ReadonlyArray<Project> }>("GET", "/api/v1/projects"),

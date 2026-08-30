@@ -83,6 +83,7 @@ const iterations = 310_000
 const salt = randomBytes(16)
 const passwordHash = pbkdf2Sync(password, salt, iterations, 32, "sha256")
 const encodedPassword = `pbkdf2-sha256$${iterations}$${base64url(salt)}$${base64url(passwordHash)}`
+const mcpToken = base64url(randomBytes(32))
 
 const pair = await webcrypto.subtle.generateKey(
   { name: "ECDSA", namedCurve: "P-256" },
@@ -94,11 +95,13 @@ const publicRaw = await webcrypto.subtle.exportKey("raw", pair.publicKey)
 
 console.log("\nGenerated values\n")
 console.log(`ADMIN_PASSWORD_HASH=${encodedPassword}`)
+console.log(`OPS_MCP_TOKEN=${mcpToken}`)
 console.log(`VAPID_PUBLIC_KEY=${base64url(publicRaw)}`)
 console.log(`VAPID_PRIVATE_JWK=${JSON.stringify(privateJwk)}`)
 console.log(`VAPID_SUBJECT=${subject}`)
 console.log("\nUpload them with:")
 console.log("  pnpm exec wrangler secret put ADMIN_PASSWORD_HASH")
+console.log("  pnpm exec wrangler secret put OPS_MCP_TOKEN")
 console.log("  pnpm exec wrangler secret put VAPID_PUBLIC_KEY")
 console.log("  pnpm exec wrangler secret put VAPID_PRIVATE_JWK")
 console.log("  pnpm exec wrangler secret put VAPID_SUBJECT")
