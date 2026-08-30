@@ -199,7 +199,7 @@ Levels are `info`, `success`, `warning`, `error`, and `critical`.
 
 Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
-The raw event body is limited to **256 KiB**. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
+The raw HTTP body is limited to **256 KiB**, and the normalized event is limited to **120,000 encoded bytes** so its versioned command remains below Cloudflare Queue's 128,000-byte message ceiling. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
 
 ### Sentry SDKs — drop-in DSN
 

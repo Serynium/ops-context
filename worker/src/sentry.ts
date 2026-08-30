@@ -10,7 +10,7 @@ export const SENTRY_MAX_COMPRESSED_BYTES = 2 << 20
 export const SENTRY_MAX_DECOMPRESSED_BYTES = 16 << 20
 const SENTRY_MAX_TAGS = 50
 const SENTRY_MAX_TAG_BYTES = 1_024
-const SENTRY_MAX_DATA_BYTES = 256 << 10
+const SENTRY_MAX_DATA_BYTES = 100_000
 const SENTRY_MAX_CONTEXT_BYTES = 8_000
 
 export const isSentryEnvelopePath = (pathname: string): boolean =>

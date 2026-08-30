@@ -6,7 +6,7 @@ Ops Context rejects invalid values; it does not silently truncate identifiers, f
 
 ## Queue-first acceptance
 
-The endpoint authenticates the project, validates and normalizes the payload, assigns the event id and acceptance timestamp, and sends a versioned `IngestEvent` command. The command contains the complete normalized event and project id, but never the project key, an Access assertion, or another reusable credential.
+The endpoint authenticates the project, validates and normalizes the payload, recursively redacts default and operator-configured sensitive keys, assigns the event id and acceptance timestamp, and sends a versioned `IngestEvent` command. The command contains the complete redacted event and project id, but never the project key, an Access assertion, or another reusable credential. The consumer redacts again before D1 persistence so a setting tightened after acceptance is also honored.
 
 Only a successful Queue send produces `202 Accepted`:
 
@@ -22,15 +22,17 @@ During rollout, the decoder also accepts the previous untagged `{ eventId, subsc
 
 ## D1 lookup budget
 
-The `IngestEvent` consumer loads the four required application settings with one `settings.load` query. Silence evaluation removes empty fingerprint, title, and source candidates, then matches every remaining candidate with one ordered `silences.match` query. Candidate order remains fingerprint, title, then source; a project-specific rule wins when both project and global rules match the same candidate.
+For events with structured `data`, the HTTP acceptance path loads the four required application settings with one `settings.load` query so secrets are redacted before the durable Queue write. The `IngestEvent` consumer loads the settings again before persistence. Silence evaluation removes empty fingerprint, title, and source candidates, then matches every remaining candidate with one ordered `silences.match` query. Candidate order remains fingerprint, title, then source; a project-specific rule wins when both project and global rules match the same candidate.
 
-No isolate-local settings cache is used. Each accepted command reads D1, so setting updates are authoritative immediately and isolate eviction has no cache-consistency effect.
+No isolate-local settings cache is used. The acceptance and consumer reads make setting updates authoritative immediately and avoid cache-consistency dependence on isolate lifetime.
 
 Both consolidated queries emit a structured `d1_query` log containing the stable `query` name, `duration_ms`, `rows_returned`, and D1's `rows_read` and `rows_written` metadata. SQL parameters and event content are not logged. These fields support before/after comparison in Cloudflare Logs; the cold-path lookup budget changes from four settings queries plus up to three silence queries to one settings query plus at most one silence query.
 
 ## Request limit
 
 The raw HTTP request body must be at most **262,144 bytes (256 KiB)**. The Worker checks the declared `Content-Length` when present. It also reads request streams incrementally and cancels both stream branches as soon as the measured body crosses the limit, so chunked requests cannot bypass the ceiling or force the isolate to buffer the complete body.
+
+After JSON decoding and normalization, the encoded event must be at most **120,000 bytes**. This leaves room for the versioned command envelope and Cloudflare's internal metadata under the Queue platform's 128,000-byte per-message limit. Inputs over this application limit fail validation before Queue publication, so retrying an intrinsically oversized event cannot produce a misleading transient `503`.
 
 An oversized body returns:
 

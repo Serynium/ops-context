@@ -85,7 +85,7 @@ The only configured schedule is once-daily retention (`0 3 * * *`) when automati
 
 Before deploying, apply migration `0006_queue_first_ingestion.sql`. It terminalizes legacy `pending` and abandoned `sending` jobs that relied on the removed repair publisher; already queued and delayed-retry jobs keep their Queue-owned lifecycle and their previous untagged messages remain decodable. The migration also adds the atomic fan-out marker and durable ingestion-failure ledger. Terminal counts are visible in administrator status, with reasons retained in D1.
 
-Removing the five-minute repair schedule eliminates 288 periodic Worker invocations and their recovery D1 queries per day. Queue-first ingestion adds one Queue operation per accepted event; delivery fan-out operations are otherwise the same. The cost trade is event-proportional Queue work instead of constant polling.
+Removing the five-minute repair schedule eliminates 288 periodic Worker invocations and their recovery D1 queries per day. Queue-first ingestion adds one Queue operation per accepted event. Events containing structured data also add one consolidated D1 settings read at acceptance so reusable credentials are removed before Queue storage; delivery fan-out operations are otherwise the same. The cost trade is event-proportional Queue work and redaction reads instead of constant polling.
 
 ## Authentication independence
 

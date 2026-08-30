@@ -9,6 +9,8 @@ import {
 } from "../src/events.js"
 import { queueUnavailable } from "../src/errors.js"
 import {
+  encodedQueueCommandBytes,
+  QUEUE_COMMAND_MAX_BYTES,
   QUEUE_COMMAND_VERSION,
   decodeQueueCommand,
   type IngestEventCommand,
@@ -113,6 +115,7 @@ describe("Queue-first event ingestion", () => {
   it("returns a retryable failure when the acceptance Queue send fails", async () => {
     const layer = Layer.mergeAll(
       Database.layer(env.DB),
+      Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
         send: () => Effect.fail(queueUnavailable("Queue unavailable")),
@@ -126,7 +129,7 @@ describe("Queue-first event ingestion", () => {
       )
     )
     expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) expect(result.failure.status).toBe(503)
+    if (Result.isFailure(result)) expect(result.failure._tag).toBe("QueueUnavailable")
     const rows = await env.DB.prepare("SELECT COUNT(*) AS count FROM events").first<{ count: number }>()
     expect(rows?.count).toBe(0)
   })
@@ -205,13 +208,24 @@ describe("Queue-first event ingestion", () => {
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
       Database.layer(env.DB),
+      Layer.succeed(AppConfig)(config),
       CredentialCrypto.layer,
       Layer.succeed(PushQueue)({
         send: (message) => Effect.sync(() => accepted.push(message)).pipe(Effect.asVoid),
         sendMany: () => Effect.void
       })
     )
-    const input = { title: "Producer retry", external_id: "same-operation" }
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('redact_keys', '[\"deployment_secret\"]', ?)"
+    ).bind(new Date().toISOString()).run()
+    const input = {
+      title: "Producer retry",
+      external_id: "same-operation",
+      data: {
+        authorization: "Bearer reusable-default-secret",
+        nested: { deployment_secret: "reusable-operator-secret", safe: "visible" }
+      }
+    }
     const first = await Effect.runPromise(enqueueEventForProject(project, input).pipe(Effect.provide(layer)))
     const second = await Effect.runPromise(enqueueEventForProject(project, input).pipe(Effect.provide(layer)))
 
@@ -219,8 +233,32 @@ describe("Queue-first event ingestion", () => {
     expect(accepted).toHaveLength(2)
     const encoded = JSON.stringify(accepted)
     expect(encoded).not.toContain("api_key")
-    expect(encoded).not.toContain("authorization")
+    expect(encoded).not.toContain("reusable-default-secret")
+    expect(encoded).not.toContain("reusable-operator-secret")
+    expect(encoded).toContain("[REDACTED]")
+    expect(encoded).toContain("visible")
     expect(encoded).not.toContain(project.api_key_hash)
+  })
+
+  it("keeps the complete ingestion command below the Queue message ceiling", async () => {
+    const accepted: QueueCommand[] = []
+    const layer = Layer.mergeAll(
+      Database.layer(env.DB),
+      Layer.succeed(AppConfig)(config),
+      CredentialCrypto.layer,
+      Layer.succeed(PushQueue)({
+        send: (message) => Effect.sync(() => accepted.push(message)).pipe(Effect.asVoid),
+        sendMany: () => Effect.void
+      })
+    )
+
+    await Effect.runPromise(enqueueEventForProject(project, {
+      title: "Largest durable event",
+      data: { context: "x".repeat(119_000) }
+    }).pipe(Effect.provide(layer)))
+
+    expect(accepted).toHaveLength(1)
+    expect(encodedQueueCommandBytes(accepted[0]!)).toBeLessThanOrEqual(QUEUE_COMMAND_MAX_BYTES)
   })
 
   it("records an operator-visible terminal outcome when ingestion reaches the DLQ", async () => {

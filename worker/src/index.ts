@@ -5,7 +5,7 @@ import {
   type ExecutionContextWithAccess
 } from "./access.js"
 import { EventIngestion, PushDelivery, Retention } from "./application.js"
-import { EVENT_PAYLOAD_MAX_BYTES } from "./event-contract.js"
+import { EVENT_REQUEST_MAX_BYTES } from "./event-contract.js"
 import { makeLayers } from "./layers.js"
 import { McpEndpoint } from "./mcp.js"
 import { decodeQueueCommand, type QueueCommand } from "./queue-contract.js"
@@ -64,7 +64,7 @@ const eventPayloadLimitResponse = (): Response =>
   jsonErrorResponse(
     413,
     "payload_too_large",
-    `event request body must not exceed ${EVENT_PAYLOAD_MAX_BYTES} bytes`
+    `event request body must not exceed ${EVENT_REQUEST_MAX_BYTES} bytes`
   )
 
 const cancelRequestBody = async (
@@ -88,7 +88,7 @@ const eventRequestExceedsLimit = async (
   const contentLength = request.headers.get("content-length")
   if (contentLength !== null) {
     const declaredBytes = Number(contentLength)
-    if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_PAYLOAD_MAX_BYTES) {
+    if (Number.isFinite(declaredBytes) && declaredBytes > EVENT_REQUEST_MAX_BYTES) {
       await cancelRequestBody(request.body, "event request body too large")
       return true
     }
@@ -105,7 +105,7 @@ const eventRequestExceedsLimit = async (
       if (chunk.done) return false
 
       receivedBytes += chunk.value.byteLength
-      if (receivedBytes <= EVENT_PAYLOAD_MAX_BYTES) continue
+      if (receivedBytes <= EVENT_REQUEST_MAX_BYTES) continue
 
       await Promise.allSettled([
         reader.cancel("event request body too large"),

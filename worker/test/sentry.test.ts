@@ -185,7 +185,7 @@ describe("Sentry envelope ingestion", () => {
       tags: { huge: "x".repeat(300 * 1_024) }
     })))
     expect(mapped?.input.title).toBe("boom")
-    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(256 * 1_024)
+    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(120_000)
   })
 
   it("decompresses gzip request bodies", async () => {

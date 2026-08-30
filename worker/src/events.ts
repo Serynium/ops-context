@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { decodeCreateEventInput, type CreateEventInput } from "./event-contract.js"
 import {
   eventNotFound,
+  invalidEvent,
   invalidEventQuery,
   projectNotFound,
   type CryptographyUnavailable,
@@ -20,7 +21,12 @@ import { AppConfig, CredentialCrypto, Database, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
-import { QUEUE_COMMAND_VERSION, type IngestEventCommand } from "./queue-contract.js"
+import {
+  encodedQueueCommandBytes,
+  QUEUE_COMMAND_MAX_BYTES,
+  QUEUE_COMMAND_VERSION,
+  type IngestEventCommand
+} from "./queue-contract.js"
 import type {
   DeliveryRow,
   EventAction,
@@ -150,10 +156,21 @@ const idempotentEventId = (
 export const enqueueEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventAccepted, EventError, Database | PushQueue | CredentialCrypto> =>
+): Effect.Effect<EventAccepted, EventError, Database | PushQueue | CredentialCrypto | AppConfig> =>
   Effect.gen(function*() {
     const queue = yield* PushQueue
     const normalized = yield* decodeCreateEventInput(input)
+    let queuedEvent = normalized
+    if (normalized.data !== undefined) {
+      const settings = yield* getSettings
+      const redacted = redactValue(normalized.data, settings.redact_keys)
+      queuedEvent = {
+        ...normalized,
+        data: typeof redacted === "object" && redacted !== null && !Array.isArray(redacted)
+          ? redacted as Record<string, unknown>
+          : {}
+      }
+    }
     const acceptedAt = nowIso()
     let eventId: string
     if (normalized.external_id) {
@@ -166,14 +183,18 @@ export const enqueueEventForProject = (
     } else {
       eventId = yield* newId("evt")
     }
-    yield* queue.send({
+    const command: IngestEventCommand = {
       _tag: "IngestEvent",
       version: QUEUE_COMMAND_VERSION,
       eventId,
       projectId: project.id,
       acceptedAt,
-      event: normalized
-    })
+      event: queuedEvent
+    }
+    if (encodedQueueCommandBytes(command) > QUEUE_COMMAND_MAX_BYTES) {
+      return yield* Effect.fail(invalidEvent("event is too large for durable Queue acceptance"))
+    }
+    yield* queue.send(command)
     return { id: eventId, accepted_at: acceptedAt, status: "queued" }
   })
 

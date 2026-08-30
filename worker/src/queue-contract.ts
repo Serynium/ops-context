@@ -3,6 +3,14 @@ import { CreateEventInputSchema } from "./event-contract.js"
 import { invalidEvent, type InvalidEvent } from "./errors.js"
 
 export const QUEUE_COMMAND_VERSION = 1 as const
+// Cloudflare measures 1 KB as 1,000 bytes and counts approximately 100 bytes
+// of internal metadata against the 128 KB per-message limit.
+export const QUEUE_COMMAND_MAX_BYTES = 127_900
+
+const encoder = new TextEncoder()
+
+export const encodedQueueCommandBytes = (command: QueueCommand): number =>
+  encoder.encode(JSON.stringify(command)).byteLength
 
 export const IngestEventCommandSchema = Schema.Struct({
   _tag: Schema.Literal("IngestEvent"),
