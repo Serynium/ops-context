@@ -13,6 +13,7 @@ import {
 import {
   beginPushEnrollment,
   completePushEnrollment,
+  markPushEnrollmentRevoked,
   readPushRenewalCredential,
   revokePushRenewalCredential
 } from "./push-renewal.js"
@@ -609,7 +610,12 @@ const enablePush = async (): Promise<void> => {
     applicationServerKey: urlBase64ToBytes(public_key)
   })
   const enrollmentKey = await beginPushEnrollment(true)
-  const enrollment = await api.registerPush(defaultDeviceName(), enrollmentKey, subscription.toJSON())
+  const enrollment = await api.registerPush(
+    defaultDeviceName(),
+    enrollmentKey,
+    subscription.toJSON(),
+    true
+  )
   await completePushEnrollment(enrollmentKey, {
     installation_id: enrollment.subscription.id,
     credential: enrollment.renewal_credential
@@ -626,7 +632,21 @@ const provisionExistingPushCredential = async (): Promise<void> => {
   if (!subscription || current?.credential || current?.revoked) return
 
   const enrollmentKey = await beginPushEnrollment(false)
-  const enrollment = await api.registerPush(defaultDeviceName(), enrollmentKey, subscription.toJSON())
+  let enrollment
+  try {
+    enrollment = await api.registerPush(
+      defaultDeviceName(),
+      enrollmentKey,
+      subscription.toJSON(),
+      false
+    )
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.code === "subscription_disabled") {
+      await markPushEnrollmentRevoked()
+      return
+    }
+    throw cause
+  }
   await completePushEnrollment(enrollmentKey, {
     installation_id: enrollment.subscription.id,
     credential: enrollment.renewal_credential

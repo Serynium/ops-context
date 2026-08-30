@@ -76,8 +76,7 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     const enroll = () => Effect.runPromise(
       registerSubscription(input, "test agent").pipe(Effect.provide(layer))
     )
-    const result = await enroll()
-    const duplicate = await enroll()
+    const [result, duplicate] = await Promise.all([enroll(), enroll()])
 
     expect(result.renewal_credential).toMatch(/^ops_pwa_[A-Za-z0-9_-]{40,}$/u)
     expect(duplicate).toMatchObject({
@@ -183,6 +182,30 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       renewal_credential_hash: null,
       previous_renewal_credential_hash: null
     })
+  })
+
+  it("keeps legacy-disabled rows disabled until explicit re-enrollment", async () => {
+    const credential = `ops_pwa_${"g".repeat(43)}`
+    const endpoint = "https://push.example.test/legacy-disabled"
+    await seed("sub_renewal_legacy_disabled", credential, endpoint, false)
+    const layer = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
+    const input = {
+      enrollment_key: `ops_enroll_${"y".repeat(43)}`,
+      subscription: subscription(endpoint)
+    }
+
+    await expect(Effect.runPromise(
+      registerSubscription({ ...input, reactivate: false }, "test agent").pipe(Effect.provide(layer))
+    )).rejects.toMatchObject({ code: "subscription_disabled", status: 400 })
+
+    const reenrolled = await Effect.runPromise(
+      registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
+    )
+    expect(reenrolled.subscription).toMatchObject({
+      id: "sub_renewal_legacy_disabled",
+      enabled: true
+    })
+    expect(reenrolled.renewal_credential).toMatch(/^ops_pwa_/u)
   })
 
   it("rejects replay after rotating the credential", async () => {

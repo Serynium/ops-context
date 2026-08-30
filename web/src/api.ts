@@ -220,10 +220,16 @@ export const api = {
 
   publicKey: () => request<{ public_key: string }>("GET", "/api/v1/push/public-key"),
   pushDevices: () => request<{ subscriptions: ReadonlyArray<PushDevice> }>("GET", "/api/v1/push/subscriptions"),
-  registerPush: (name: string, enrollmentKey: string, subscription: PushSubscriptionJSON) =>
+  registerPush: (
+    name: string,
+    enrollmentKey: string,
+    subscription: PushSubscriptionJSON,
+    reactivate: boolean
+  ) =>
     request<PushCredentialResult>("POST", "/api/v1/push/subscriptions", {
       name,
       enrollment_key: enrollmentKey,
+      reactivate,
       subscription
     }),
   updatePush: (id: string, patch: { name?: string; enabled?: boolean }) =>

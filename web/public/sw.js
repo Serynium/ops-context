@@ -191,6 +191,8 @@ self.addEventListener("notificationclick", (event) => {
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil((async () => {
     try {
+      const renewalState = await readRenewalCredential()
+      if (renewalState?.revoked) return
       let subscription = event.newSubscription
       if (!subscription) {
         const keyResponse = await fetch("/api/v1/push/public-key")

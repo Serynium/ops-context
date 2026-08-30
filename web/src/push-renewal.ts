@@ -105,3 +105,17 @@ export const revokePushRenewalCredential = async (installationId: string): Promi
     database.close()
   }
 }
+
+export const markPushEnrollmentRevoked = async (): Promise<void> => {
+  const database = await openDatabase()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readwrite")
+      transaction.objectStore(STORE_NAME).put({ revoked: true }, RECORD_KEY)
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error ?? new Error("could not mark push enrollment revoked"))
+    })
+  } finally {
+    database.close()
+  }
+}

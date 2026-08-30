@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { conflict, invalid, notFound, unauthorized, type AppError } from "./errors.js"
+import { badRequest, conflict, invalid, notFound, unauthorized, type AppError } from "./errors.js"
 import { sha256Hex } from "./crypto.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database } from "./services.js"
@@ -17,6 +17,7 @@ export interface BrowserPushSubscription {
 export interface RegisterSubscriptionInput {
   readonly name?: string | undefined
   readonly enrollment_key: string
+  readonly reactivate?: boolean | undefined
   readonly subscription: BrowserPushSubscription
 }
 
@@ -73,6 +74,15 @@ const deriveRenewalCredential = (
     (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
   )
 
+const deriveEnrollmentCredential = (
+  enrollmentKey: string,
+  endpoint: string
+): Effect.Effect<string, AppError, CredentialCrypto> =>
+  Effect.map(
+    sha256Hex(`${enrollmentKey}\u0000${endpoint}`),
+    (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
+  )
+
 export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, AppError, Database> =
   Effect.gen(function*() {
     const db = yield* Database
@@ -114,12 +124,18 @@ export const registerSubscription = (
       "SELECT * FROM push_subscriptions WHERE endpoint = ?",
       [input.subscription.endpoint]
     )
+    if (existing?.enabled === 0 && input.reactivate !== true) {
+      return yield* Effect.fail(badRequest(
+        "subscription_disabled",
+        "this push installation is disabled and requires explicit re-enrollment"
+      ))
+    }
     const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
     if (!input.enrollment_key.startsWith("ops_enroll_") || input.enrollment_key.length < 54) {
       return yield* Effect.fail(invalid("a high-entropy PWA enrollment key is required"))
     }
-    const credential = yield* deriveRenewalCredential(input.enrollment_key, id, input.subscription.endpoint)
+    const credential = yield* deriveEnrollmentCredential(input.enrollment_key, input.subscription.endpoint)
     const credentialHash = yield* sha256Hex(credential)
 
     yield* db.run(
