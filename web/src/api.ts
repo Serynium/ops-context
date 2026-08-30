@@ -166,8 +166,23 @@ const eventsRequest = (params: Record<string, string | undefined> = {}): Promise
   return request<EventPage>("GET", `/api/v1/events${search.size ? `?${search}` : ""}`)
 }
 
+const accessState = async (): Promise<{ auth_required: true; authenticated: true }> => {
+  await request<AccessIdentity>("GET", "/api/v1/access/me")
+  return { auth_required: true, authenticated: true }
+}
+
 export const api = {
   accessIdentity: () => request<AccessIdentity>("GET", "/api/v1/access/me"),
+
+  // Compatibility for the current PWA entry module. These methods no longer
+  // perform application password authentication; they delegate to Access or
+  // navigate to the standard Access logout endpoint.
+  me: accessState,
+  login: (_username: string, _password: string) => accessState(),
+  logout: (): Promise<void> => {
+    window.location.assign("/cdn-cgi/access/logout")
+    return new Promise<void>(() => undefined)
+  },
 
   events: eventsRequest,
   event: (id: string) => request<EventItem>("GET", `/api/v1/events/${encodeURIComponent(id)}`),
