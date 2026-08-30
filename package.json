@@ -9,9 +9,10 @@
     "dev": "wrangler dev",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
+    "build:worker": "wrangler deploy --dry-run --outdir .worker-dist",
     "typecheck": "tsc -p worker/tsconfig.json && tsc -p web/tsconfig.json",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build:web",
+    "check": "pnpm typecheck && pnpm test && pnpm build:web && pnpm build:worker",
     "deploy": "pnpm build:web && wrangler deploy",
     "cf:types": "wrangler types worker-configuration.d.ts",
     "secrets": "node scripts/generate-secrets.mjs"
