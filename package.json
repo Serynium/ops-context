@@ -10,9 +10,10 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "build:worker": "wrangler deploy --dry-run --outdir .worker-dist",
-    "typecheck": "tsc -p worker/tsconfig.json && tsc -p web/tsconfig.json",
-    "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build:web && pnpm build:worker",
+    "typecheck": "tsc -p worker/tsconfig.json && tsc -p worker/test/tsconfig.json && tsc -p web/tsconfig.json",
+    "test": "pnpm build:web && vitest run",
+    "test:watch": "pnpm build:web && vitest",
+    "check": "pnpm typecheck && pnpm test && pnpm build:worker",
     "deploy": "pnpm build:web && wrangler deploy",
     "cf:types": "wrangler types worker-configuration.d.ts",
     "secrets": "node scripts/generate-secrets.mjs"
@@ -25,6 +26,7 @@
     "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.0.0",
     "@cloudflare/workers-types": "5.20260827.1",
     "typescript": "5.9.3",
     "vite": "8.2.2",
