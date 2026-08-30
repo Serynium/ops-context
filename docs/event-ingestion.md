@@ -4,6 +4,14 @@
 
 Ops Context rejects invalid values; it does not silently truncate identifiers, fingerprints, timestamps, or message text.
 
+## D1 lookup budget
+
+After project authentication and validation, a cold event-ingestion path loads the four required application settings with one `settings.load` query. Silence evaluation removes empty fingerprint, title, and source candidates, then matches every remaining candidate with one ordered `silences.match` query. Candidate order remains fingerprint, title, then source; a project-specific rule wins when both project and global rules match the same candidate.
+
+No isolate-local settings cache is used. Every ingestion request reads D1, so setting updates are authoritative immediately and isolate eviction has no cache-consistency effect.
+
+Both consolidated queries emit a structured `d1_query` log containing the stable `query` name, `duration_ms`, `rows_returned`, and D1's `rows_read` and `rows_written` metadata. SQL parameters and event content are not logged. These fields support before/after comparison in Cloudflare Logs; the cold-path lookup budget changes from four settings queries plus up to three silence queries to one settings query plus at most one silence query.
+
 ## Request limit
 
 The raw HTTP request body must be at most **262,144 bytes (256 KiB)**. The Worker checks the declared `Content-Length` when present. It also reads request streams incrementally and cancels both stream branches as soon as the measured body crosses the limit, so chunked requests cannot bypass the ceiling or force the isolate to buffer the complete body.

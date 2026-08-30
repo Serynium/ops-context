@@ -323,7 +323,10 @@ export const AdminHandlers = HttpApiBuilder.group(
         const request = yield* HttpServerRequest.HttpServerRequest
         return yield* toHttpFailure(subscriptions.register(payload, request.headers["user-agent"] ?? ""))
       }),
-      updateSubscription: ({ params, payload }) => toHttpFailure(subscriptions.update(params.id, payload)),
+      updateSubscription: ({ params, payload }) => toHttpFailure(subscriptions.update(params.id, {
+        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {})
+      })),
       deleteSubscription: ({ params }) => toHttpFailure(subscriptions.delete(params.id)),
 
       listSilences: () => toHttpFailure(silences.listSummary),

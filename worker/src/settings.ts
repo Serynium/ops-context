@@ -5,15 +5,17 @@ import { AppConfig, Database } from "./services.js"
 import type { SettingsView } from "./types.js"
 import { nowIso } from "./ids.js"
 
-const getValue = (key: string): Effect.Effect<string | null, RepositoryUnavailable, Database> =>
-  Effect.gen(function*() {
-    const db = yield* Database
-    const row = yield* db.first<{ readonly value: string }>(
-      "SELECT value FROM settings WHERE key = ?",
-      [key]
-    )
-    return row?.value ?? null
-  })
+interface SettingRow {
+  readonly key: string
+  readonly value: string
+}
+
+const requiredSettingKeys = [
+  "retention_days",
+  "redact_keys",
+  "setup_completed",
+  "mcp_enabled"
+] as const
 
 const setValue = (key: string, value: string): Effect.Effect<void, RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
@@ -39,18 +41,23 @@ const parseList = (value: string | null): ReadonlyArray<string> => {
 export const getSettings: Effect.Effect<SettingsView, RepositoryUnavailable, Database | AppConfig> =
   Effect.gen(function*() {
     const config = yield* AppConfig
-    const retentionText = yield* getValue("retention_days")
-    const redactText = yield* getValue("redact_keys")
-    const setupText = yield* getValue("setup_completed")
-    const mcpEnabledText = yield* getValue("mcp_enabled")
+    const db = yield* Database
+    const rows = yield* db.namedAll<SettingRow>(
+      "settings.load",
+      `SELECT key, value FROM settings
+       WHERE key IN (${requiredSettingKeys.map(() => "?").join(", ")})`,
+      requiredSettingKeys
+    )
+    const values = new Map(rows.map((row) => [row.key, row.value]))
+    const retentionText = values.get("retention_days") ?? null
 
     const parsedRetention = Number.parseInt(retentionText ?? "", 10)
     return {
       retention_days: Number.isInteger(parsedRetention) ? parsedRetention : config.defaultRetentionDays,
-      redact_keys: parseList(redactText),
+      redact_keys: parseList(values.get("redact_keys") ?? null),
       default_redact_keys: DEFAULT_REDACT_KEYS,
-      setup_completed: setupText === "true",
-      mcp_enabled: mcpEnabledText === "true",
+      setup_completed: values.get("setup_completed") === "true",
+      mcp_enabled: values.get("mcp_enabled") === "true",
       mcp_access_configured: Boolean(config.mcpHost && config.accessMcpAudience)
     }
   })

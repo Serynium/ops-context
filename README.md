@@ -59,6 +59,11 @@ Apps, CI, cron jobs                      MCP clients / agents
 
 The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so scheduled reconciliation is restricted to genuinely unpublished, lost, or lease-abandoned work. Cloudflare Queue owns ordinary delayed retries; D1 owns leases, attempt limits, and terminal `sent`/`dead` state. The dead-letter Queue is consumed into an operator-visible terminal record rather than starting a fresh retry cycle. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending. See [Web Push delivery lifecycle](docs/delivery.md).
 
+MCP, HTTP, Queue consumption, and scheduled maintenance intentionally remain one
+modular Worker deployment until production isolation or scaling evidence justifies the
+extra operational boundary. See [ADR 0002](docs/decisions/0002-retain-single-worker-deployment.md)
+for the measured bundle baseline, decision triggers, and requirements for a safe split.
+
 ## Requirements
 
 - Node.js 22.12 or newer.

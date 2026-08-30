@@ -164,7 +164,10 @@ describe("Cloudflare Access identity boundary", () => {
         headers: { authorization: "Bearer ops_proj_not_an_admin_credential" }
       }),
       env,
-      context("app-audience", { email: "operator@example.com" })
+      {
+        waitUntil: () => undefined,
+        passThroughOnException: () => undefined
+      } as ExecutionContextWithAccess
     )
 
     await expect(authenticate(request, "app")).rejects.toMatchObject({
