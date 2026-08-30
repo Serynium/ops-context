@@ -44,6 +44,7 @@ import {
   type UpdateProjectInput
 } from "./projects.js"
 import { processDeadLetterMessage, processPushMessage, type PushDeliveryError, type PushOutcome } from "./push.js"
+import { PushDeliveryRepository } from "./push-repository.js"
 import {
   createSilence,
   deleteSilence,
@@ -415,20 +416,17 @@ export class PushDelivery extends Context.Service<PushDelivery, {
   static readonly layer = Layer.effect(
     PushDelivery,
     Effect.gen(function*() {
-      const database = yield* Database
+      const repository = yield* PushDeliveryRepository
       const webPush = yield* WebPush
-      const crypto = yield* CredentialCrypto
       const config = yield* AppConfig
       return PushDelivery.of({
         process: (message) => processPushMessage(message).pipe(
-          Effect.provideService(Database, database),
+          Effect.provideService(PushDeliveryRepository, repository),
           Effect.provideService(WebPush, webPush),
-          Effect.provideService(CredentialCrypto, crypto),
           Effect.provideService(AppConfig, config)
         ),
         deadLetter: (message) => processDeadLetterMessage(message).pipe(
-          Effect.provideService(Database, database),
-          Effect.provideService(CredentialCrypto, crypto)
+          Effect.provideService(PushDeliveryRepository, repository)
         )
       })
     })

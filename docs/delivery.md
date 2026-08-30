@@ -52,6 +52,32 @@ Each delivery outcome uses a D1 batch for related state:
 - optional subscription disabling.
 
 This prevents a job from becoming terminal without the matching operator-visible delivery record.
+Every statement is guarded by the claim's exact lease value. The delivery insert runs before the
+state transition inside the same atomic batch, so a consumer whose lease expired cannot record an
+attempt or overwrite the result of the consumer that reclaimed the job.
+
+## Push-consumer D1 measurements
+
+The normal success path now performs three repository operations, in order:
+
+1. one conditional claim, which is the authoritative eligibility check;
+2. one joined read of the claimed job, event, project, and subscription;
+3. one atomic success-finalization batch.
+
+The previous path performed a pre-claim job read, the claim, three separate context reads, and the
+finalization batch. The following measurements use the Workers test runtime with one seeded
+project, event, subscription, and queued job. They sum `D1Result.meta.rows_read` and
+`D1Result.meta.rows_written` for a successful HTTP 201 delivery; the before queries were replayed
+from commit `575a01e` and the after queries use the repository operations introduced for issue #12.
+
+| Successful delivery | D1 round trips | SQL statements | Rows read | Rows written |
+| --- | ---: | ---: | ---: | ---: |
+| Before | 6 | 7 | 10 | 10 |
+| After | 3 | 4 | 10 | 10 |
+
+The row counters include index maintenance and the lease-ownership predicates. This change halves
+network round trips while keeping measured D1 row consumption flat; the extra ownership checks are
+what prevent a stale claimant from finalizing after lease reclamation.
 
 ## Reconciliation
 
