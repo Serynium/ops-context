@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ops-context-test",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-28",
+
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health", "/mcp"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ops-context-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "queues": {
+    "producers": [
+      {
+        "binding": "PUSH_QUEUE",
+        "queue": "ops-context-push-test"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ops-context-push-test",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "ops-context-push-dlq-test",
+        "max_concurrency": 1
+      }
+    ]
+  },
+
+  "vars": {
+    "OPS_ADMIN_USER": "admin",
+    "OPS_RETENTION_DAYS": "90",
+    "OPS_BASE_URL": "https://ops.example.com"
+  }
+}
