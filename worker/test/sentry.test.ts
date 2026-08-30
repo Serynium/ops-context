@@ -36,15 +36,15 @@ const envelope = (
   )
 }
 
-const gzip = async (body: Uint8Array): Promise<Uint8Array> => {
-  const input = new ReadableStream<Uint8Array>({
+const gzip = async (body: Uint8Array): Promise<ArrayBuffer> => {
+  const input = new ReadableStream<BufferSource>({
     start(controller) {
       controller.enqueue(body)
       controller.close()
     }
   })
   const compressed = input.pipeThrough(new CompressionStream("gzip"))
-  return new Uint8Array(await new Response(compressed).arrayBuffer())
+  return await new Response(compressed).arrayBuffer()
 }
 
 describe("Sentry envelope ingestion", () => {
