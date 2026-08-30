@@ -9,11 +9,8 @@ import {
   OpenApi
 } from "effect/unstable/httpapi"
 import {
-  AuthLoginInput,
+  AccessIdentity,
   BadRequestError,
-  toApiFailure,
-  AuthState,
-  AuthStateWithCookie,
   CommonErrors,
   CreateEventInput,
   CreateProjectInput,
@@ -24,7 +21,6 @@ import {
   EventListQuery,
   EventPage,
   Health,
-  LogoutWithCookie,
   Project,
   ProjectCreated,
   ProjectIcons,
@@ -42,10 +38,10 @@ import {
   Unsilenced,
   UpdateProjectInput,
   UpdateSettingsInput,
-  UpdateSubscriptionInput
+  UpdateSubscriptionInput,
+  toApiFailure
 } from "./api-models.js"
 import {
-  Auth,
   Events,
   Projects,
   Settings,
@@ -56,14 +52,13 @@ import {
 import { decodeCreateEventInput } from "./event-contract.js"
 import {
   AdminAuthorization,
+  CurrentAdmin,
   CurrentProject,
   ProjectAuthorization,
   SameOrigin
 } from "./middleware.js"
 
-// Kept as a named schema so path codecs remain explicit and reusable.
 const SchemaString = Schema.String
-
 
 export class HealthApiGroup extends HttpApiGroup.make("health")
   .add(
@@ -76,19 +71,6 @@ export class HealthApiGroup extends HttpApiGroup.make("health")
 
 export class PublicApiGroup extends HttpApiGroup.make("public")
   .add(
-    HttpApiEndpoint.get("authMe", "/auth/me", {
-      success: AuthState,
-      error: CommonErrors
-    }),
-    HttpApiEndpoint.post("authLogin", "/auth/login", {
-      payload: AuthLoginInput,
-      success: AuthStateWithCookie,
-      error: CommonErrors
-    }).middleware(SameOrigin),
-    HttpApiEndpoint.post("authLogout", "/auth/logout", {
-      success: LogoutWithCookie,
-      error: CommonErrors
-    }).middleware(SameOrigin),
     HttpApiEndpoint.get("pushPublicKey", "/push/public-key", {
       success: PushPublicKey,
       error: CommonErrors
@@ -111,6 +93,10 @@ export class IngestApiGroup extends HttpApiGroup.make("ingest")
 
 export class AdminApiGroup extends HttpApiGroup.make("admin")
   .add(
+    HttpApiEndpoint.get("accessIdentity", "/access/me", {
+      success: AccessIdentity,
+      error: CommonErrors
+    }),
     HttpApiEndpoint.get("listEvents", "/events", {
       query: EventListQuery,
       success: EventPage,
@@ -236,7 +222,7 @@ export class OpsApi extends HttpApi.make("ops-context")
   .annotateMerge(OpenApi.annotations({
     title: "Ops Context API",
     version: "0.3.0",
-    description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and administration."
+    description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and Cloudflare Access administration."
   }))
 {}
 
@@ -259,32 +245,8 @@ export const PublicHandlers = HttpApiBuilder.group(
   OpsApi,
   "public",
   Effect.fn(function*(handlers) {
-    const auth = yield* Auth
     const system = yield* System
-
-    return handlers.handleAll({
-      authMe: Effect.fn(function*() {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* auth.me(request)
-      }),
-      authLogin: Effect.fn(function*({ payload }) {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const result = yield* auth.login(request, payload)
-        return HttpApiSchema.withHeaders({
-          body: result.state,
-          headers: { "set-cookie": result.cookie }
-        })
-      }),
-      authLogout: Effect.fn(function*() {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const cookie = yield* auth.logout(request)
-        return HttpApiSchema.withHeaders({
-          body: undefined,
-          headers: { "set-cookie": cookie }
-        })
-      }),
-      pushPublicKey: () => system.publicKey
-    })
+    return handlers.handle("pushPublicKey", () => system.publicKey)
   })
 )
 
@@ -324,6 +286,16 @@ export const AdminHandlers = HttpApiBuilder.group(
     const system = yield* System
 
     return handlers.handleAll({
+      accessIdentity: Effect.fn(function*() {
+        const principal = yield* CurrentAdmin
+        return {
+          subject: principal.subject,
+          kind: principal.kind,
+          audience: principal.audience,
+          ...(principal.email ? { email: principal.email } : {}),
+          ...(principal.name ? { name: principal.name } : {})
+        }
+      }),
       listEvents: ({ query }) => events.list(query),
       getEvent: ({ params }) => events.get(params.id),
       eventDeliveries: ({ params }) =>
