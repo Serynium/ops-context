@@ -83,19 +83,25 @@ export default {
 
   async queue(batch, env): Promise<void> {
     const runtime = runtimeFor(env).programs
+    const deadLetterBatch = batch.queue.endsWith("-dlq")
+
     for (const message of batch.messages) {
       try {
         const outcome = await runtime.runPromise(
-          Effect.flatMap(PushDelivery, (delivery) => delivery.process(message.body))
+          Effect.flatMap(PushDelivery, (delivery) =>
+            deadLetterBatch
+              ? delivery.deadLetter(message.body)
+              : delivery.process(message.body)
+          )
         )
-        if (outcome._tag === "Retry") {
+        if (!deadLetterBatch && outcome._tag === "Retry") {
           message.retry({ delaySeconds: outcome.delaySeconds })
         } else {
           message.ack()
         }
       } catch (cause) {
-        console.error("push consumer defect", cause)
-        message.retry({ delaySeconds: 30 })
+        console.error(deadLetterBatch ? "dead-letter consumer defect" : "push consumer defect", cause)
+        message.retry({ delaySeconds: deadLetterBatch ? 60 : 30 })
       }
     }
   },

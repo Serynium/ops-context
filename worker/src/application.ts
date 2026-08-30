@@ -35,7 +35,7 @@ import {
   type CreateProjectInput,
   type UpdateProjectInput
 } from "./projects.js"
-import { processPushMessage, type PushOutcome } from "./push.js"
+import { processDeadLetterMessage, processPushMessage, type PushOutcome } from "./push.js"
 import {
   createSilence,
   deleteSilence,
@@ -426,12 +426,14 @@ export class System extends Context.Service<System, {
           readonly events: number
           readonly subscriptions: number
           readonly enabled_subscriptions: number
+          readonly dead_jobs: number
         }>(
           `SELECT
              (SELECT COUNT(*) FROM projects) AS projects,
              (SELECT COUNT(*) FROM events) AS events,
              (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
-             (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions`
+             (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
+             (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`
         ).pipe(Effect.mapError(toApiFailure))
         const lastPush = yield* database.first<DeliveryRow>(
           `SELECT d.id, d.event_id, d.subscription_id,
@@ -457,6 +459,7 @@ export class System extends Context.Service<System, {
           events: counts?.events ?? 0,
           subscriptions: counts?.subscriptions ?? 0,
           enabled_subscriptions: counts?.enabled_subscriptions ?? 0,
+          dead_jobs: counts?.dead_jobs ?? 0,
           last_push: lastPush,
           retention_days: currentSettings.retention_days,
           setup_completed: currentSettings.setup_completed,
@@ -494,13 +497,15 @@ export class System extends Context.Service<System, {
 
 export class PushDelivery extends Context.Service<PushDelivery, {
   readonly process: (message: PushJobMessage) => Effect.Effect<PushOutcome, AppError>
+  readonly deadLetter: (message: PushJobMessage) => Effect.Effect<PushOutcome, AppError>
 }>()("ops-context/PushDelivery") {
   static readonly layer = Layer.effect(
     PushDelivery,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | WebPush | CredentialCrypto>()
+      const context = yield* Effect.context<Database | WebPush | CredentialCrypto | AppConfig>()
       return PushDelivery.of({
-        process: (message) => provideAll(processPushMessage(message), context)
+        process: (message) => provideAll(processPushMessage(message), context),
+        deadLetter: (message) => provideAll(processDeadLetterMessage(message), context)
       })
     })
   )

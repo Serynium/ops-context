@@ -716,6 +716,7 @@ const renderSettings = async (): Promise<void> => {
       <div class="stat"><span>Projects</span><strong>${status.projects}</strong></div>
       <div class="stat"><span>Events</span><strong>${status.events}</strong></div>
       <div class="stat"><span>Push devices</span><strong>${status.enabled_subscriptions}/${status.subscriptions}</strong></div>
+      <div class="stat"><span>Dead deliveries</span><strong>${status.dead_jobs}</strong></div>
       <div class="stat"><span>Version</span><strong>${escapeHtml(status.version)}</strong></div>
     </div>
     <section class="panel">

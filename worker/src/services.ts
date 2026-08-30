@@ -92,6 +92,7 @@ export interface ConfigService {
   readonly baseUrl?: string
   readonly adminUser: string
   readonly defaultRetentionDays: number
+  readonly maxPushAttempts: number
   readonly adminPasswordHash: string
   readonly vapidPublicKey: string
   readonly vapidPrivateJwk: string
@@ -105,6 +106,7 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
       ...(env.OPS_BASE_URL ? { baseUrl: env.OPS_BASE_URL } : {}),
       adminUser: env.OPS_ADMIN_USER,
       defaultRetentionDays: Number.parseInt(env.OPS_RETENTION_DAYS ?? "90", 10) || 90,
+      maxPushAttempts: Math.min(20, Math.max(1, Number.parseInt(env.OPS_PUSH_MAX_ATTEMPTS ?? "6", 10) || 6)),
       adminPasswordHash: env.ADMIN_PASSWORD_HASH,
       vapidPublicKey: env.VAPID_PUBLIC_KEY,
       vapidPrivateJwk: env.VAPID_PRIVATE_JWK,

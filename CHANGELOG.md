@@ -6,9 +6,16 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- Bounded Web Push delivery attempts with explicit `retrying`, `sent`, and terminal `dead` job states. Queue delayed retry is the ordinary retry authority, while the dead-letter Queue records an operator-visible terminal outcome.
+- Workers-runtime reliability tests covering duplicate Queue delivery, lease reclamation, retry exhaustion, delayed-retry/Cron separation, unpublished-job recovery, and DLQ handling.
+- Administrator status now reports the number of terminal `dead_jobs`.
+- D1 migration `0004_push_retry_state` for the new delivery state machine and indexes.
+
 - Sentry SDK ingestion through `POST /api/{id}/envelope/`. Server-side Sentry clients can use an Ops Context project API key as the DSN public key; exception and message events reuse the existing redaction, silence, grouping, D1, durable push-job, and Queue delivery pipeline. Gzip and deflate envelopes, Sentry fingerprints, curated event context, and non-error item ignoring are supported.
 
 ### Changed
+
+- Push retry scheduling is bounded by `OPS_PUSH_MAX_ATTEMPTS` (default `6`). Cron reconciliation no longer republishes normal delayed retries or terminal jobs. Delivery-state updates and attempt history are finalized atomically through D1 batches.
 
 - Replaced the application-level Zod MCP schemas with Effect Schema contracts adapted through Standard Schema V1. HTTP and MCP boundaries now share the same schema system, and `zod` is no longer a direct dependency.
 

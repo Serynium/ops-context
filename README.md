@@ -18,7 +18,7 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 - Project CRUD, notification thresholds, enable/disable controls, API-key rotation, and test events.
 - Encrypted standards-based Web Push using VAPID and `@pushforge/builder`, compatible with Cloudflare Workers.
 - Installable PWA with an offline shell, push-subscription management, notification action buttons, tap-through, and iOS Home Screen guidance.
-- Durable push jobs, Cloudflare Queue fan-out, leases, per-attempt delivery records, transient retries, dead-subscription disabling, and Cron recovery.
+- Durable push jobs, Cloudflare Queue fan-out, leases, bounded Queue-owned retries, terminal dead-letter outcomes, expired-subscription disabling, and narrow outbox reconciliation.
 - Silence rules by fingerprint, title, or source, including project-specific and global rules.
 - Optional read-only MCP Streamable HTTP endpoint using the official `@modelcontextprotocol/server` TypeScript SDK.
 - D1-backed administrator sessions, same-origin checks, PBKDF2 password verification, secure cookies, retention settings, and scheduled cleanup.
@@ -57,7 +57,7 @@ Apps, CI, cron jobs                      MCP clients / agents
               PWA inbox          Installed PWA notification
 ```
 
-The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so the five-minute Cron Trigger republishes stale or never-published jobs. Queue consumers use a D1 lease and terminal job states to make at-least-once processing safe. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending.
+The event write and creation of durable `push_jobs` rows happen in one D1 batch. Publishing to Queues is necessarily a second step, so scheduled reconciliation is restricted to genuinely unpublished, lost, or lease-abandoned work. Cloudflare Queue owns ordinary delayed retries; D1 owns leases, attempt limits, and terminal `sent`/`dead` state. The dead-letter Queue is consumed into an operator-visible terminal record rather than starting a fresh retry cycle. The Web Push topic is derived from the event id so a push service can replace a duplicate that is still pending. See [Web Push delivery lifecycle](docs/delivery.md).
 
 ## Requirements
 
@@ -321,7 +321,7 @@ The Worker boundary is a standard Cloudflare module handler. Inside that boundar
 - `Schema.TaggedError` values define declared API failures and status codes.
 - `Projects`, `Events`, `Subscriptions`, `Silences`, `Settings`, `Auth`, `PushDelivery`, `Maintenance`, `McpEndpoint`, and `SentryEndpoint` are narrow Effect services.
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
-- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, Cron, MCP, and Sentry envelope executions.
+- `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled maintenance, MCP, and Sentry envelope executions.
 - `@effect/sql-d1` provides the D1 SQL client, while a narrow `Database` service preserves native D1 batch behavior where atomic batches are required.
 - Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.

@@ -1,17 +1,26 @@
 import { Effect } from "effect"
-import { internal, type AppError } from "./errors.js"
+import { type AppError } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { CredentialCrypto, Database, WebPush } from "./services.js"
+import { AppConfig, CredentialCrypto, Database, WebPush } from "./services.js"
 import type { EventAction, EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
 
-interface PushJobRow {
+export type PushJobState =
+  | "pending"
+  | "queued"
+  | "sending"
+  | "retrying"
+  | "sent"
+  | "dead"
+
+export interface PushJobRow {
   readonly event_id: string
   readonly subscription_id: string
-  readonly state: "pending" | "queued" | "sending" | "sent" | "failed"
+  readonly state: PushJobState
   readonly attempts: number
   readonly available_at: string
   readonly queued_at: string | null
   readonly lease_until: string | null
+  readonly dead_at: string | null
   readonly last_error: string
   readonly updated_at: string
 }
@@ -21,6 +30,8 @@ export type PushOutcome =
   | { readonly _tag: "PermanentFailure" }
   | { readonly _tag: "AlreadyProcessed" }
   | { readonly _tag: "Retry"; readonly delaySeconds: number }
+
+const terminalStates = new Set<PushJobState>(["sent", "dead"])
 
 const topicFor = (eventId: string): string =>
   eventId.replace(/[^A-Za-z0-9_-]/gu, "").slice(-32)
@@ -43,23 +54,28 @@ const parseActions = (value: string): ReadonlyArray<EventAction> => {
   }
 }
 
-const recordAttempt = (
+const deliveryInsert = (
+  id: string,
   message: PushJobMessage,
   status: "sent" | "failed" | "skipped",
   responseStatus: number | null,
-  error: string
-): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
-  Effect.gen(function*() {
-    const db = yield* Database
-    const at = nowIso()
-    const deliveryId = yield* newId("dlv")
-    yield* db.run(
-      `INSERT INTO deliveries
-       (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [deliveryId, message.eventId, message.subscriptionId, status, responseStatus, error.slice(0, 4_000), at, at]
-    )
-  })
+  error: string,
+  attemptedAt: string
+) => ({
+  sql: `INSERT INTO deliveries
+        (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  params: [
+    id,
+    message.eventId,
+    message.subscriptionId,
+    status,
+    responseStatus,
+    error.slice(0, 4_000),
+    attemptedAt,
+    attemptedAt
+  ]
+})
 
 const finalizeSuccess = (
   message: PushJobMessage,
@@ -67,16 +83,21 @@ const finalizeSuccess = (
 ): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
-    yield* db.run(
-      `UPDATE push_jobs
-       SET state = 'sent', lease_until = NULL, last_error = '', updated_at = ?
-       WHERE event_id = ? AND subscription_id = ?`,
-      [nowIso(), message.eventId, message.subscriptionId]
-    )
-    yield* recordAttempt(message, "sent", responseStatus, "")
+    const now = nowIso()
+    const deliveryId = yield* newId("dlv")
+    yield* db.batch([
+      {
+        sql: `UPDATE push_jobs
+              SET state = 'sent', lease_until = NULL, dead_at = NULL,
+                  last_error = '', updated_at = ?
+              WHERE event_id = ? AND subscription_id = ?`,
+        params: [now, message.eventId, message.subscriptionId]
+      },
+      deliveryInsert(deliveryId, message, "sent", responseStatus, "", now)
+    ])
   })
 
-const finalizePermanentFailure = (
+const finalizeDead = (
   message: PushJobMessage,
   responseStatus: number | null,
   error: string,
@@ -89,24 +110,12 @@ const finalizePermanentFailure = (
     const statements = [
       {
         sql: `UPDATE push_jobs
-              SET state = 'failed', lease_until = NULL, last_error = ?, updated_at = ?
+              SET state = 'dead', lease_until = NULL, dead_at = ?,
+                  last_error = ?, updated_at = ?
               WHERE event_id = ? AND subscription_id = ?`,
-        params: [error.slice(0, 4_000), now, message.eventId, message.subscriptionId]
+        params: [now, error.slice(0, 4_000), now, message.eventId, message.subscriptionId]
       },
-      {
-        sql: `INSERT INTO deliveries
-              (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
-              VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)`,
-        params: [
-          deliveryId,
-          message.eventId,
-          message.subscriptionId,
-          responseStatus,
-          error.slice(0, 4_000),
-          now,
-          now
-        ]
-      }
+      deliveryInsert(deliveryId, message, "failed", responseStatus, error, now)
     ]
     if (disableSubscription) {
       statements.push({
@@ -117,42 +126,51 @@ const finalizePermanentFailure = (
     yield* db.batch(statements)
   })
 
-const scheduleRetry = (
+const retryDelaySeconds = (attempts: number): number =>
+  Math.min(900, Math.max(15, 15 * 2 ** Math.min(attempts, 6)))
+
+const retryOrDead = (
   message: PushJobMessage,
   attempts: number,
   responseStatus: number | null,
   error: string
-): Effect.Effect<number, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<PushOutcome, AppError, Database | CredentialCrypto | AppConfig> =>
   Effect.gen(function*() {
     const db = yield* Database
-    const delaySeconds = Math.min(900, Math.max(15, 15 * 2 ** Math.min(attempts, 6)))
+    const config = yield* AppConfig
+
+    if (attempts >= config.maxPushAttempts) {
+      yield* finalizeDead(
+        message,
+        responseStatus,
+        `delivery exhausted after ${attempts} attempts: ${error}`,
+        false
+      )
+      return { _tag: "PermanentFailure" } as const
+    }
+
+    const delaySeconds = retryDelaySeconds(attempts)
     const availableAt = new Date(Date.now() + delaySeconds * 1_000).toISOString()
     const now = nowIso()
     const deliveryId = yield* newId("dlv")
     yield* db.batch([
       {
         sql: `UPDATE push_jobs
-              SET state = 'pending', available_at = ?, queued_at = NULL, lease_until = NULL,
-                  last_error = ?, updated_at = ?
+              SET state = 'retrying', available_at = ?, queued_at = ?,
+                  lease_until = NULL, dead_at = NULL, last_error = ?, updated_at = ?
               WHERE event_id = ? AND subscription_id = ?`,
-        params: [availableAt, error.slice(0, 4_000), now, message.eventId, message.subscriptionId]
-      },
-      {
-        sql: `INSERT INTO deliveries
-              (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
-              VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)`,
         params: [
-          deliveryId,
-          message.eventId,
-          message.subscriptionId,
-          responseStatus,
+          availableAt,
+          now,
           error.slice(0, 4_000),
           now,
-          now
+          message.eventId,
+          message.subscriptionId
         ]
-      }
+      },
+      deliveryInsert(deliveryId, message, "failed", responseStatus, error, now)
     ])
-    return delaySeconds
+    return { _tag: "Retry", delaySeconds } as const
   })
 
 interface PushContext {
@@ -201,7 +219,7 @@ const claim = (message: PushJobMessage): Effect.Effect<boolean, AppError, Databa
        SET state = 'sending', attempts = attempts + 1, lease_until = ?, updated_at = ?
        WHERE event_id = ? AND subscription_id = ?
          AND (
-           state IN ('pending', 'queued')
+           state IN ('pending', 'queued', 'retrying')
            OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?))
          )
          AND available_at <= ?`,
@@ -210,9 +228,12 @@ const claim = (message: PushJobMessage): Effect.Effect<boolean, AppError, Databa
     return ((result.meta as { readonly changes?: number }).changes ?? 0) > 0
   })
 
+const secondsUntil = (iso: string): number =>
+  Math.max(1, Math.ceil((new Date(iso).getTime() - Date.now()) / 1_000))
+
 export const processPushMessage = (
   message: PushJobMessage
-): Effect.Effect<PushOutcome, AppError, Database | WebPush | CredentialCrypto> =>
+): Effect.Effect<PushOutcome, AppError, Database | WebPush | CredentialCrypto | AppConfig> =>
   Effect.gen(function*() {
     const db = yield* Database
     const webPush = yield* WebPush
@@ -221,18 +242,22 @@ export const processPushMessage = (
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
       [message.eventId, message.subscriptionId]
     )
-    if (!before || before.state === "sent" || before.state === "failed") {
+    if (!before || terminalStates.has(before.state)) {
       return { _tag: "AlreadyProcessed" } as const
+    }
+
+    if (before.available_at > nowIso()) {
+      return { _tag: "Retry", delaySeconds: secondsUntil(before.available_at) } as const
     }
 
     if (!(yield* claim(message))) return { _tag: "AlreadyProcessed" } as const
     const context = yield* loadContext(message)
     if (!context) {
-      yield* finalizePermanentFailure(message, null, "event or subscription no longer exists", false)
+      yield* finalizeDead(message, null, "event or subscription no longer exists", false)
       return { _tag: "PermanentFailure" } as const
     }
     if (context.subscription.enabled !== 1) {
-      yield* finalizePermanentFailure(message, null, "push subscription is disabled", false)
+      yield* finalizeDead(message, null, "push subscription is disabled", false)
       return { _tag: "PermanentFailure" } as const
     }
 
@@ -282,9 +307,7 @@ export const processPushMessage = (
       }
     ).pipe(
       Effect.catch((error) =>
-        scheduleRetry(message, context.job.attempts, null, error.message).pipe(
-          Effect.map((delaySeconds) => ({ _tag: "Retry", delaySeconds } as PushOutcome))
-        )
+        retryOrDead(message, context.job.attempts, null, error.message)
       )
     )
 
@@ -295,20 +318,42 @@ export const processPushMessage = (
       return { _tag: "Delivered" } as const
     }
 
-    const details = (yield* Effect.tryPromise({
+    const details = yield* Effect.tryPromise({
       try: () => responseBody(sent),
-      catch: (cause) => internal("failed to read Web Push response", cause)
-    })) || `push service returned HTTP ${sent.status}`
+      catch: () => `push service returned HTTP ${sent.status}`
+    }).pipe(Effect.catch(() => Effect.succeed(`push service returned HTTP ${sent.status}`)))
+
     if (sent.status === 404 || sent.status === 410) {
-      yield* finalizePermanentFailure(message, sent.status, details, true)
+      yield* finalizeDead(message, sent.status, details || `push service returned HTTP ${sent.status}`, true)
       return { _tag: "PermanentFailure" } as const
     }
 
     if (sent.status === 408 || sent.status === 425 || sent.status === 429 || sent.status >= 500) {
-      const delaySeconds = yield* scheduleRetry(message, context.job.attempts, sent.status, details)
-      return { _tag: "Retry", delaySeconds } as const
+      return yield* retryOrDead(
+        message,
+        context.job.attempts,
+        sent.status,
+        details || `push service returned HTTP ${sent.status}`
+      )
     }
 
-    yield* finalizePermanentFailure(message, sent.status, details, false)
+    yield* finalizeDead(message, sent.status, details || `push service returned HTTP ${sent.status}`, false)
     return { _tag: "PermanentFailure" } as const
   }).pipe(Effect.withSpan("PushDelivery.process", { attributes: { eventId: message.eventId } }))
+
+export const processDeadLetterMessage = (
+  message: PushJobMessage,
+  reason = "Cloudflare Queue moved the message to the dead-letter queue"
+): Effect.Effect<PushOutcome, AppError, Database | CredentialCrypto> =>
+  Effect.gen(function*() {
+    const db = yield* Database
+    const job = yield* db.first<PushJobRow>(
+      "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
+      [message.eventId, message.subscriptionId]
+    )
+    if (!job || terminalStates.has(job.state)) {
+      return { _tag: "AlreadyProcessed" } as const
+    }
+    yield* finalizeDead(message, null, reason, false)
+    return { _tag: "PermanentFailure" } as const
+  }).pipe(Effect.withSpan("PushDelivery.deadLetter", { attributes: { eventId: message.eventId } }))
