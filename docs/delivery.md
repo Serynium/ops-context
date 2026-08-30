@@ -83,7 +83,7 @@ what prevent a stale claimant from finalizing after lease reclamation.
 
 The only configured schedule is once-daily retention (`0 3 * * *`) when automatic retention is wanted. Set `retention_days` to `0` and remove the `triggers` block from `wrangler.jsonc` for a no-Cron deployment, or when retention is managed externally.
 
-Before deploying, apply migration `0006_queue_first_ingestion.sql`. It terminalizes legacy `pending` and abandoned `sending` jobs that relied on the removed repair publisher; already queued and delayed-retry jobs keep their Queue-owned lifecycle. The terminal reason is visible in administrator status and delivery-job inspection.
+Before deploying, apply migration `0006_queue_first_ingestion.sql`. It terminalizes legacy `pending` and abandoned `sending` jobs that relied on the removed repair publisher; already queued and delayed-retry jobs keep their Queue-owned lifecycle and their previous untagged messages remain decodable. The migration also adds the atomic fan-out marker and durable ingestion-failure ledger. Terminal counts are visible in administrator status, with reasons retained in D1.
 
 Removing the five-minute repair schedule eliminates 288 periodic Worker invocations and their recovery D1 queries per day. Queue-first ingestion adds one Queue operation per accepted event; delivery fan-out operations are otherwise the same. The cost trade is event-proportional Queue work instead of constant polling.
 

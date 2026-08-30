@@ -9,7 +9,7 @@ All notable changes to Ops Context are recorded here.
 - Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.
 - D1 observability guidance for read amplification, write volume, latency, failures, and before/after performance comparisons.
 - A measured D1 index baseline, query-plan integration guardrails, and safe rollout/rollback guidance for event listing, grouping, recovery, delivery history, project authentication, and silence matching.
-- Queue-first event acceptance with schema-versioned `IngestEvent` and `DeliverPush` commands, `202 Accepted` responses, deterministic `external_id` retry ids, and crash-safe idempotent fan-out.
+- Queue-first event acceptance with schema-versioned `IngestEvent` and `DeliverPush` commands, rollout decoding for legacy delivery messages, `202 Accepted` responses, deterministic `external_id` retry ids, atomic fan-out initialization, and durable ingestion-DLQ outcomes.
 - Workers-runtime coverage for Queue-send failure, eventual consistency, duplicate ingestion, post-commit recovery, and partial fan-out.
 
 - Strict Effect Schema event ingestion with field-level validation issues, calendar-valid RFC 3339 timestamps, HTTP(S)-only actions, bounded structured context, and a 256 KiB raw request limit.

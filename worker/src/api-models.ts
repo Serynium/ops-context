@@ -153,6 +153,7 @@ export const Status = Schema.Struct({
   subscriptions: Schema.Int,
   enabled_subscriptions: Schema.Int,
   dead_jobs: Schema.Int,
+  failed_ingests: Schema.Int,
   last_push: Schema.NullOr(Delivery),
   retention_days: Schema.Int,
   setup_completed: Schema.Boolean,

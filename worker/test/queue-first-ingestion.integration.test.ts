@@ -3,11 +3,14 @@ import { Effect, Layer, Result } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   enqueueEventForProject,
-  processIngestEvent
+  processIngestDeadLetter,
+  processIngestEvent,
+  unsilenceEvent
 } from "../src/events.js"
 import { queueUnavailable } from "../src/errors.js"
 import {
   QUEUE_COMMAND_VERSION,
+  decodeQueueCommand,
   type IngestEventCommand,
   type QueueCommand
 } from "../src/queue-contract.js"
@@ -61,6 +64,7 @@ const command = (eventId = "evt_ingest"): IngestEventCommand => ({
 const reset = async (): Promise<void> => {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM deliveries"),
+    env.DB.prepare("DELETE FROM ingestion_failures"),
     env.DB.prepare("DELETE FROM push_jobs"),
     env.DB.prepare("DELETE FROM events"),
     env.DB.prepare("DELETE FROM projects"),
@@ -132,6 +136,12 @@ describe("Queue-first event ingestion", () => {
     const layer = ingestionLayer((message) => Effect.sync(() => published.push(message)).pipe(Effect.asVoid))
 
     await Effect.runPromise(processIngestEvent(command()).pipe(Effect.provide(layer)))
+    const now = new Date().toISOString()
+    await env.DB.prepare(
+      `INSERT INTO push_subscriptions
+       (id, name, endpoint, p256dh, auth, user_agent, enabled, created_at, updated_at)
+       VALUES ('sub_later', 'Later', 'https://push.example.test/later', 'p256dh', 'auth', '', 1, ?, ?)`
+    ).bind(now, now).run()
     await Effect.runPromise(processIngestEvent(command()).pipe(Effect.provide(layer)))
 
     const events = await env.DB.prepare("SELECT COUNT(*) AS count FROM events").first<{ count: number }>()
@@ -140,6 +150,19 @@ describe("Queue-first event ingestion", () => {
     expect(jobs?.count).toBe(3)
     expect(published).toHaveLength(3)
     expect(published.every((entry) => entry._tag === "DeliverPush")).toBe(true)
+  })
+
+  it("decodes delivery commands produced by the pre-versioned rollout", async () => {
+    const decoded = await Effect.runPromise(decodeQueueCommand({
+      eventId: "evt_legacy",
+      subscriptionId: "sub_legacy"
+    }))
+    expect(decoded).toEqual({
+      _tag: "DeliverPush",
+      version: QUEUE_COMMAND_VERSION,
+      eventId: "evt_legacy",
+      subscriptionId: "sub_legacy"
+    })
   })
 
   it("recovers a consumer failure after D1 commit without retention or repair Cron", async () => {
@@ -198,5 +221,54 @@ describe("Queue-first event ingestion", () => {
     expect(encoded).not.toContain("api_key")
     expect(encoded).not.toContain("authorization")
     expect(encoded).not.toContain(project.api_key_hash)
+  })
+
+  it("records an operator-visible terminal outcome when ingestion reaches the DLQ", async () => {
+    const failed = ingestionLayer(() => Effect.fail(queueUnavailable("downstream Queue unavailable")))
+    await Effect.runPromise(processIngestDeadLetter(command()).pipe(Effect.provide(failed)))
+
+    const failure = await env.DB.prepare(
+      "SELECT error FROM ingestion_failures WHERE event_id = ?"
+    ).bind(command().eventId).first<{ error: string }>()
+    expect(failure?.error).toContain("downstream Queue unavailable")
+    const states = await env.DB.prepare(
+      "SELECT state, COUNT(*) AS count FROM push_jobs GROUP BY state"
+    ).all<{ state: string; count: number }>()
+    expect(states.results).toEqual([{ state: "dead", count: 3 }])
+  })
+
+  it("retries pending unsilence fan-out after a Queue publication failure", async () => {
+    const now = new Date().toISOString()
+    await env.DB.prepare(
+      `INSERT INTO silences (id, project_id, field, value, note, created_at)
+       VALUES ('sil_test', ?, 'fingerprint', 'silenced', '', ?)`
+    ).bind(project.id, now).run()
+    await env.DB.prepare(
+      `INSERT INTO events
+       (id, external_id, project_id, source, type, level, title, body, fingerprint,
+        payload_json, actions_json, occurred_at, created_at, silence_id, fanout_completed_at)
+       VALUES ('evt_silenced', NULL, ?, '', '', 'info', 'Silenced', '', 'silenced',
+               '{}', '[]', ?, ?, 'sil_test', ?)`
+    ).bind(project.id, now, now, now).run()
+
+    const first = await Effect.runPromise(
+      unsilenceEvent("evt_silenced").pipe(
+        Effect.provide(ingestionLayer(() => Effect.fail(queueUnavailable("Queue unavailable")))),
+        Effect.result
+      )
+    )
+    expect(Result.isFailure(first)).toBe(true)
+
+    const published: QueueCommand[] = []
+    await Effect.runPromise(unsilenceEvent("evt_silenced").pipe(
+      Effect.provide(ingestionLayer((message) =>
+        Effect.sync(() => published.push(message)).pipe(Effect.asVoid)
+      ))
+    ))
+    expect(published).toHaveLength(3)
+    const pending = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM push_jobs WHERE event_id = 'evt_silenced' AND state = 'pending'"
+    ).first<{ count: number }>()
+    expect(pending?.count).toBe(0)
   })
 })

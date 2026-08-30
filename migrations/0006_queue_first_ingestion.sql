@@ -1,6 +1,13 @@
 -- Queue-first ingestion removes scheduled repair publication. Jobs from the
 -- previous D1-first publisher that have no durable Queue retry are made
 -- operator-visible instead of remaining stranded indefinitely.
+ALTER TABLE events ADD COLUMN fanout_completed_at TEXT;
+
+-- Every event created by an older release already completed (or abandoned)
+-- its D1-first fan-out. Marking it complete prevents a producer retry from
+-- creating jobs for subscriptions added after that original event.
+UPDATE events SET fanout_completed_at = created_at;
+
 UPDATE push_jobs
 SET state = 'dead',
     lease_until = NULL,
@@ -8,3 +15,12 @@ SET state = 'dead',
     last_error = 'terminalized during Queue-first ingestion migration; delivery was not durably queued',
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE state IN ('pending', 'sending');
+
+CREATE TABLE ingestion_failures (
+  event_id    TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  external_id TEXT,
+  error       TEXT NOT NULL,
+  failed_at   TEXT NOT NULL
+);
+CREATE INDEX ingestion_failures_failed_at ON ingestion_failures(failed_at DESC);

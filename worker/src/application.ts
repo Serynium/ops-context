@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import { Status as StatusSchema } from "./api-models.js"
 import {
   enqueueEventForProject,
+  processIngestDeadLetter,
   processIngestEvent,
   eventDeliveries,
   getEvent,
@@ -342,6 +343,7 @@ export class System extends Context.Service<System, {
           readonly subscriptions: number
           readonly enabled_subscriptions: number
           readonly dead_jobs: number
+          readonly failed_ingests: number
         }>(
           "system.status_counts",
           `SELECT
@@ -349,7 +351,8 @@ export class System extends Context.Service<System, {
              (SELECT COUNT(*) FROM events) AS events,
              (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
              (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
-             (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`
+             (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs,
+             (SELECT COUNT(*) FROM ingestion_failures) AS failed_ingests`
         )
 
         const lastPush = yield* database.first<DeliveryRow>(
@@ -380,6 +383,7 @@ export class System extends Context.Service<System, {
           subscriptions: counts?.subscriptions ?? 0,
           enabled_subscriptions: counts?.enabled_subscriptions ?? 0,
           dead_jobs: counts?.dead_jobs ?? 0,
+          failed_ingests: counts?.failed_ingests ?? 0,
           last_push: lastPush,
           retention_days: currentSettings.retention_days,
           setup_completed: currentSettings.setup_completed,
@@ -443,6 +447,7 @@ export class PushDelivery extends Context.Service<PushDelivery, {
 
 export class EventIngestion extends Context.Service<EventIngestion, {
   readonly process: (message: IngestEventCommand) => Effect.Effect<void, EventError>
+  readonly deadLetter: (message: IngestEventCommand) => Effect.Effect<void, EventError>
 }>()("ops-context/EventIngestion") {
   static readonly layer = Layer.effect(
     EventIngestion,
@@ -452,6 +457,11 @@ export class EventIngestion extends Context.Service<EventIngestion, {
       const config = yield* AppConfig
       return EventIngestion.of({
         process: (message) => processIngestEvent(message).pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(PushQueue, queue),
+          Effect.provideService(AppConfig, config)
+        ),
+        deadLetter: (message) => processIngestDeadLetter(message).pipe(
           Effect.provideService(Database, database),
           Effect.provideService(PushQueue, queue),
           Effect.provideService(AppConfig, config)

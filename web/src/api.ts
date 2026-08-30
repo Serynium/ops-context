@@ -114,6 +114,7 @@ export interface Status {
   readonly subscriptions: number
   readonly enabled_subscriptions: number
   readonly dead_jobs: number
+  readonly failed_ingests: number
   readonly last_push: unknown
   readonly retention_days: number
   readonly setup_completed: boolean

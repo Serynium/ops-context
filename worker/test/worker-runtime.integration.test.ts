@@ -68,6 +68,7 @@ describe("Cloudflare Worker runtime", () => {
       expect.arrayContaining([
         "deliveries",
         "events",
+        "ingestion_failures",
         "projects",
         "push_jobs",
         "push_subscriptions",

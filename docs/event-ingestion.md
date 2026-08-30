@@ -16,7 +16,9 @@ Only a successful Queue send produces `202 Accepted`:
 
 The event can be briefly absent from D1 after this response. Consumers should tolerate that eventual-consistency window. A Queue send failure returns `503 Service Unavailable` and does not claim acceptance.
 
-Queue delivery is at least once. The consumer uses the event id, the unique `(project_id, external_id)` index, and the `(event_id, subscription_id)` job key to make duplicate ingestion harmless. With `external_id`, producer retries deterministically receive the same event id. The consumer publishes and marks each delivery job separately; if it crashes mid-fan-out, Queue redelivery publishes only remaining pending jobs. A crash after a downstream send but before its D1 update may produce a duplicate `DeliverPush` command, which the conditional delivery claim safely ignores.
+Queue delivery is at least once. The consumer uses the event id, the unique `(project_id, external_id)` index, and the `(event_id, subscription_id)` job key to make duplicate ingestion harmless. With `external_id`, producer retries deterministically receive the same event id. Event/job initialization and its `fanout_completed_at` marker commit in one D1 batch, so a duplicate command cannot add jobs for subscriptions enrolled later. The consumer publishes and marks each delivery job separately; if it crashes mid-fan-out, Queue redelivery publishes only remaining pending jobs. A crash after a downstream send but before its D1 update may produce a duplicate `DeliverPush` command, which the conditional delivery claim safely ignores.
+
+During rollout, the decoder also accepts the previous untagged `{ eventId, subscriptionId }` delivery shape and normalizes it to version 1. If an `IngestEvent` reaches the dead-letter Queue, the consumer first attempts to finish it. A persistent failure is recorded in `ingestion_failures`, any still-pending jobs become terminal `dead`, and the administrator status count exposes `failed_ingests`. If D1 itself is unavailable, the DLQ message is retried because no terminal record can yet be made safely.
 
 ## D1 lookup budget
 

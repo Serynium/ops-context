@@ -169,16 +169,11 @@ export default {
       try {
         const command = await runtime.runPromise(decodeQueueCommand(message.body))
         if (command._tag === "IngestEvent") {
-          if (deadLetterBatch) {
-            console.error("ingest command exhausted Queue retries", {
-              eventId: command.eventId,
-              projectId: command.projectId
-            })
-          } else {
-            await runtime.runPromise(
-              Effect.flatMap(EventIngestion, (ingestion) => ingestion.process(command))
+          await runtime.runPromise(
+            Effect.flatMap(EventIngestion, (ingestion) =>
+              deadLetterBatch ? ingestion.deadLetter(command) : ingestion.process(command)
             )
-          }
+          )
           message.ack()
           continue
         }

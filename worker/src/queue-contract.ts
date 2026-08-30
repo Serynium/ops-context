@@ -20,9 +20,20 @@ export const DeliverPushCommandSchema = Schema.Struct({
   subscriptionId: Schema.String
 })
 
+const LegacyDeliverPushCommandSchema = Schema.Struct({
+  eventId: Schema.String,
+  subscriptionId: Schema.String
+})
+
 export const QueueCommandSchema = Schema.Union([
   IngestEventCommandSchema,
   DeliverPushCommandSchema
+])
+
+const DecodableQueueCommandSchema = Schema.Union([
+  IngestEventCommandSchema,
+  DeliverPushCommandSchema,
+  LegacyDeliverPushCommandSchema
 ])
 
 export type IngestEventCommand = typeof IngestEventCommandSchema.Type
@@ -32,6 +43,14 @@ export type QueueCommand = typeof QueueCommandSchema.Type
 export const decodeQueueCommand = (
   input: unknown
 ): Effect.Effect<QueueCommand, InvalidEvent> =>
-  Schema.decodeUnknownEffect(QueueCommandSchema)(input).pipe(
+  Schema.decodeUnknownEffect(DecodableQueueCommandSchema)(input).pipe(
+    Effect.map((command): QueueCommand => "_tag" in command
+      ? command
+      : {
+          _tag: "DeliverPush",
+          version: QUEUE_COMMAND_VERSION,
+          eventId: command.eventId,
+          subscriptionId: command.subscriptionId
+        }),
     Effect.mapError(() => invalidEvent("invalid Queue command"))
   )
