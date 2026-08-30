@@ -206,7 +206,8 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       credential,
       "https://push.example.test/revoked-new"
     )
-    expect(response.status).toBe(401)
+    expect(response.status).toBe(410)
+    await expect(response.json()).resolves.toMatchObject({ error: "subscription_revoked" })
   })
 
   it("requires re-enrollment instead of enabling a row with a revoked credential", async () => {

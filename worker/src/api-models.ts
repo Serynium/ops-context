@@ -277,6 +277,12 @@ export class ConflictError extends Schema.TaggedError<ConflictError>()(
   { httpApiStatus: 409 }
 ) {}
 
+export class GoneError extends Schema.TaggedError<GoneError>()(
+  "GoneError",
+  errorFields,
+  { httpApiStatus: 410 }
+) {}
+
 export class PayloadTooLargeError extends Schema.TaggedError<PayloadTooLargeError>()(
   "PayloadTooLargeError",
   errorFields,
@@ -310,6 +316,7 @@ export type ApiFailure =
   | ForbiddenError
   | NotFoundError
   | ConflictError
+  | GoneError
   | PayloadTooLargeError
   | InvalidError
   | InternalError
@@ -321,6 +328,7 @@ export const CommonErrors = [
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  GoneError,
   PayloadTooLargeError,
   InvalidError,
   InternalError,
@@ -340,6 +348,8 @@ export const toApiFailure = (error: AppError): ApiFailure => {
       return new NotFoundError(fields)
     case 409:
       return new ConflictError(fields)
+    case 410:
+      return new GoneError(fields)
     case 413:
       return new PayloadTooLargeError(fields)
     case 422: {

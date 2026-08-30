@@ -33,6 +33,9 @@ export const notFound = (message = "not found"): AppError =>
 export const conflict = (message: string): AppError =>
   appError(409, "conflict", message)
 
+export const gone = (code: string, message: string): AppError =>
+  appError(410, code, message)
+
 export const invalid = (message: string): AppError =>
   appError(422, "invalid", message)
 

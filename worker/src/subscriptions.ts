@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { badRequest, conflict, invalid, notFound, unauthorized, type AppError } from "./errors.js"
+import { badRequest, conflict, gone, invalid, notFound, unauthorized, type AppError } from "./errors.js"
 import { sha256Hex } from "./crypto.js"
 import { newId, nowIso } from "./ids.js"
 import { CredentialCrypto, Database } from "./services.js"
@@ -236,8 +236,14 @@ export const renewSubscription = (
       "SELECT * FROM push_subscriptions WHERE id = ?",
       [id]
     )
-    if (!current || current.enabled !== 1) {
+    if (!current) {
       return yield* Effect.fail(unauthorized("invalid push renewal credential"))
+    }
+    if (current.enabled !== 1) {
+      return yield* Effect.fail(gone(
+        "subscription_revoked",
+        "this push installation has been disabled or removed"
+      ))
     }
 
     const credentialHash = yield* sha256Hex(credential)
@@ -314,6 +320,12 @@ export const renewSubscription = (
           subscription: toSubscriptionView(committed),
           renewal_credential: nextCredential
         }
+      }
+      if (committed?.enabled === 0) {
+        return yield* Effect.fail(gone(
+          "subscription_revoked",
+          "this push installation has been disabled or removed"
+        ))
       }
       return yield* Effect.fail(unauthorized("invalid push renewal credential"))
     }

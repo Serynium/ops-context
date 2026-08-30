@@ -67,6 +67,13 @@ const renewSubscription = async (subscription) => {
         },
         body: JSON.stringify({ subscription: subscription.toJSON() })
       })
+      if (response.status === 410) {
+        await storeRenewalCredential({
+          installation_id: renewal.installation_id,
+          revoked: true
+        }, renewal.credential)
+        return "revoked"
+      }
       if (!response.ok) {
         const error = new Error(`push renewal returned HTTP ${response.status}`)
         error.retryable = response.status === 429 || response.status >= 500
@@ -84,7 +91,7 @@ const renewSubscription = async (subscription) => {
         pending: false,
         revoked: false
       }, renewal.credential)
-      return
+      return "renewed"
     } catch (cause) {
       lastError = cause
       if (cause?.retryable === false || attempt === 2) break
@@ -213,7 +220,8 @@ self.addEventListener("pushsubscriptionchange", (event) => {
           applicationServerKey
         })
       }
-      await renewSubscription(subscription)
+      const outcome = await renewSubscription(subscription)
+      if (outcome === "revoked") return
     } catch (cause) {
       console.error("push subscription renewal failed", cause)
       await reportRenewalFailure()
