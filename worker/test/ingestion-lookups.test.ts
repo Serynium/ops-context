@@ -9,11 +9,14 @@ import type { ProjectRow } from "../src/types.js"
 
 const infrastructure = Layer.merge(Database.layer(env.DB), AppConfig.layer(env))
 
+const isQueryLog = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null &&
+  (value as { readonly event?: unknown }).event === "d1_query"
+
 const queryLogs = (spy: ReturnType<typeof vi.spyOn>) =>
   spy.mock.calls
-    .map(([message]) => typeof message === "string" ? message : "")
-    .filter((message) => message.startsWith('{"event":"d1_query"'))
-    .map((message) => JSON.parse(message) as Record<string, unknown>)
+    .map(([message]) => message)
+    .filter(isQueryLog)
 
 afterEach(() => {
   vi.restoreAllMocks()

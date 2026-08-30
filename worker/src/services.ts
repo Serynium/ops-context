@@ -53,14 +53,14 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
             const result = await d1.config.db.prepare(statement).bind(...params).all<A>()
             if (!result.success) throw new Error(result.error ?? "D1 query failed")
 
-            console.info(JSON.stringify({
+            console.info({
               event: "d1_query",
               query: name,
               duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
               rows_returned: result.results.length,
               rows_read: result.meta.rows_read ?? null,
               rows_written: result.meta.rows_written ?? null
-            }))
+            })
 
             return result.results
           },
