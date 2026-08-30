@@ -1,6 +1,8 @@
 -- Queue-first ingestion removes scheduled repair publication. Jobs from the
 -- previous D1-first publisher that have no durable Queue retry are made
--- operator-visible instead of remaining stranded indefinitely.
+-- operator-visible instead of remaining stranded indefinitely. The documented
+-- five-minute pause/drain window makes the pending-job age cutoff a safe
+-- boundary: rows newer than it may still belong to an in-flight publisher.
 ALTER TABLE events ADD COLUMN fanout_completed_at TEXT;
 
 -- Every event created by an older release already completed (or abandoned)
@@ -14,7 +16,10 @@ SET state = 'dead',
     dead_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
     last_error = 'terminalized during Queue-first ingestion migration; delivery was not durably queued',
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-WHERE state = 'pending'
+WHERE (
+     state = 'pending'
+     AND updated_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minutes')
+   )
    OR (
      state = 'sending'
      AND (
