@@ -40,9 +40,9 @@ describe("Cloudflare Worker runtime", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
     ).all<{ readonly name: string }>()
 
-    expect(tables.results.map((row: { readonly name: string }) => row.name)).toEqual(
+    const names = tables.results.map((row: { readonly name: string }) => row.name)
+    expect(names).toEqual(
       expect.arrayContaining([
-        "admin_sessions",
         "deliveries",
         "events",
         "projects",
@@ -52,6 +52,7 @@ describe("Cloudflare Worker runtime", () => {
         "silences"
       ])
     )
+    expect(names).not.toContain("admin_sessions")
 
     const request = new Request(
       "https://ops.example.com/health"
@@ -59,6 +60,16 @@ describe("Cloudflare Worker runtime", () => {
     const response = await worker.fetch(request, env)
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: "ok" })
+  })
+
+  it("rejects private API requests without Cloudflare Access", async () => {
+    const request = new Request(
+      "https://ops.example.com/api/v1/status",
+      { headers: { authorization: "Bearer ops_proj_not_admin" } }
+    ) as Parameters<typeof worker.fetch>[0]
+
+    const response = await worker.fetch(request, env)
+    expect([401, 403]).toContain(response.status)
   })
 
   it("rejects event request bodies above the application limit before authentication", async () => {
