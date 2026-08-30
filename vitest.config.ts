@@ -20,11 +20,9 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: {
             TEST_MIGRATIONS: migrations,
-            ADMIN_PASSWORD_HASH: "pbkdf2-sha256$100000$dGVzdC1zYWx0$dGVzdC1oYXNo",
             VAPID_PUBLIC_KEY: "test-vapid-public-key",
             VAPID_PRIVATE_JWK: "{}",
-            VAPID_SUBJECT: "mailto:test@example.com",
-            OPS_MCP_TOKEN: "test-mcp-token-0000000000000000"
+            VAPID_SUBJECT: "mailto:test@example.com"
           }
         }
       })

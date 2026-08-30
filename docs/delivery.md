@@ -1,65 +1,76 @@
 # Web Push delivery lifecycle
 
-Ops Context accepts event writes independently from browser push providers. D1 is the durable record for each destination, while Cloudflare Queue provides asynchronous execution and delayed redelivery.
+Ops Context accepts event writes independently from Web Push delivery. D1 is the durable source of truth for events, jobs, attempts, and terminal state. Cloudflare Queue is the only ordinary retry scheduler.
 
 ## State machine
 
-Each `(event_id, subscription_id)` pair has exactly one `push_jobs` row.
-
 ```text
-pending ──publish──> queued ──claim──> sending ──accepted──> sent
-   ▲                    │                 │
-   │                    │                 ├─ transient failure ─> retrying
-   │                    │                 │                         │
-   │                    │                 │                         └─ delayed Queue retry ─> sending
-   │                    │                 │
-   │                    │                 └─ permanent failure / attempt ceiling / DLQ ─> dead
-   │                    │
-   └──── low-frequency reconciliation of genuinely unpublished work ────┘
+pending / queued / retrying
+        │
+        │ conditional D1 claim
+        ▼
+      sending
+      │     │
+      │     ├── success ───────────────► sent
+      │     │
+      │     ├── permanent failure ─────► dead
+      │     │
+      │     └── transient failure
+      │             │
+      │             ├── attempts below ceiling ─► retrying + Queue delayed retry
+      │             └── attempts exhausted ─────► dead
+      │
+      └── expired lease may be reclaimed
 ```
 
-`sent` and `dead` are terminal. Duplicate Queue messages are acknowledged without sending another notification after either terminal state has been recorded.
+The D1 `attempts` counter is incremented by the conditional claim. `OPS_PUSH_MAX_ATTEMPTS` controls the durable ceiling and defaults to `6`.
 
 ## Retry ownership
 
-Cloudflare Queue is the only ordinary transient-retry scheduler.
+A transient delivery failure is persisted as `retrying` with a future `retry_scheduled_until`. The current Queue message is then retried with the corresponding delay.
 
-A retryable network error or provider response (`408`, `425`, `429`, or `5xx`) causes the consumer to:
-
-1. atomically record the failed delivery attempt;
-2. move the job to `retrying`;
-3. set `available_at` using bounded exponential backoff;
-4. request `message.retry({ delaySeconds })`.
-
-D1 owns total attempt counting and terminal state. `OPS_PUSH_MAX_ATTEMPTS` controls the ceiling and defaults to `6`. When the claimed attempt reaches the ceiling, the job is marked `dead`, the final delivery attempt is recorded, and the Queue message is acknowledged.
+The scheduled reconciliation query explicitly excludes `retrying` jobs while their retry guard is active. This prevents Queue and scheduled maintenance from both publishing the same ordinary retry.
 
 ## Permanent outcomes
 
-Provider responses `404` and `410` indicate an expired subscription. The job is marked `dead` and the subscription is disabled in the same D1 batch as the delivery record.
+The following are terminal:
 
-Other non-retryable HTTP responses also mark the job `dead`, but do not disable the subscription automatically.
+- successful delivery (`sent`);
+- expired or unknown subscription responses such as 404/410 (`dead`, subscription disabled);
+- non-retryable provider responses (`dead`);
+- reaching the configured attempt ceiling (`dead`);
+- a message delivered to the dead-letter Queue (`dead`).
 
-## Leases and duplicate delivery
+A terminal transition clears its lease and retry guard and records `dead_at` for failed outcomes.
 
-Cloudflare Queues is at-least-once. A conditional D1 update claims a job and gives it a short lease before external I/O begins. Concurrent consumers cannot both claim the same active job. If a Worker stops while sending, a later message can reclaim the job after `lease_until` expires.
+## Atomic finalization
 
-No database transaction can include a browser push provider. A provider may accept a notification immediately before the Worker stops. The Web Push `Topic` is derived from the event id so push services can coalesce a pending duplicate, while D1 prevents repeats after a terminal result is stored.
+Each delivery outcome uses a D1 batch for related state:
 
-## Reconciliation and Cron
+- job state update;
+- delivery-attempt history insert;
+- optional subscription disabling.
 
-The current D1-first ingestion path has a narrow non-atomic gap between committing jobs and publishing Queue messages. Scheduled reconciliation is therefore limited to:
+This prevents a job from becoming terminal without the matching operator-visible delivery record.
 
-- `pending` jobs that were never published;
-- stale `queued` jobs whose message appears lost;
-- `sending` jobs with an expired lease;
-- `retrying` jobs whose Queue retry is overdue by the reconciliation grace period.
+## Reconciliation
 
-It never republishes `sent` or `dead` jobs, and it does not race ordinary delayed retries.
+Scheduled maintenance is a narrow recovery mechanism for:
 
-Issue #14 will replace D1-first ingestion with Queue-first acceptance. That refactor removes push-recovery Cron entirely; only optional event retention remains scheduled.
+- jobs that were committed but never published;
+- queued messages that appear to have been lost;
+- abandoned `sending` leases.
 
-## Dead-letter queue
+It is not the normal retry mechanism and does not restart terminal jobs. Issue #14 replaces the remaining D1-first reconciliation path with Queue-first ingestion and removes the repair Cron.
 
-The dead-letter Queue has its own consumer. Infrastructure-level messages arriving there are translated into an operator-visible `dead` job and delivery record, then acknowledged. A dead-letter message never starts a fresh normal retry cycle.
+## Authentication independence
 
-The administrator status response exposes `dead_jobs` so terminal delivery failures are visible without inspecting Cloudflare Queue internals.
+Web Push delivery is independent from interactive administrator authentication. Cloudflare Access protects the PWA and private APIs, while Queue consumers use internal Worker bindings and durable D1 job state. No administrator password, cookie, or Access browser session is involved in delivery.
+
+Issue #16 adds a narrowly scoped credential for service-worker subscription renewal so that background renewal also does not depend on an active interactive Access session.
+
+## Idempotency
+
+Queue delivery is at least once. The composite `(event_id, subscription_id)` key, conditional D1 claim, terminal-state check, and per-event Web Push topic make duplicate messages safe to process.
+
+An unavoidable network edge remains: a push provider can accept a request immediately before the Worker terminates, before D1 records success. The Web Push topic allows the provider to replace a still-pending duplicate for the same event.

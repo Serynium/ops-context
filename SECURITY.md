@@ -1,21 +1,69 @@
 # Security policy
 
-## Reporting
+## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub's security advisory flow when it is enabled for this repository. Do not open a public issue containing credentials, subscription endpoints, exploit details, or event data.
+Do not open a public issue for a suspected vulnerability involving authentication bypass, credential exposure, Web Push encryption, D1 data access, or event redaction. Contact the repository owner privately and include reproduction steps, affected routes, expected impact, and any proposed mitigation.
 
-## Deployment guidance
+## Authentication boundaries
 
-- Use a unique, long administrator password and generate the supplied PBKDF2 representation with `pnpm secrets`.
-- Keep `ADMIN_PASSWORD_HASH` and `VAPID_PRIVATE_JWK` in Cloudflare secrets, never in `wrangler.jsonc` or Git.
-- Set `OPS_BASE_URL` to the final HTTPS origin before enrolling devices. A Web Push subscription is origin-specific.
-- Keep administrator routes same-origin. Do not add permissive CORS headers.
-- Consider Cloudflare Access in front of the PWA for an additional identity boundary.
-- Rotate project API keys immediately if one leaks.
-- Treat event context as production data. Add organization-specific redaction keys before integrating applications.
-- Configure Queue dead-letter monitoring and inspect repeated delivery failures.
-- Review D1 retention, backup, and time-travel settings appropriate to your threat model.
+Ops Context has two intentionally separate credential classes.
+
+### Project ingestion keys
+
+Project keys are high-entropy bearer credentials shown once and stored only as SHA-256 digests. They authorize event ingestion for one project and nothing else.
+
+They must not authorize:
+
+- the PWA or administrator API;
+- settings, project management, or push-device management;
+- MCP tools.
+
+### Cloudflare Access identities
+
+The PWA, administrator API, and MCP are protected by Cloudflare Access. The Worker consumes the verified native Access context and validates the configured hostname, audience, surface, and principal type.
+
+The application does not maintain administrator passwords, HTTP Basic authentication, local login endpoints, session cookies, or D1 administrator sessions.
+
+Caller-provided identity headers are removed before the native Access context is translated into the internal request principal. Do not reintroduce a production fallback that trusts `Cf-Access-*`, email, or internal headers without runtime verification.
+
+See [docs/cloudflare-access.md](docs/cloudflare-access.md).
+
+## Hostname isolation
+
+Use separate hosts:
+
+```text
+ingest.ops.example.com  public event ingestion with project keys
+app.ops.example.com     Access-protected PWA and administrator API
+mcp.ops.example.com     Access-protected MCP endpoint
+```
+
+Disable or equivalently protect the production `workers.dev` route so it cannot bypass the Access applications.
+
+## Secrets
+
+Keep these only in Wrangler secrets or an equivalent secure secret store:
+
+```text
+VAPID_PRIVATE_JWK
+VAPID_PUBLIC_KEY
+VAPID_SUBJECT
+```
+
+Cloudflare Access service-token secrets belong in the MCP client or deployment secret store, not in Ops Context application settings or source control.
+
+Do not commit project API keys, D1 exports containing operational data, push-subscription encryption keys, Access service-token secrets, or generated `.dev.vars` files.
+
+## Web Push
+
+Web Push payloads are encrypted per subscription and signed through VAPID by `@pushforge/builder`. Treat subscription endpoints and their `p256dh`/`auth` values as sensitive credentials. Expired or permanently rejected subscriptions are disabled.
+
+## Data handling
+
+Ops Context applies recursive sensitive-key redaction before storing event context. Redaction is defense in depth, not a substitute for avoiding secrets in event payloads.
+
+Use least-privilege project keys, configure retention, and review custom redaction keys. Action URLs are displayed to operators and must not contain reusable credentials.
 
 ## Supported versions
 
-Until 1.0, only the latest commit on the default branch receives security fixes.
+This project is under active development. Security fixes are applied to the latest `main` branch and latest tagged release only.

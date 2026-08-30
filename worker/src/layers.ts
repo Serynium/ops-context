@@ -4,9 +4,9 @@ import * as HttpPlatform from "effect/unstable/http/HttpPlatform"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { AdministratorIdentity } from "./access.js"
 import { ApiHandlers, OpsApi } from "./api.js"
 import {
-  Auth,
   Events,
   Maintenance,
   Projects,
@@ -58,24 +58,27 @@ const HttpSupportLive = (() => {
 export const makeLayers = (env: Env) => {
   const infrastructure = InfrastructureLive(env)
 
+  const identity = AdministratorIdentity.layer.pipe(
+    Layer.provide(infrastructure)
+  )
+
   const domain = Layer.mergeAll(
     Projects.layer,
     Events.layer,
     Subscriptions.layer,
     Silences.layer,
-    Settings.layer,
-    Auth.layer
+    Settings.layer
   ).pipe(Layer.provide(infrastructure))
 
-  const base = Layer.mergeAll(infrastructure, domain)
+  const base = Layer.mergeAll(infrastructure, identity, domain)
   const system = System.layer.pipe(Layer.provide(base))
-  const application = Layer.mergeAll(domain, system)
+  const application = Layer.mergeAll(domain, identity, system)
 
   const middleware = Layer.mergeAll(
     AdminAuthorizationLive,
     SameOriginLive,
     ProjectAuthorizationLive
-  ).pipe(Layer.provide(domain))
+  ).pipe(Layer.provide(base))
 
   const handlerDependencies = Layer.mergeAll(application, middleware)
   const handlers = ApiHandlers.pipe(Layer.provide(handlerDependencies))

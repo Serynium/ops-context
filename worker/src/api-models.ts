@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import { HttpApiSchema } from "effect/unstable/httpapi"
 import {
   CreateEventInputSchema,
   EventActionOutputSchema,
@@ -106,22 +105,16 @@ export const Settings = Schema.Struct({
   default_redact_keys: Schema.Array(Schema.String),
   setup_completed: Schema.Boolean,
   mcp_enabled: Schema.Boolean,
-  mcp_token_set: Schema.Boolean
+  mcp_access_configured: Schema.Boolean
 })
 
-export const AuthState = Schema.Struct({
-  auth_required: Schema.Boolean,
-  authenticated: Schema.Boolean
+export const AccessIdentity = Schema.Struct({
+  subject: Schema.String,
+  kind: Schema.Literals(["user", "service-token"]),
+  audience: Schema.String,
+  email: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String)
 })
-
-export const AuthStateWithCookie = HttpApiSchema.WithHeaders(AuthState, {
-  "set-cookie": Schema.String
-})
-
-export const LogoutWithCookie = HttpApiSchema.WithHeaders(
-  Schema.Void.pipe(HttpApiSchema.status(204)),
-  { "set-cookie": Schema.String }
-)
 
 export const Health = Schema.Struct({ status: Schema.String })
 export const PushPublicKey = Schema.Struct({ public_key: Schema.String })
@@ -159,17 +152,13 @@ export const Status = Schema.Struct({
   last_push: Schema.NullOr(Delivery),
   retention_days: Schema.Int,
   setup_completed: Schema.Boolean,
-  admin_auth: Schema.Boolean
+  admin_auth: Schema.Boolean,
+  admin_auth_provider: Schema.Literal("cloudflare-access")
 })
 
 export const TestNotificationResult = Schema.Struct({
   event: Event,
   web_push_configured: Schema.Boolean
-})
-
-export const AuthLoginInput = Schema.Struct({
-  username: Schema.String,
-  password: Schema.String
 })
 
 export const CreateEventInput = CreateEventInputSchema

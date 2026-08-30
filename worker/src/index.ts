@@ -1,5 +1,9 @@
 import { Effect, ManagedRuntime } from "effect"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
+import {
+  attachCloudflareAccess,
+  type ExecutionContextWithAccess
+} from "./access.js"
 import { Maintenance, PushDelivery } from "./application.js"
 import { EVENT_PAYLOAD_MAX_BYTES } from "./event-contract.js"
 import { makeLayers } from "./layers.js"
@@ -16,7 +20,10 @@ interface IsolateRuntime {
   readonly db: D1Database
   readonly queue: Queue<PushJobMessage>
   readonly http: WebHandler
-  readonly programs: ManagedRuntime.ManagedRuntime<PushDelivery | Maintenance | McpEndpoint | SentryEndpoint, never>
+  readonly programs: ManagedRuntime.ManagedRuntime<
+    PushDelivery | Maintenance | McpEndpoint | SentryEndpoint,
+    never
+  >
 }
 
 let cached: IsolateRuntime | undefined
@@ -86,9 +93,6 @@ const eventRequestExceedsLimit = async (
     }
   }
 
-  // Probe a tee of the request incrementally. The untouched branch remains
-  // available to Effect HttpApi when the body is valid. On overflow, cancel
-  // both branches so the isolate never consumes the rest of an untrusted body.
   const probe = request.clone()
   const reader = probe.body?.getReader()
   if (reader === undefined) return false
@@ -114,7 +118,13 @@ const eventRequestExceedsLimit = async (
 }
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, context): Promise<Response> {
+    request = await attachCloudflareAccess(
+      request,
+      env,
+      context as ExecutionContextWithAccess
+    )
+
     const pathname = new URL(request.url).pathname
     if (pathname === "/mcp") {
       try {

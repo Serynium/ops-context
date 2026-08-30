@@ -51,7 +51,7 @@ export const getSettings: Effect.Effect<SettingsView, AppError, Database | AppCo
       default_redact_keys: DEFAULT_REDACT_KEYS,
       setup_completed: setupText === "true",
       mcp_enabled: mcpEnabledText === "true",
-      mcp_token_set: Boolean(config.mcpToken && config.mcpToken.length >= 16)
+      mcp_access_configured: Boolean(config.mcpHost && config.accessMcpAudience)
     }
   })
 

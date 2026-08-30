@@ -74,13 +74,26 @@ export interface Silence {
   readonly created_at: string
 }
 
-export interface Settings {
+interface SettingsWire {
   readonly retention_days: number
   readonly redact_keys: ReadonlyArray<string>
   readonly default_redact_keys: ReadonlyArray<string>
   readonly setup_completed: boolean
   readonly mcp_enabled: boolean
+  readonly mcp_access_configured: boolean
+}
+
+export interface Settings extends SettingsWire {
+  /** @deprecated Temporary view compatibility; mirrors mcp_access_configured. */
   readonly mcp_token_set: boolean
+}
+
+export interface AccessIdentity {
+  readonly subject: string
+  readonly kind: "user" | "service-token"
+  readonly audience: string
+  readonly email?: string
+  readonly name?: string
 }
 
 export interface Status {
@@ -99,6 +112,7 @@ export interface Status {
   readonly retention_days: number
   readonly setup_completed: boolean
   readonly admin_auth: boolean
+  readonly admin_auth_provider: "cloudflare-access"
 }
 
 export class ApiError extends Error {
@@ -117,9 +131,15 @@ export const setUnauthorizedHandler = (handler: () => void): void => {
 }
 
 const request = async <A>(method: string, path: string, body?: unknown): Promise<A> => {
-  const init: RequestInit = { method, credentials: "same-origin" }
+  const headers = new Headers({ "x-requested-with": "XMLHttpRequest" })
+  const init: RequestInit = {
+    method,
+    credentials: "same-origin",
+    headers
+  }
   if (body !== undefined) {
-    init.headers = { "content-type": "application/json", "x-ops-context": "pwa" }
+    headers.set("content-type", "application/json")
+    headers.set("x-ops-context", "pwa")
     init.body = JSON.stringify(body)
   }
 
@@ -151,11 +171,28 @@ const eventsRequest = (params: Record<string, string | undefined> = {}): Promise
   return request<EventPage>("GET", `/api/v1/events${search.size ? `?${search}` : ""}`)
 }
 
+const accessState = async (): Promise<{ auth_required: true; authenticated: true }> => {
+  await request<AccessIdentity>("GET", "/api/v1/access/me")
+  return { auth_required: true, authenticated: true }
+}
+
+const settings = async (): Promise<Settings> => {
+  const value = await request<SettingsWire>("GET", "/api/v1/settings")
+  return { ...value, mcp_token_set: value.mcp_access_configured }
+}
+
 export const api = {
-  me: () => request<{ auth_required: boolean; authenticated: boolean }>("GET", "/api/v1/auth/me"),
-  login: (username: string, password: string) =>
-    request<{ auth_required: boolean; authenticated: boolean }>("POST", "/api/v1/auth/login", { username, password }),
-  logout: () => request<void>("POST", "/api/v1/auth/logout", {}),
+  accessIdentity: () => request<AccessIdentity>("GET", "/api/v1/access/me"),
+
+  // Compatibility for the current PWA entry module. These methods no longer
+  // perform application password authentication; they delegate to Access or
+  // navigate to the standard Access logout endpoint.
+  me: accessState,
+  login: (_username: string, _password: string) => accessState(),
+  logout: (): Promise<void> => {
+    window.location.assign("/cdn-cgi/access/logout")
+    return new Promise<void>(() => undefined)
+  },
 
   events: eventsRequest,
   event: (id: string) => request<EventItem>("GET", `/api/v1/events/${encodeURIComponent(id)}`),
@@ -189,8 +226,8 @@ export const api = {
     request<Silence>("POST", "/api/v1/silences", input),
   deleteSilence: (id: string) => request<void>("DELETE", `/api/v1/silences/${encodeURIComponent(id)}`, {}),
 
-  settings: () => request<Settings>("GET", "/api/v1/settings"),
-  updateSettings: (patch: Partial<Settings>) => request<Settings>("PATCH", "/api/v1/settings", patch),
+  settings,
+  updateSettings: (patch: Partial<SettingsWire>) => request<SettingsWire>("PATCH", "/api/v1/settings", patch),
   status: () => request<Status>("GET", "/api/v1/status"),
   test: (project_id?: string) => request<{ event: EventItem }>("POST", "/api/v1/test", project_id ? { project_id } : {})
 }
