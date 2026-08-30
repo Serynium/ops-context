@@ -257,6 +257,11 @@ Events with the same non-empty fingerprint are grouped only within their project
 }
 ```
 
+The default grouped inbox reads a measured project-scoped read model. Filters
+that depend on individual occurrences automatically use the exact dynamic
+query. See [Grouped inbox read model](docs/grouped-inbox-read-model.md) for the
+measurements, retention behavior, and idempotent repair operation.
+
 Supported event-list query parameters are:
 
 ```text

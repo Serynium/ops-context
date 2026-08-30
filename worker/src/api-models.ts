@@ -117,6 +117,7 @@ export const AccessIdentity = Schema.Struct({
 })
 
 export const Health = Schema.Struct({ status: Schema.String })
+export const EventGroupsRebuilt = Schema.Struct({ groups: Schema.Int })
 export const PushPublicKey = Schema.Struct({ public_key: Schema.String })
 export const EventCreated = Schema.Struct({ id: Schema.String, created_at: Schema.String })
 export const EventPage = Schema.Struct({

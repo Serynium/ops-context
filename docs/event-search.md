@@ -95,7 +95,7 @@ leading-wildcard predicates with the joined `event_search MATCH` query, and use
 
 ## Maintenance and rebuild
 
-Migration `0007_event_search_fts.sql` backfills existing events and installs
+Migration `0008_event_search_fts.sql` backfills existing events and installs
 insert, update, and delete triggers. Because triggers execute in the mutating
 statement's transaction, event creation, retention deletion, and project cascade
 deletion cannot commit with a stale index.
