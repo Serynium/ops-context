@@ -39,6 +39,7 @@ import {
   UpdateProjectInput,
   UpdateSettingsInput,
   UpdateSubscriptionInput,
+  type ApiFailure,
   toApiFailure
 } from "./api-models.js"
 import {
@@ -50,6 +51,7 @@ import {
   System
 } from "./application.js"
 import { decodeCreateEventInput } from "./event-contract.js"
+import type { ApplicationError } from "./errors.js"
 import {
   AdminAuthorization,
   CurrentAdmin,
@@ -232,12 +234,16 @@ const requestOrigin = (request: HttpServerRequest.HttpServerRequest): string => 
   return `${protocol}://${host}`
 }
 
+const toHttpFailure = <A, E extends ApplicationError, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, ApiFailure, R> => Effect.mapError(effect, toApiFailure)
+
 export const HealthHandlers = HttpApiBuilder.group(
   OpsApi,
   "health",
   Effect.fn(function*(handlers) {
     const system = yield* System
-    return handlers.handle("health", () => system.health)
+    return handlers.handle("health", () => toHttpFailure(system.health))
   })
 )
 
@@ -246,7 +252,7 @@ export const PublicHandlers = HttpApiBuilder.group(
   "public",
   Effect.fn(function*(handlers) {
     const system = yield* System
-    return handlers.handle("pushPublicKey", () => system.publicKey)
+    return handlers.handle("pushPublicKey", () => toHttpFailure(system.publicKey))
   })
 )
 
@@ -268,7 +274,7 @@ export const IngestHandlers = HttpApiBuilder.group(
           )
         )
         const project = yield* CurrentProject
-        const event = yield* events.create(project, payload)
+        const event = yield* toHttpFailure(events.create(project, payload))
         return { id: event.id, created_at: event.created_at }
       }))
   })
@@ -296,42 +302,42 @@ export const AdminHandlers = HttpApiBuilder.group(
           ...(principal.name ? { name: principal.name } : {})
         }
       }),
-      listEvents: ({ query }) => events.list(query),
-      getEvent: ({ params }) => events.get(params.id),
+      listEvents: ({ query }) => toHttpFailure(events.list(query)),
+      getEvent: ({ params }) => toHttpFailure(events.get(params.id)),
       eventDeliveries: ({ params }) =>
-        Effect.map(events.deliveries(params.id), (deliveries) => ({ deliveries })),
-      unsilenceEvent: ({ params }) => events.unsilence(params.id),
+        Effect.map(toHttpFailure(events.deliveries(params.id)), (deliveries) => ({ deliveries })),
+      unsilenceEvent: ({ params }) => toHttpFailure(events.unsilence(params.id)),
 
-      listProjects: () => Effect.map(projects.list, (projects) => ({ projects })),
+      listProjects: () => Effect.map(toHttpFailure(projects.list), (projects) => ({ projects })),
       projectIcons: () => Effect.succeed({
         icons: ["", "🚀", "🗄️", "💳", "🛡️", "📦", "⚙️", "🧪", "📈", "🔔"]
       }),
-      createProject: ({ payload }) => projects.create(payload),
-      getProject: ({ params }) => projects.get(params.id),
-      updateProject: ({ params, payload }) => projects.update(params.id, payload),
-      deleteProject: ({ params }) => projects.delete(params.id),
-      rotateProjectKey: ({ params }) => projects.rotateKey(params.id),
+      createProject: ({ payload }) => toHttpFailure(projects.create(payload)),
+      getProject: ({ params }) => toHttpFailure(projects.get(params.id)),
+      updateProject: ({ params, payload }) => toHttpFailure(projects.update(params.id, payload)),
+      deleteProject: ({ params }) => toHttpFailure(projects.delete(params.id)),
+      rotateProjectKey: ({ params }) => toHttpFailure(projects.rotateKey(params.id)),
 
-      listSubscriptions: () => Effect.map(subscriptions.list, (subscriptions) => ({ subscriptions })),
+      listSubscriptions: () => Effect.map(toHttpFailure(subscriptions.list), (subscriptions) => ({ subscriptions })),
       registerSubscription: Effect.fn(function*({ payload }) {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* subscriptions.register(payload, request.headers["user-agent"] ?? "")
+        return yield* toHttpFailure(subscriptions.register(payload, request.headers["user-agent"] ?? ""))
       }),
-      updateSubscription: ({ params, payload }) => subscriptions.update(params.id, payload),
-      deleteSubscription: ({ params }) => subscriptions.delete(params.id),
+      updateSubscription: ({ params, payload }) => toHttpFailure(subscriptions.update(params.id, payload)),
+      deleteSubscription: ({ params }) => toHttpFailure(subscriptions.delete(params.id)),
 
-      listSilences: () => silences.listSummary,
-      createSilence: ({ payload }) => silences.create(payload),
-      getSilence: ({ params }) => silences.get(params.id),
-      deleteSilence: ({ params }) => silences.delete(params.id),
+      listSilences: () => toHttpFailure(silences.listSummary),
+      createSilence: ({ payload }) => toHttpFailure(silences.create(payload)),
+      getSilence: ({ params }) => toHttpFailure(silences.get(params.id)),
+      deleteSilence: ({ params }) => toHttpFailure(silences.delete(params.id)),
 
-      getSettings: () => settings.get,
-      updateSettings: ({ payload }) => settings.update(payload),
+      getSettings: () => toHttpFailure(settings.get),
+      updateSettings: ({ payload }) => toHttpFailure(settings.update(payload)),
       status: Effect.fn(function*() {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* system.status(requestOrigin(request))
+        return yield* toHttpFailure(system.status(requestOrigin(request)))
       }),
-      testNotification: ({ payload }) => system.testNotification(payload.project_id)
+      testNotification: ({ payload }) => toHttpFailure(system.testNotification(payload.project_id))
     })
   })
 )

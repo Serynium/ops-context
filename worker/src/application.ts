@@ -1,13 +1,5 @@
 import { Context, Effect, Layer } from "effect"
-import {
-  ConflictError,
-  InternalError,
-  NotFoundError,
-  ServiceUnavailableError,
-  Status as StatusSchema,
-  type ApiFailure,
-  toApiFailure
-} from "./api-models.js"
+import { Status as StatusSchema } from "./api-models.js"
 import {
   createEventForProject,
   eventDeliveries,
@@ -16,9 +8,28 @@ import {
   unsilenceEvent,
   type CreateEventInput,
   type EventPage,
+  type EventError,
   type ListEventsInput
 } from "./events.js"
-import type { AppError } from "./errors.js"
+import {
+  projectNotFound,
+  pushNotConfigured,
+  type CryptographyUnavailable,
+  type EventNotFound,
+  type InvalidEventQuery,
+  type InvalidProject,
+  type InvalidProjectCredential,
+  type InvalidSettings,
+  type InvalidSilence,
+  type InvalidSubscription,
+  type ProjectDeletionConflict,
+  type ProjectNotFound,
+  type PushNotConfigured,
+  type QueueUnavailable,
+  type RepositoryUnavailable,
+  type SilenceNotFound,
+  type SubscriptionNotFound
+} from "./errors.js"
 import {
   authenticateProject,
   createProject,
@@ -29,9 +40,10 @@ import {
   rotateProjectKey,
   updateProject,
   type CreateProjectInput,
+  type ProjectError,
   type UpdateProjectInput
 } from "./projects.js"
-import { processDeadLetterMessage, processPushMessage, type PushOutcome } from "./push.js"
+import { processDeadLetterMessage, processPushMessage, type PushDeliveryError, type PushOutcome } from "./push.js"
 import {
   createSilence,
   deleteSilence,
@@ -66,51 +78,49 @@ import type {
   SilenceRow
 } from "./types.js"
 
-const mapAppError = <A, R>(
-  effect: Effect.Effect<A, AppError, R>
-): Effect.Effect<A, ApiFailure, R> => Effect.mapError(effect, toApiFailure)
-
-const provideAll = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  context: Context.Context<R>
-): Effect.Effect<A, E> => Effect.provideContext(effect, context)
+type SubscriptionError = InvalidSubscription | SubscriptionNotFound |
+  RepositoryUnavailable | CryptographyUnavailable
+type SilenceError = InvalidSilence | ProjectNotFound | SilenceNotFound |
+  RepositoryUnavailable | CryptographyUnavailable
+type SettingsError = InvalidSettings | RepositoryUnavailable
+type SystemError = RepositoryUnavailable | PushNotConfigured | ProjectNotFound | EventError
 
 export class Projects extends Context.Service<Projects, {
-  readonly list: Effect.Effect<ReadonlyArray<ProjectView>, ApiFailure>
-  readonly get: (id: string) => Effect.Effect<ProjectView, ApiFailure>
-  readonly findRow: (id: string) => Effect.Effect<ProjectRow, ApiFailure>
-  readonly firstRow: Effect.Effect<ProjectRow | null, ApiFailure>
-  readonly authenticate: (apiKey: string) => Effect.Effect<ProjectRow, ApiFailure>
+  readonly list: Effect.Effect<ReadonlyArray<ProjectView>, RepositoryUnavailable>
+  readonly get: (id: string) => Effect.Effect<ProjectView, ProjectNotFound | RepositoryUnavailable>
+  readonly findRow: (id: string) => Effect.Effect<ProjectRow, ProjectNotFound | RepositoryUnavailable>
+  readonly firstRow: Effect.Effect<ProjectRow | null, RepositoryUnavailable>
+  readonly authenticate: (apiKey: string) => Effect.Effect<ProjectRow, InvalidProjectCredential | RepositoryUnavailable | CryptographyUnavailable>
   readonly create: (
     input: CreateProjectInput
-  ) => Effect.Effect<ProjectView & { readonly api_key: string }, ApiFailure>
+  ) => Effect.Effect<ProjectView & { readonly api_key: string }, ProjectError>
   readonly update: (
     id: string,
     patch: UpdateProjectInput
-  ) => Effect.Effect<ProjectView, ApiFailure>
-  readonly delete: (id: string) => Effect.Effect<void, ApiFailure>
+  ) => Effect.Effect<ProjectView, InvalidProject | ProjectNotFound | RepositoryUnavailable>
+  readonly delete: (id: string) => Effect.Effect<void, ProjectNotFound | ProjectDeletionConflict | RepositoryUnavailable>
   readonly rotateKey: (
     id: string
-  ) => Effect.Effect<ProjectView & { readonly api_key: string }, ApiFailure>
+  ) => Effect.Effect<ProjectView & { readonly api_key: string }, ProjectNotFound | RepositoryUnavailable | CryptographyUnavailable>
 }>()("ops-context/Projects") {
   static readonly layer = Layer.effect(
     Projects,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | CredentialCrypto>()
-      const database = Context.get(context, Database)
-      const run = <A>(
-        effect: Effect.Effect<A, AppError, Database | CredentialCrypto>
-      ) => mapAppError(provideAll(effect, context))
-      const runDb = <A>(effect: Effect.Effect<A, AppError, Database>) =>
-        mapAppError(Effect.provideService(effect, Database, database))
+      const database = yield* Database
+      const crypto = yield* CredentialCrypto
+      const run = <A, E>(effect: Effect.Effect<A, E, Database | CredentialCrypto>) =>
+        effect.pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(CredentialCrypto, crypto)
+        )
+      const runDb = <A, E>(effect: Effect.Effect<A, E, Database>) =>
+        Effect.provideService(effect, Database, database)
 
       return Projects.of({
         list: runDb(listProjects).pipe(Effect.withSpan("Projects.list")),
         get: Effect.fn("Projects.get")((id: string) => runDb(getProject(id))),
         findRow: Effect.fn("Projects.findRow")((id: string) => runDb(findProjectRow(id))),
-        firstRow: mapAppError(
-          database.first<ProjectRow>("SELECT * FROM projects ORDER BY created_at LIMIT 1")
-        ),
+        firstRow: database.first<ProjectRow>("SELECT * FROM projects ORDER BY created_at LIMIT 1"),
         authenticate: Effect.fn("Projects.authenticate")((apiKey: string) =>
           run(authenticateProject(apiKey))
         ),
@@ -131,50 +141,50 @@ export class Events extends Context.Service<Events, {
   readonly create: (
     project: ProjectRow,
     input: CreateEventInput
-  ) => Effect.Effect<EventView, ApiFailure>
-  readonly list: (input: ListEventsInput) => Effect.Effect<EventPage, ApiFailure>
-  readonly get: (id: string) => Effect.Effect<EventView, ApiFailure>
-  readonly deliveries: (id: string) => Effect.Effect<ReadonlyArray<DeliveryRow>, ApiFailure>
+  ) => Effect.Effect<EventView, EventError>
+  readonly list: (input: ListEventsInput) => Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable>
+  readonly get: (id: string) => Effect.Effect<EventView, EventNotFound | RepositoryUnavailable>
+  readonly deliveries: (id: string) => Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable>
   readonly unsilence: (id: string) => Effect.Effect<{
     readonly event: EventView
     readonly deliveries: ReadonlyArray<DeliveryRow>
-  }, ApiFailure>
+  }, EventNotFound | RepositoryUnavailable | QueueUnavailable>
 }>()("ops-context/Events") {
   static readonly layer = Layer.effect(
     Events,
     Effect.gen(function*() {
-      const context = yield* Effect.context<
+      const database = yield* Database
+      const queue = yield* PushQueue
+      const config = yield* AppConfig
+      const crypto = yield* CredentialCrypto
+      const run = <A, E>(effect: Effect.Effect<
+        A,
+        E,
         Database | PushQueue | AppConfig | CredentialCrypto
-      >()
-      const database = Context.get(context, Database)
-      const queue = Context.get(context, PushQueue)
-      const run = <A>(
-        effect: Effect.Effect<
-          A,
-          AppError,
-          Database | PushQueue | AppConfig | CredentialCrypto
-        >
-      ) => mapAppError(provideAll(effect, context))
+      >) => effect.pipe(
+        Effect.provideService(Database, database),
+        Effect.provideService(PushQueue, queue),
+        Effect.provideService(AppConfig, config),
+        Effect.provideService(CredentialCrypto, crypto)
+      )
 
       return Events.of({
         create: Effect.fn("Events.create")((project: ProjectRow, input: CreateEventInput) =>
           run(createEventForProject(project, input))
         ),
         list: Effect.fn("Events.list")((input: ListEventsInput) =>
-          mapAppError(Effect.provideService(listEvents(input), Database, database))
+          Effect.provideService(listEvents(input), Database, database)
         ),
         get: Effect.fn("Events.get")((id: string) =>
-          mapAppError(Effect.provideService(getEvent(id), Database, database))
+          Effect.provideService(getEvent(id), Database, database)
         ),
         deliveries: Effect.fn("Events.deliveries")((id: string) =>
-          mapAppError(Effect.provideService(eventDeliveries(id), Database, database))
+          Effect.provideService(eventDeliveries(id), Database, database)
         ),
         unsilence: Effect.fn("Events.unsilence")((id: string) =>
-          mapAppError(
-            unsilenceEvent(id).pipe(
-              Effect.provideService(Database, database),
-              Effect.provideService(PushQueue, queue)
-            )
+          unsilenceEvent(id).pipe(
+            Effect.provideService(Database, database),
+            Effect.provideService(PushQueue, queue)
           )
         )
       })
@@ -183,32 +193,35 @@ export class Events extends Context.Service<Events, {
 }
 
 export class Subscriptions extends Context.Service<Subscriptions, {
-  readonly list: Effect.Effect<ReadonlyArray<PushSubscriptionView>, ApiFailure>
+  readonly list: Effect.Effect<ReadonlyArray<PushSubscriptionView>, RepositoryUnavailable>
   readonly register: (
     input: RegisterSubscriptionInput,
     userAgent: string
-  ) => Effect.Effect<PushSubscriptionView, ApiFailure>
+  ) => Effect.Effect<PushSubscriptionView, SubscriptionError>
   readonly update: (
     id: string,
-    patch: { readonly name?: string; readonly enabled?: boolean }
-  ) => Effect.Effect<PushSubscriptionView, ApiFailure>
-  readonly delete: (id: string) => Effect.Effect<void, ApiFailure>
+    patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
+  ) => Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable>
+  readonly delete: (id: string) => Effect.Effect<void, SubscriptionNotFound | RepositoryUnavailable>
 }>()("ops-context/Subscriptions") {
   static readonly layer = Layer.effect(
     Subscriptions,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | CredentialCrypto>()
-      const database = Context.get(context, Database)
+      const database = yield* Database
+      const crypto = yield* CredentialCrypto
       return Subscriptions.of({
-        list: mapAppError(Effect.provideService(listSubscriptions, Database, database)),
+        list: Effect.provideService(listSubscriptions, Database, database),
         register: Effect.fn("Subscriptions.register")((input, userAgent) =>
-          mapAppError(provideAll(registerSubscription(input, userAgent), context))
+          registerSubscription(input, userAgent).pipe(
+            Effect.provideService(Database, database),
+            Effect.provideService(CredentialCrypto, crypto)
+          )
         ),
         update: Effect.fn("Subscriptions.update")((id, patch) =>
-          mapAppError(Effect.provideService(updateSubscription(id, patch), Database, database))
+          Effect.provideService(updateSubscription(id, patch), Database, database)
         ),
         delete: Effect.fn("Subscriptions.delete")((id: string) =>
-          mapAppError(Effect.provideService(deleteSubscription(id), Database, database))
+          Effect.provideService(deleteSubscription(id), Database, database)
         )
       })
     })
@@ -216,30 +229,28 @@ export class Subscriptions extends Context.Service<Subscriptions, {
 }
 
 export class Silences extends Context.Service<Silences, {
-  readonly list: Effect.Effect<ReadonlyArray<SilenceRow>, ApiFailure>
+  readonly list: Effect.Effect<ReadonlyArray<SilenceRow>, RepositoryUnavailable>
   readonly listSummary: Effect.Effect<{
     readonly silences: ReadonlyArray<SilenceRow>
     readonly fields: ReadonlyArray<"fingerprint" | "title" | "source">
     readonly silenced_events: number
-  }, ApiFailure>
-  readonly get: (id: string) => Effect.Effect<SilenceRow, ApiFailure>
-  readonly create: (input: CreateSilenceInput) => Effect.Effect<SilenceRow, ApiFailure>
-  readonly delete: (id: string) => Effect.Effect<void, ApiFailure>
+  }, RepositoryUnavailable>
+  readonly get: (id: string) => Effect.Effect<SilenceRow, SilenceNotFound | RepositoryUnavailable>
+  readonly create: (input: CreateSilenceInput) => Effect.Effect<SilenceRow, SilenceError>
+  readonly delete: (id: string) => Effect.Effect<void, SilenceNotFound | RepositoryUnavailable>
 }>()("ops-context/Silences") {
   static readonly layer = Layer.effect(
     Silences,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | CredentialCrypto>()
-      const database = Context.get(context, Database)
-      const list = mapAppError(Effect.provideService(listSilences, Database, database))
+      const database = yield* Database
+      const crypto = yield* CredentialCrypto
+      const list = Effect.provideService(listSilences, Database, database)
       return Silences.of({
         list,
         listSummary: Effect.gen(function*() {
           const silences = yield* list
-          const count = yield* mapAppError(
-            database.first<{ readonly count: number }>(
-              "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL"
-            )
+          const count = yield* database.first<{ readonly count: number }>(
+            "SELECT COUNT(*) AS count FROM events WHERE silence_id IS NOT NULL"
           )
           return {
             silences,
@@ -248,13 +259,16 @@ export class Silences extends Context.Service<Silences, {
           }
         }).pipe(Effect.withSpan("Silences.listSummary")),
         get: Effect.fn("Silences.get")((id: string) =>
-          mapAppError(Effect.provideService(getSilence(id), Database, database))
+          Effect.provideService(getSilence(id), Database, database)
         ),
         create: Effect.fn("Silences.create")((input: CreateSilenceInput) =>
-          mapAppError(provideAll(createSilence(input), context))
+          createSilence(input).pipe(
+            Effect.provideService(Database, database),
+            Effect.provideService(CredentialCrypto, crypto)
+          )
         ),
         delete: Effect.fn("Silences.delete")((id: string) =>
-          mapAppError(Effect.provideService(deleteSilence(id), Database, database))
+          Effect.provideService(deleteSilence(id), Database, database)
         )
       })
     })
@@ -262,19 +276,25 @@ export class Silences extends Context.Service<Silences, {
 }
 
 export class Settings extends Context.Service<Settings, {
-  readonly get: Effect.Effect<SettingsView, ApiFailure>
-  readonly update: (patch: SettingsPatch) => Effect.Effect<SettingsView, ApiFailure>
+  readonly get: Effect.Effect<SettingsView, RepositoryUnavailable>
+  readonly update: (patch: SettingsPatch) => Effect.Effect<SettingsView, SettingsError>
 }>()("ops-context/Settings") {
   static readonly layer = Layer.effect(
     Settings,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | AppConfig>()
+      const database = yield* Database
+      const config = yield* AppConfig
       return Settings.of({
-        get: mapAppError(provideAll(getSettings, context)).pipe(
+        get: getSettings.pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(AppConfig, config),
           Effect.withSpan("Settings.get")
         ),
         update: Effect.fn("Settings.update")((patch: SettingsPatch) =>
-          mapAppError(provideAll(updateSettings(patch), context))
+          updateSettings(patch).pipe(
+            Effect.provideService(Database, database),
+            Effect.provideService(AppConfig, config)
+          )
         )
       })
     })
@@ -282,13 +302,13 @@ export class Settings extends Context.Service<Settings, {
 }
 
 export class System extends Context.Service<System, {
-  readonly health: Effect.Effect<{ readonly status: string }, ApiFailure>
-  readonly publicKey: Effect.Effect<{ readonly public_key: string }, ApiFailure>
-  readonly status: (origin: string) => Effect.Effect<typeof StatusSchema.Type, ApiFailure>
+  readonly health: Effect.Effect<{ readonly status: string }, RepositoryUnavailable>
+  readonly publicKey: Effect.Effect<{ readonly public_key: string }, PushNotConfigured>
+  readonly status: (origin: string) => Effect.Effect<typeof StatusSchema.Type, RepositoryUnavailable>
   readonly testNotification: (projectId?: string) => Effect.Effect<{
     readonly event: EventView
     readonly web_push_configured: boolean
-  }, ApiFailure>
+  }, SystemError>
 }>()("ops-context/System") {
   static readonly layer = Layer.effect(
     System,
@@ -301,16 +321,12 @@ export class System extends Context.Service<System, {
 
       const health = database.first<{ readonly ok: number }>("SELECT 1 AS ok").pipe(
         Effect.map(() => ({ status: "ok" })),
-        Effect.mapError(toApiFailure),
         Effect.withSpan("System.health")
       )
 
       const publicKey = config.vapidPublicKey
         ? Effect.succeed({ public_key: config.vapidPublicKey })
-        : Effect.fail(new ServiceUnavailableError({
-            error: "push_not_configured",
-            message: "Web Push is not configured"
-          }))
+        : Effect.fail(pushNotConfigured())
 
       const status = Effect.fn("System.status")(function*(origin: string) {
         const counts = yield* database.first<{
@@ -326,7 +342,7 @@ export class System extends Context.Service<System, {
              (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
              (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
              (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`
-        ).pipe(Effect.mapError(toApiFailure))
+        )
 
         const lastPush = yield* database.first<DeliveryRow>(
           `SELECT d.id, d.event_id, d.subscription_id,
@@ -335,7 +351,7 @@ export class System extends Context.Service<System, {
            FROM deliveries d
            LEFT JOIN push_subscriptions s ON s.id = d.subscription_id
            ORDER BY d.attempted_at DESC LIMIT 1`
-        ).pipe(Effect.mapError(toApiFailure))
+        )
         const currentSettings = yield* settings.get
 
         return {
@@ -368,10 +384,7 @@ export class System extends Context.Service<System, {
       ) {
         const selected = projectId ? yield* projects.findRow(projectId) : yield* projects.firstRow
         if (!selected) {
-          return yield* new NotFoundError({
-            error: "not_found",
-            message: "create a project before sending a test notification"
-          })
+          return yield* Effect.fail(projectNotFound("create a project before sending a test notification"))
         }
         const event = yield* events.create(selected, {
           title: "Ops Context is connected",
@@ -396,37 +409,48 @@ export class System extends Context.Service<System, {
 }
 
 export class PushDelivery extends Context.Service<PushDelivery, {
-  readonly process: (message: PushJobMessage) => Effect.Effect<PushOutcome, AppError>
-  readonly deadLetter: (message: PushJobMessage) => Effect.Effect<PushOutcome, AppError>
+  readonly process: (message: PushJobMessage) => Effect.Effect<PushOutcome, PushDeliveryError>
+  readonly deadLetter: (message: PushJobMessage) => Effect.Effect<PushOutcome, PushDeliveryError>
 }>()("ops-context/PushDelivery") {
   static readonly layer = Layer.effect(
     PushDelivery,
     Effect.gen(function*() {
-      const context = yield* Effect.context<
-        Database | WebPush | CredentialCrypto | AppConfig
-      >()
+      const database = yield* Database
+      const webPush = yield* WebPush
+      const crypto = yield* CredentialCrypto
+      const config = yield* AppConfig
       return PushDelivery.of({
-        process: (message) => provideAll(processPushMessage(message), context),
-        deadLetter: (message) => provideAll(processDeadLetterMessage(message), context)
+        process: (message) => processPushMessage(message).pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(WebPush, webPush),
+          Effect.provideService(CredentialCrypto, crypto),
+          Effect.provideService(AppConfig, config)
+        ),
+        deadLetter: (message) => processDeadLetterMessage(message).pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(CredentialCrypto, crypto)
+        )
       })
     })
   )
 }
 
 export class Maintenance extends Context.Service<Maintenance, {
-  readonly run: Effect.Effect<MaintenanceResult, AppError>
+  readonly run: Effect.Effect<MaintenanceResult, RepositoryUnavailable | QueueUnavailable>
 }>()("ops-context/Maintenance") {
   static readonly layer = Layer.effect(
     Maintenance,
     Effect.gen(function*() {
-      const context = yield* Effect.context<Database | PushQueue | AppConfig>()
-      return Maintenance.of({ run: provideAll(runMaintenance, context) })
+      const database = yield* Database
+      const queue = yield* PushQueue
+      const config = yield* AppConfig
+      return Maintenance.of({
+        run: runMaintenance.pipe(
+          Effect.provideService(Database, database),
+          Effect.provideService(PushQueue, queue),
+          Effect.provideService(AppConfig, config)
+        )
+      })
     })
   )
 }
-
-export const unexpected = (message: string): InternalError =>
-  new InternalError({ error: "internal", message })
-
-export const conflictFailure = (message: string): ConflictError =>
-  new ConflictError({ error: "conflict", message })

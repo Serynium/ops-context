@@ -1,5 +1,8 @@
 import { Effect } from "effect"
-import { type AppError } from "./errors.js"
+import {
+  type CryptographyUnavailable,
+  type RepositoryUnavailable
+} from "./errors.js"
 import { newId, nowIso } from "./ids.js"
 import { AppConfig, CredentialCrypto, Database, WebPush } from "./services.js"
 import type { EventAction, EventRow, PushJobMessage, PushSubscriptionRow } from "./types.js"
@@ -30,6 +33,8 @@ export type PushOutcome =
   | { readonly _tag: "PermanentFailure" }
   | { readonly _tag: "AlreadyProcessed" }
   | { readonly _tag: "Retry"; readonly delaySeconds: number }
+
+export type PushDeliveryError = RepositoryUnavailable | CryptographyUnavailable
 
 const terminalStates = new Set<PushJobState>(["sent", "dead"])
 
@@ -80,7 +85,7 @@ const deliveryInsert = (
 const finalizeSuccess = (
   message: PushJobMessage,
   responseStatus: number
-): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<void, PushDeliveryError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const now = nowIso()
@@ -102,7 +107,7 @@ const finalizeDead = (
   responseStatus: number | null,
   error: string,
   disableSubscription: boolean
-): Effect.Effect<void, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<void, PushDeliveryError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const now = nowIso()
@@ -134,7 +139,7 @@ const retryOrDead = (
   attempts: number,
   responseStatus: number | null,
   error: string
-): Effect.Effect<PushOutcome, AppError, Database | CredentialCrypto | AppConfig> =>
+): Effect.Effect<PushOutcome, PushDeliveryError, Database | CredentialCrypto | AppConfig> =>
   Effect.gen(function*() {
     const db = yield* Database
     const config = yield* AppConfig
@@ -181,7 +186,7 @@ interface PushContext {
 
 const loadContext = (
   message: PushJobMessage
-): Effect.Effect<PushContext | null, AppError, Database> =>
+): Effect.Effect<PushContext | null, RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const job = yield* db.first<PushJobRow>(
@@ -209,7 +214,7 @@ const loadContext = (
     return { job, event, subscription }
   })
 
-const claim = (message: PushJobMessage): Effect.Effect<boolean, AppError, Database> =>
+const claim = (message: PushJobMessage): Effect.Effect<boolean, RepositoryUnavailable, Database> =>
   Effect.gen(function*() {
     const db = yield* Database
     const now = nowIso()
@@ -233,7 +238,7 @@ const secondsUntil = (iso: string): number =>
 
 export const processPushMessage = (
   message: PushJobMessage
-): Effect.Effect<PushOutcome, AppError, Database | WebPush | CredentialCrypto | AppConfig> =>
+): Effect.Effect<PushOutcome, PushDeliveryError, Database | WebPush | CredentialCrypto | AppConfig> =>
   Effect.gen(function*() {
     const db = yield* Database
     const webPush = yield* WebPush
@@ -344,7 +349,7 @@ export const processPushMessage = (
 export const processDeadLetterMessage = (
   message: PushJobMessage,
   reason = "Cloudflare Queue moved the message to the dead-letter queue"
-): Effect.Effect<PushOutcome, AppError, Database | CredentialCrypto> =>
+): Effect.Effect<PushOutcome, PushDeliveryError, Database | CredentialCrypto> =>
   Effect.gen(function*() {
     const db = yield* Database
     const job = yield* db.first<PushJobRow>(

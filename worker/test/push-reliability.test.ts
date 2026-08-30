@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
-import { internal } from "../src/errors.js"
+import { deliveryTemporarilyUnavailable } from "../src/errors.js"
 import { runMaintenance } from "../src/maintenance.js"
 import {
   processDeadLetterMessage,
@@ -25,10 +25,10 @@ const message: PushJobMessage = {
 
 const config = (maxPushAttempts = 6): ConfigService => ({
   baseUrl: "https://ops.example.com",
-  adminUser: "admin",
+  appOrigin: "https://ops.example.com",
+  appHost: "ops.example.com",
   defaultRetentionDays: 0,
   maxPushAttempts,
-  adminPasswordHash: "unused",
   vapidPublicKey: "unused",
   vapidPrivateJwk: "unused",
   vapidSubject: "mailto:test@example.com"
@@ -43,7 +43,7 @@ const runtimeLayer = (
   Layer.succeed(AppConfig)(config(maxPushAttempts)),
   Layer.succeed(WebPush)({
     send: () => response instanceof Error
-      ? Effect.fail(internal(response.message, response))
+      ? Effect.fail(deliveryTemporarilyUnavailable(response.message, response))
       : Effect.succeed(response)
   })
 )

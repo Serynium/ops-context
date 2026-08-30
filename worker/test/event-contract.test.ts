@@ -13,27 +13,25 @@ import {
   EVENT_PAYLOAD_MAX_BYTES,
   EVENT_TITLE_MAX_LENGTH
 } from "../src/event-contract.js"
-import type { AppError, ValidationIssue } from "../src/errors.js"
+import type { InvalidEvent } from "../src/errors.js"
 
 const decode = (input: unknown) => Effect.runPromise(decodeCreateEventInput(input))
 
-const captureValidation = async (input: unknown): Promise<AppError> => {
+const captureValidation = async (input: unknown): Promise<InvalidEvent> => {
   try {
     await decode(input)
     throw new Error("expected event validation to fail")
   } catch (error) {
     expect(error).toMatchObject({
-      _tag: "AppError",
-      status: 422,
-      code: "validation_error"
+      _tag: "InvalidEvent"
     })
-    return error as AppError
+    return error as InvalidEvent
   }
 }
 
-const issuePaths = (error: AppError): ReadonlyArray<ReadonlyArray<string | number>> =>
-  Array.isArray(error.cause)
-    ? (error.cause as ReadonlyArray<ValidationIssue>).map((issue) => issue.path)
+const issuePaths = (error: InvalidEvent): ReadonlyArray<ReadonlyArray<string | number>> =>
+  Array.isArray(error.issues)
+    ? error.issues.map((issue) => issue.path)
     : []
 
 describe("event ingestion contract", () => {
@@ -147,7 +145,7 @@ describe("event ingestion contract", () => {
     }
 
     const error = await captureValidation({ title: "Deep context", data: nested })
-    expect((error.cause as ReadonlyArray<ValidationIssue>).some((issue) =>
+    expect((error.issues ?? []).some((issue) =>
       issue.message.includes("nested levels")
     )).toBe(true)
   })

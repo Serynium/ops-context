@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect"
 import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
+import { isApplicationError, type ApplicationError } from "./errors.js"
 import type { EventPage, ListEventsInput } from "./events.js"
 import {
   GetEventArguments,
@@ -86,7 +87,40 @@ const contentResult = <A extends object>(value: A) => ({
   structuredContent: value as Record<string, unknown>
 })
 
+export interface McpToolFailure {
+  readonly code: "invalid_argument" | "not_found" | "conflict" | "unavailable"
+  readonly message: string
+}
+
+export const toMcpToolFailure = (failure: ApplicationError): McpToolFailure => {
+  switch (failure._tag) {
+    case "InvalidEvent":
+    case "InvalidProject":
+    case "InvalidSubscription":
+    case "InvalidSilence":
+    case "InvalidSettings":
+    case "InvalidEventQuery":
+      return { code: "invalid_argument", message: failure.message }
+    case "ProjectNotFound":
+    case "EventNotFound":
+    case "SubscriptionNotFound":
+    case "SilenceNotFound":
+    case "InvalidProjectCredential":
+      return { code: "not_found", message: failure.message }
+    case "DuplicateExternalId":
+    case "ProjectDeletionConflict":
+      return { code: "conflict", message: failure.message }
+    case "RepositoryUnavailable":
+    case "QueueUnavailable":
+    case "CryptographyUnavailable":
+    case "DeliveryTemporarilyUnavailable":
+    case "PushNotConfigured":
+      return { code: "unavailable", message: "Tool service is temporarily unavailable" }
+  }
+}
+
 const errorMessage = (error: unknown): string => {
+  if (isApplicationError(error)) return toMcpToolFailure(error).message
   if (typeof error === "object" && error !== null) {
     const message = (error as { readonly message?: unknown }).message
     if (typeof message === "string") return message
@@ -94,11 +128,14 @@ const errorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : "Tool execution failed"
 }
 
-const runEffect = async <A>(effect: Effect.Effect<A, ApiFailure>): Promise<A> => {
+const runEffect = async <A, E extends ApplicationError>(effect: Effect.Effect<A, E>): Promise<A> => {
   try {
     return await Effect.runPromise(effect)
   } catch (error) {
-    throw new Error(errorMessage(error))
+    const failure = isApplicationError(error)
+      ? toMcpToolFailure(error)
+      : { code: "unavailable", message: "Tool execution failed" } as const
+    throw new Error(`${failure.code}: ${failure.message}`)
   }
 }
 
