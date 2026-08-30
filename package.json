@@ -22,8 +22,7 @@
     "@effect/sql-d1": "4.0.0-rc.112",
     "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
-    "effect": "4.0.0-rc.112",
-    "zod": "4.2.0"
+    "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260827.1",
