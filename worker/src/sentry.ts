@@ -145,8 +145,8 @@ const readStreamWithLimit = async (
   return output
 }
 
-const streamOf = (bytes: Uint8Array): ReadableStream<Uint8Array> =>
-  new ReadableStream<Uint8Array>({
+const streamOf = (bytes: Uint8Array): ReadableStream<BufferSource> =>
+  new ReadableStream<BufferSource>({
     start(controller) {
       controller.enqueue(bytes)
       controller.close()
