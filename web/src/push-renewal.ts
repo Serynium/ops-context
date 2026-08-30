@@ -75,7 +75,7 @@ export const completePushEnrollment = async (
       const request = store.get(RECORD_KEY)
       request.onsuccess = () => {
         const current = request.result as PushRenewalCredential | undefined
-        if (current?.enrollment_key === enrollmentKey) {
+        if (current?.enrollment_key === enrollmentKey && current.pending === true) {
           store.put({ ...value, enrollment_key: enrollmentKey }, RECORD_KEY)
         }
       }
