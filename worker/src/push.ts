@@ -62,6 +62,7 @@ const deliveryInsert = (
   error: string,
   attemptedAt: string
 ) => ({
+  name: "deliveries.create",
   sql: `INSERT INTO deliveries
         (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -85,8 +86,9 @@ const finalizeSuccess = (
     const db = yield* Database
     const now = nowIso()
     const deliveryId = yield* newId("dlv")
-    yield* db.batch([
+    yield* db.batch("push_jobs.finalize_success", [
       {
+        name: "push_jobs.mark_sent",
         sql: `UPDATE push_jobs
               SET state = 'sent', lease_until = NULL, dead_at = NULL,
                   last_error = '', updated_at = ?
@@ -109,6 +111,7 @@ const finalizeDead = (
     const deliveryId = yield* newId("dlv")
     const statements = [
       {
+        name: "push_jobs.mark_dead",
         sql: `UPDATE push_jobs
               SET state = 'dead', lease_until = NULL, dead_at = ?,
                   last_error = ?, updated_at = ?
@@ -119,11 +122,12 @@ const finalizeDead = (
     ]
     if (disableSubscription) {
       statements.push({
+        name: "subscriptions.disable",
         sql: "UPDATE push_subscriptions SET enabled = 0, updated_at = ? WHERE id = ?",
         params: [now, message.subscriptionId]
       })
     }
-    yield* db.batch(statements)
+    yield* db.batch("push_jobs.finalize_dead", statements)
   })
 
 const retryDelaySeconds = (attempts: number): number =>
@@ -153,8 +157,9 @@ const retryOrDead = (
     const availableAt = new Date(Date.now() + delaySeconds * 1_000).toISOString()
     const now = nowIso()
     const deliveryId = yield* newId("dlv")
-    yield* db.batch([
+    yield* db.batch("push_jobs.schedule_retry", [
       {
+        name: "push_jobs.mark_retrying",
         sql: `UPDATE push_jobs
               SET state = 'retrying', available_at = ?, queued_at = ?,
                   lease_until = NULL, dead_at = NULL, last_error = ?, updated_at = ?
@@ -185,12 +190,14 @@ const loadContext = (
   Effect.gen(function*() {
     const db = yield* Database
     const job = yield* db.first<PushJobRow>(
+      "push_jobs.get",
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
       [message.eventId, message.subscriptionId]
     )
     if (!job) return null
 
     const event = yield* db.first<EventRow>(
+      "events.get_for_push",
       `SELECT
          e.id, e.external_id, e.project_id,
          p.name AS project_name, p.slug AS project_slug, p.icon AS project_icon,
@@ -202,6 +209,7 @@ const loadContext = (
       [message.eventId]
     )
     const subscription = yield* db.first<PushSubscriptionRow>(
+      "subscriptions.get_by_id",
       "SELECT * FROM push_subscriptions WHERE id = ?",
       [message.subscriptionId]
     )
@@ -215,6 +223,7 @@ const claim = (message: PushJobMessage): Effect.Effect<boolean, AppError, Databa
     const now = nowIso()
     const leaseUntil = new Date(Date.now() + 60_000).toISOString()
     const result = yield* db.run(
+      "push_jobs.claim",
       `UPDATE push_jobs
        SET state = 'sending', attempts = attempts + 1, lease_until = ?, updated_at = ?
        WHERE event_id = ? AND subscription_id = ?
@@ -239,6 +248,7 @@ export const processPushMessage = (
     const webPush = yield* WebPush
 
     const before = yield* db.first<PushJobRow>(
+      "push_jobs.get",
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
       [message.eventId, message.subscriptionId]
     )
@@ -348,6 +358,7 @@ export const processDeadLetterMessage = (
   Effect.gen(function*() {
     const db = yield* Database
     const job = yield* db.first<PushJobRow>(
+      "push_jobs.get",
       "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
       [message.eventId, message.subscriptionId]
     )

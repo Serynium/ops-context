@@ -57,6 +57,7 @@ export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView
   Effect.gen(function*() {
     const db = yield* Database
     const rows = yield* db.all<PushSubscriptionRow>(
+      "subscriptions.list",
       "SELECT * FROM push_subscriptions ORDER BY created_at DESC"
     )
     return rows.map(toSubscriptionView)
@@ -68,6 +69,7 @@ export const findSubscriptionRow = (
   Effect.gen(function*() {
     const db = yield* Database
     const row = yield* db.first<PushSubscriptionRow>(
+      "subscriptions.get_by_id",
       "SELECT * FROM push_subscriptions WHERE id = ?",
       [id]
     )
@@ -91,6 +93,7 @@ export const registerSubscription = (
 
     const now = nowIso()
     const existing = yield* db.first<PushSubscriptionRow>(
+      "subscriptions.get_by_endpoint",
       "SELECT * FROM push_subscriptions WHERE endpoint = ?",
       [input.subscription.endpoint]
     )
@@ -98,6 +101,7 @@ export const registerSubscription = (
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
 
     yield* db.run(
+      "subscriptions.upsert",
       `INSERT INTO push_subscriptions
        (id, name, endpoint, p256dh, auth, user_agent, enabled, last_seen_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
@@ -123,6 +127,7 @@ export const registerSubscription = (
     )
 
     const row = yield* db.first<PushSubscriptionRow>(
+      "subscriptions.get_by_endpoint",
       "SELECT * FROM push_subscriptions WHERE endpoint = ?",
       [input.subscription.endpoint]
     )
@@ -141,6 +146,7 @@ export const updateSubscription = (
     if (!name) return yield* Effect.fail(invalid("subscription name cannot be empty"))
     const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
     yield* db.run(
+      "subscriptions.update",
       "UPDATE push_subscriptions SET name = ?, enabled = ?, updated_at = ? WHERE id = ?",
       [name, enabled, nowIso(), id]
     )
@@ -151,13 +157,14 @@ export const deleteSubscription = (id: string): Effect.Effect<void, AppError, Da
   Effect.gen(function*() {
     const db = yield* Database
     yield* findSubscriptionRow(id)
-    yield* db.run("DELETE FROM push_subscriptions WHERE id = ?", [id])
+    yield* db.run("subscriptions.delete", "DELETE FROM push_subscriptions WHERE id = ?", [id])
   })
 
 export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, AppError, Database> =
   Effect.gen(function*() {
     const db = yield* Database
     return yield* db.all<PushSubscriptionRow>(
+      "subscriptions.list_enabled",
       "SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY created_at"
     )
   })

@@ -9,6 +9,7 @@ const getValue = (key: string): Effect.Effect<string | null, AppError, Database>
   Effect.gen(function*() {
     const db = yield* Database
     const row = yield* db.first<{ readonly value: string }>(
+      "settings.get_by_key",
       "SELECT value FROM settings WHERE key = ?",
       [key]
     )
@@ -19,6 +20,7 @@ const setValue = (key: string, value: string): Effect.Effect<void, AppError, Dat
   Effect.gen(function*() {
     const db = yield* Database
     yield* db.run(
+      "settings.upsert",
       `INSERT INTO settings (key, value, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,

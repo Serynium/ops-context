@@ -1,91 +1,122 @@
 import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto"
-import { D1Client } from "@effect/sql-d1"
 import { buildPushHTTPRequest, type PushMessage, type PushSubscription } from "@pushforge/builder"
 import { Context, Crypto, Effect, Layer } from "effect"
-import { SqlClient } from "effect/unstable/sql"
+import {
+  d1FailureTelemetry,
+  d1SuccessTelemetry,
+  type DatabaseOperation
+} from "./database-observability.js"
 import { internal, type AppError } from "./errors.js"
 import type { Env, PushJobMessage } from "./types.js"
 
 export interface SqlStatement {
+  readonly name: string
   readonly sql: string
   readonly params?: ReadonlyArray<unknown>
 }
 
 export interface DatabaseService {
   readonly first: <A extends object>(
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<A | null, AppError>
   readonly all: <A extends object>(
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<ReadonlyArray<A>, AppError>
   readonly run: (
+    name: string,
     sql: string,
     params?: ReadonlyArray<unknown>
   ) => Effect.Effect<D1Result<unknown>, AppError>
-  readonly batch: (statements: ReadonlyArray<SqlStatement>) => Effect.Effect<void, AppError>
+  readonly batch: (
+    name: string,
+    statements: ReadonlyArray<SqlStatement>
+  ) => Effect.Effect<void, AppError>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
-  static readonly layerNoDeps = Layer.effect(
-    Database,
-    Effect.gen(function*() {
-      const sql = yield* SqlClient.SqlClient
-      const d1 = yield* D1Client.D1Client
-
-      const sqlFailure = (operation: string) =>
-        Effect.mapError((cause: unknown) => internal(`database ${operation} failed`, cause))
-
-      const first: DatabaseService["first"] = <A extends object>(
-        statement: string,
-        params: ReadonlyArray<unknown> = []
-      ) =>
-        sql.unsafe<A>(statement, params).pipe(
-          Effect.map((rows) => rows[0] ?? null),
-          sqlFailure("query")
-        )
-
-      const all: DatabaseService["all"] = <A extends object>(
-        statement: string,
-        params: ReadonlyArray<unknown> = []
-      ) =>
-        sql.unsafe<A>(statement, params).pipe(
-          Effect.map((rows) => rows as ReadonlyArray<A>),
-          sqlFailure("query")
-        )
-
-      const run: DatabaseService["run"] = (statement, params = []) =>
-        Effect.tryPromise({
-          try: async () => {
-            const result = await d1.config.db.prepare(statement).bind(...params).run()
-            if (!result.success) throw new Error(result.error ?? "D1 write failed")
-            return result
-          },
-          catch: (cause) => internal("database write failed", cause)
+  static readonly layer = (db: D1Database): Layer.Layer<Database> => {
+    const observe = <A>(
+      name: string,
+      operation: DatabaseOperation,
+      execute: () => Promise<A>,
+      successTelemetry: (result: A) => ReadonlyArray<Record<string, unknown>>
+    ): Effect.Effect<A, AppError> =>
+      Effect.tryPromise({
+        try: execute,
+        catch: (cause) => internal(`database ${operation} failed`, cause)
+      }).pipe(
+        Effect.tap((result) =>
+          Effect.forEach(successTelemetry(result), (telemetry) =>
+            Effect.all([
+              Effect.annotateCurrentSpan(telemetry),
+              Effect.logInfo(telemetry)
+            ], { discard: true }), { discard: true })
+        ),
+        Effect.tapError(() => {
+          const telemetry = d1FailureTelemetry(name, operation)
+          return Effect.all([
+            Effect.annotateCurrentSpan(telemetry),
+            Effect.logError(telemetry)
+          ], { discard: true })
+        }),
+        Effect.withSpan("D1.query", {
+          kind: "client",
+          attributes: {
+            "db.system": "cloudflare-d1",
+            "db.query.name": name,
+            "db.operation": operation
+          }
         })
+      )
 
-      const batch: DatabaseService["batch"] = (statements) => {
-        if (statements.length === 0) return Effect.void
-        return d1.batch(
-          statements.map((statement) =>
-            sql.unsafe<Record<string, unknown>>(statement.sql, statement.params)
-          )
-        ).pipe(
-          Effect.asVoid,
-          sqlFailure("batch")
+    const all: DatabaseService["all"] = <A extends object>(
+      name: string,
+      statement: string,
+      params: ReadonlyArray<unknown> = []
+    ) =>
+      observe(
+        name,
+        "query",
+        () => db.prepare(statement).bind(...params).all<A>(),
+        (result) => [d1SuccessTelemetry(name, "query", result)]
+      ).pipe(
+        Effect.map((result) => result.results ?? [])
+      )
+
+    const first: DatabaseService["first"] = <A extends object>(
+      name: string,
+      statement: string,
+      params: ReadonlyArray<unknown> = []
+    ) => all<A>(name, statement, params).pipe(Effect.map((rows) => rows[0] ?? null))
+
+    const run: DatabaseService["run"] = (name, statement, params = []) =>
+      observe(
+        name,
+        "write",
+        () => db.prepare(statement).bind(...params).run(),
+        (result) => [d1SuccessTelemetry(name, "write", result)]
+      )
+
+    const batch: DatabaseService["batch"] = (name, statements) => {
+      if (statements.length === 0) return Effect.void
+      return observe(
+        name,
+        "batch",
+        () => db.batch(statements.map((statement) => db.prepare(statement.sql).bind(...(statement.params ?? [])))),
+        (results) => results.map((result, index) =>
+          d1SuccessTelemetry(statements[index]?.name ?? name, "batch", result)
         )
-      }
+      ).pipe(
+        Effect.asVoid
+      )
+    }
 
-      return Database.of({ first, all, run, batch })
-    })
-  )
-
-  static readonly layer = (db: D1Database): Layer.Layer<Database> =>
-    this.layerNoDeps.pipe(
-      Layer.provide(D1Client.layer({ db })),
-      Layer.orDie
-    )
+    return Layer.succeed(Database)(Database.of({ first, all, run, batch }))
+  }
 }
 
 export interface ConfigService {

@@ -19,6 +19,7 @@ export const listSilences: Effect.Effect<ReadonlyArray<SilenceRow>, AppError, Da
   Effect.gen(function*() {
     const db = yield* Database
     return yield* db.all<SilenceRow>(
+      "silences.list",
       `SELECT s.*, p.name AS project_name
        FROM silences s
        LEFT JOIN projects p ON p.id = s.project_id
@@ -30,6 +31,7 @@ export const getSilence = (id: string): Effect.Effect<SilenceRow, AppError, Data
   Effect.gen(function*() {
     const db = yield* Database
     const row = yield* db.first<SilenceRow>(
+      "silences.get_by_id",
       `SELECT s.*, p.name AS project_name
        FROM silences s
        LEFT JOIN projects p ON p.id = s.project_id
@@ -52,12 +54,13 @@ export const createSilence = (
     }
 
     if (input.project_id) {
-      const project = yield* db.first<{ readonly id: string }>("SELECT id FROM projects WHERE id = ?", [input.project_id])
+      const project = yield* db.first<{ readonly id: string }>("projects.exists_by_id", "SELECT id FROM projects WHERE id = ?", [input.project_id])
       if (!project) return yield* Effect.fail(notFound("project not found"))
     }
 
     const id = yield* newId("sil")
     yield* db.run(
+      "silences.create",
       "INSERT INTO silences (id, project_id, field, value, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
       [id, input.project_id ?? null, input.field, value, input.note?.trim().slice(0, 1000) ?? "", nowIso()]
     )
@@ -68,7 +71,7 @@ export const deleteSilence = (id: string): Effect.Effect<void, AppError, Databas
   Effect.gen(function*() {
     const db = yield* Database
     yield* getSilence(id)
-    yield* db.run("DELETE FROM silences WHERE id = ?", [id])
+    yield* db.run("silences.delete", "DELETE FROM silences WHERE id = ?", [id])
   })
 
 export const matchSilence = (
@@ -80,6 +83,7 @@ export const matchSilence = (
     for (const [field, value] of candidates) {
       if (!value) continue
       const row = yield* db.first<{ readonly id: string }>(
+        "silences.match_event",
         `SELECT id FROM silences
          WHERE field = ? AND value = ? AND (project_id IS NULL OR project_id = ?)
          ORDER BY CASE WHEN project_id IS NULL THEN 1 ELSE 0 END
