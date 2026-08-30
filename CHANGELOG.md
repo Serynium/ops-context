@@ -6,6 +6,7 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- A measured FTS5 event-search index with Unicode token and explicit-prefix search, redacted structured-value projection, atomic trigger maintenance, and an idempotent rebuild path.
 - A measured `event_groups` read model for default grouped inbox pages, with atomic insert/delete maintenance, retention-safe recomputation, project isolation, migration backfill, and an authenticated idempotent repair operation.
 - Grouped-inbox D1 measurements and integration coverage comparing the read model to the exact dynamic query. On the 10,000-event fixture, rows read fell from 51,502 to 154 and median local latency from 8 ms to below 1 ms.
 - Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.

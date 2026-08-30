@@ -45,6 +45,10 @@ export interface DatabaseService {
     name: string,
     statements: ReadonlyArray<SqlStatement>
   ) => Effect.Effect<void, RepositoryUnavailable>
+  readonly batchResults: (
+    name: string,
+    statements: ReadonlyArray<SqlStatement>
+  ) => Effect.Effect<ReadonlyArray<D1Result<unknown>>, RepositoryUnavailable>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
@@ -115,8 +119,8 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         (result) => [d1SuccessTelemetry(name, "write", result)]
       )
 
-    const batch: DatabaseService["batch"] = (name, statements) => {
-      if (statements.length === 0) return Effect.void
+    const batchResults: DatabaseService["batchResults"] = (name, statements) => {
+      if (statements.length === 0) return Effect.succeed([])
       return observe(
         name,
         "batch",
@@ -129,10 +133,12 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         (results) => results.map((result, index) =>
           d1SuccessTelemetry(statements[index]?.name ?? name, "batch", result)
         )
-      ).pipe(Effect.asVoid)
+      )
     }
+    const batch: DatabaseService["batch"] = (name, statements) =>
+      batchResults(name, statements).pipe(Effect.asVoid)
 
-    return Layer.succeed(Database)(Database.of({ first, all, run, batch }))
+    return Layer.succeed(Database)(Database.of({ first, all, run, batch, batchResults }))
   }
 }
 
