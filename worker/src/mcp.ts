@@ -304,7 +304,6 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       }, {
         legacy: "stateless",
         responseMode: "json",
-        maxRequestBodySize: 1_048_576,
         onerror: (error) => console.error("MCP protocol error", error)
       })
 
