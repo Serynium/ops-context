@@ -39,6 +39,11 @@ export interface DatabaseService {
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
   static readonly layer = (db: D1Database): Layer.Layer<Database> => {
+    const requireD1Success = <A extends D1Result<unknown>>(result: A): A => {
+      if (result.success !== true) throw new Error("D1 operation returned an unsuccessful result")
+      return result
+    }
+
     const observe = <A>(
       name: string,
       operation: DatabaseOperation,
@@ -81,7 +86,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
       observe(
         name,
         "query",
-        () => db.prepare(statement).bind(...params).all<A>(),
+        async () => requireD1Success(await db.prepare(statement).bind(...params).all<A>()),
         (result) => [d1SuccessTelemetry(name, "query", result)]
       ).pipe(
         Effect.map((result) => result.results ?? [])
@@ -97,7 +102,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
       observe(
         name,
         "write",
-        () => db.prepare(statement).bind(...params).run(),
+        async () => requireD1Success(await db.prepare(statement).bind(...params).run()),
         (result) => [d1SuccessTelemetry(name, "write", result)]
       )
 
@@ -106,7 +111,12 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
       return observe(
         name,
         "batch",
-        () => db.batch(statements.map((statement) => db.prepare(statement.sql).bind(...(statement.params ?? [])))),
+        async () => {
+          const results = await db.batch(
+            statements.map((statement) => db.prepare(statement.sql).bind(...(statement.params ?? [])))
+          )
+          return results.map(requireD1Success)
+        },
         (results) => results.map((result, index) =>
           d1SuccessTelemetry(statements[index]?.name ?? name, "batch", result)
         )

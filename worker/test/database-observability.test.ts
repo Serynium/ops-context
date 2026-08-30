@@ -4,7 +4,8 @@ import {
   D1StructuredLoggerLive,
   d1SuccessTelemetry
 } from "../src/database-observability.js"
-import { Database } from "../src/services.js"
+import type { AppError } from "../src/errors.js"
+import { Database, type DatabaseService } from "../src/services.js"
 
 const result = <A>(results: A[], overrides: Partial<D1Meta> = {}): D1Result<A> => ({
   success: true,
@@ -20,6 +21,20 @@ const result = <A>(results: A[], overrides: Partial<D1Meta> = {}): D1Result<A> =
     ...overrides
   }
 })
+
+const unsuccessfulResult = <A>(results: A[] = []): D1Result<A> => ({
+  ...result(results),
+  success: false,
+  error: "driver detail that must not be logged"
+} as unknown as D1Result<A>)
+
+const unsuccessfulOperationCases: ReadonlyArray<readonly [
+  string,
+  (database: DatabaseService) => Effect.Effect<unknown, AppError>
+]> = [
+  ["read", (database) => database.all("events.list", "SELECT * FROM events")],
+  ["write", (database) => database.run("events.create", "INSERT INTO events DEFAULT VALUES")]
+]
 
 describe("D1 query observability", () => {
   it("extracts row counts and prefers the precise SQL duration", () => {
@@ -129,5 +144,59 @@ describe("D1 query observability", () => {
       "error.class": "d1_query_failed"
     }]])
     expect(JSON.stringify(messages)).not.toContain("secret-external-id")
+  })
+
+  it.each(unsuccessfulOperationCases)("rejects unsuccessful D1 %s result objects", async (_kind, operation) => {
+    const messages: Array<unknown> = []
+    const logger = Logger.make(({ message }) => {
+      messages.push(message)
+    })
+    const db = {
+      prepare: () => ({
+        bind: () => ({
+          all: () => Promise.resolve(unsuccessfulResult()),
+          run: () => Promise.resolve(unsuccessfulResult())
+        })
+      })
+    } as unknown as D1Database
+
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(Database, operation).pipe(
+        Effect.provide(Database.layer(db)),
+        Effect.provide(Logger.layer([logger]))
+      )
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(messages).toHaveLength(1)
+    expect(JSON.stringify(messages)).toContain("d1.query.failed")
+    expect(JSON.stringify(messages)).not.toContain("driver detail")
+  })
+
+  it("rejects a batch when any D1 result is unsuccessful", async () => {
+    const messages: Array<unknown> = []
+    const logger = Logger.make(({ message }) => {
+      messages.push(message)
+    })
+    const db = {
+      prepare: (sql: string) => ({ sql, bind: () => ({ sql }) }),
+      batch: () => Promise.resolve([result([]), unsuccessfulResult()])
+    } as unknown as D1Database
+
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(Database, (database) => database.batch("events.create_batch", [
+        { name: "events.insert", sql: "INSERT INTO events DEFAULT VALUES" },
+        { name: "subscriptions.touch", sql: "UPDATE subscriptions SET updated_at = 1" }
+      ])).pipe(
+        Effect.provide(Database.layer(db)),
+        Effect.provide(Logger.layer([logger]))
+      )
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(messages).toHaveLength(1)
+    expect(JSON.stringify(messages)).toContain("d1.query.failed")
+    expect(JSON.stringify(messages)).not.toContain("d1.query\"")
+    expect(JSON.stringify(messages)).not.toContain("driver detail")
   })
 })
