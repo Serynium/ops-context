@@ -78,6 +78,7 @@ const context: PushContext = {
     previous_renewal_credential_valid_until: null,
     explicitly_enrolled: 0,
     deleted_at: null,
+    enrollment_generation: 0,
     created_at: "2026-08-31T12:00:00.000Z",
     updated_at: "2026-08-31T12:00:00.000Z"
   }

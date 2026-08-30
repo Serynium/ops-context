@@ -11,6 +11,10 @@ ALTER TABLE push_subscriptions ADD COLUMN explicitly_enrolled INTEGER NOT NULL D
 -- Removed installations remain as hidden endpoint tombstones so an older browser
 -- cannot silently recreate itself before an operator explicitly re-enrolls it.
 ALTER TABLE push_subscriptions ADD COLUMN deleted_at TEXT;
+-- Fanout snapshots this generation so removal followed by re-enrollment cannot
+-- revive a notification intended for the prior enrollment.
+ALTER TABLE push_subscriptions ADD COLUMN enrollment_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE push_jobs ADD COLUMN subscription_generation INTEGER NOT NULL DEFAULT 0;
 
 CREATE UNIQUE INDEX push_subscriptions_renewal_credential_hash
   ON push_subscriptions(renewal_credential_hash)

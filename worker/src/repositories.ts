@@ -96,6 +96,7 @@ export const PushSubscriptionRowSchema = Schema.Struct({
   previous_renewal_credential_valid_until: nullableString,
   explicitly_enrolled: Schema.Number,
   deleted_at: nullableString,
+  enrollment_generation: Schema.Number,
   created_at: Schema.String,
   updated_at: Schema.String
 })
@@ -276,6 +277,11 @@ export interface EventInsert {
   readonly silenceId: string | null
 }
 
+export interface SubscriptionFanoutTarget {
+  readonly id: string
+  readonly generation: number
+}
+
 const eventColumns = `
   e.id, e.external_id, e.project_id,
   p.name AS project_name, p.slug AS project_slug, p.icon AS project_icon,
@@ -287,9 +293,9 @@ export class EventsRepository extends Context.Service<EventsRepository, {
   readonly findById: (id: string) => Effect.Effect<EventRow | null, RepositoryUnavailable>
   readonly findIdByExternalId: (projectId: string, externalId: string) => Effect.Effect<string | null, RepositoryUnavailable>
   readonly list: (criteria: EventListCriteria) => Effect.Effect<ReadonlyArray<EventRow>, RepositoryUnavailable>
-  readonly insertWithPushJobs: (event: EventInsert, subscriptionIds: ReadonlyArray<string>) => Effect.Effect<void, RepositoryUnavailable>
+  readonly insertWithPushJobs: (event: EventInsert, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>) => Effect.Effect<void, RepositoryUnavailable>
   readonly markPushJobsQueued: (eventId: string, queuedAt: string, onlyPending: boolean) => Effect.Effect<void, RepositoryUnavailable>
-  readonly initializeIngestion: (event: EventInsert, subscriptionIds: ReadonlyArray<string>) => Effect.Effect<void, RepositoryUnavailable>
+  readonly initializeIngestion: (event: EventInsert, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>) => Effect.Effect<void, RepositoryUnavailable>
   readonly insertAlias: (aliasId: string, eventId: string, createdAt: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly listPendingSubscriptionIds: (eventId: string) => Effect.Effect<ReadonlyArray<string>, RepositoryUnavailable>
   readonly markPushJobQueued: (eventId: string, subscriptionId: string, queuedAt: string) => Effect.Effect<void, RepositoryUnavailable>
@@ -300,7 +306,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
     readonly reason: string
     readonly failedAt: string
   }) => Effect.Effect<void, RepositoryUnavailable>
-  readonly unsilenceWithPushJobs: (eventId: string, subscriptionIds: ReadonlyArray<string>, now: string) => Effect.Effect<void, RepositoryUnavailable>
+  readonly unsilenceWithPushJobs: (eventId: string, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>, now: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly pruneBefore: (cutoff: string) => Effect.Effect<number, RepositoryUnavailable>
   readonly rebuildGroups: Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/EventsRepository") {
@@ -445,7 +451,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         "events.get_by_external_id"
       ).pipe(Effect.map((row) => row?.id ?? null)),
       list,
-      insertWithPushJobs: (event, subscriptionIds) => db.batch([
+      insertWithPushJobs: (event, subscriptions) => db.batch([
         {
           sql: `INSERT INTO events
             (id, external_id, project_id, source, type, level, title, body, fingerprint,
@@ -455,22 +461,25 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             event.title, event.body, event.fingerprint, event.payloadJson, event.actionsJson,
             event.occurredAt, event.createdAt, event.silenceId]
         },
-        ...subscriptionIds.map((subscriptionId) => ({
+        ...subscriptions.map((subscription) => ({
           sql: `INSERT INTO push_jobs
-            (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
+            (event_id, subscription_id, subscription_generation, state, attempts,
+             available_at, queued_at, lease_until, last_error, updated_at)
+            SELECT ?, ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
             WHERE EXISTS (
               SELECT 1 FROM push_subscriptions
-              WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+              WHERE id = ? AND enrollment_generation = ?
+                AND enabled = 1 AND deleted_at IS NULL
             )`,
-          params: [event.id, subscriptionId, event.createdAt, event.createdAt, subscriptionId]
+          params: [event.id, subscription.id, subscription.generation, event.createdAt,
+            event.createdAt, subscription.id, subscription.generation]
         }))
       ], "events.create_with_push_jobs"),
       markPushJobsQueued: (eventId, queuedAt, onlyPending) => db.run(
         `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?${onlyPending ? " AND state = 'pending'" : ""}`,
         [queuedAt, queuedAt, eventId], "push_jobs.mark_queued"
       ).pipe(Effect.asVoid),
-      initializeIngestion: (event, subscriptionIds) => db.batch([
+      initializeIngestion: (event, subscriptions) => db.batch([
         {
           sql: `INSERT OR IGNORE INTO events
             (id, external_id, project_id, source, type, level, title, body, fingerprint,
@@ -480,17 +489,19 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             event.title, event.body, event.fingerprint, event.payloadJson, event.actionsJson,
             event.occurredAt, event.createdAt, event.silenceId]
         },
-        ...subscriptionIds.map((subscriptionId) => ({
+        ...subscriptions.map((subscription) => ({
           sql: `INSERT OR IGNORE INTO push_jobs
-            (event_id, subscription_id, state, attempts, available_at, queued_at,
-             lease_until, dead_at, last_error, updated_at)
-            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, NULL, '', ?
+            (event_id, subscription_id, subscription_generation, state, attempts,
+             available_at, queued_at, lease_until, dead_at, last_error, updated_at)
+            SELECT ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, '', ?
             WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND fanout_completed_at IS NULL)
               AND EXISTS (
                 SELECT 1 FROM push_subscriptions
-                WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+                WHERE id = ? AND enrollment_generation = ?
+                  AND enabled = 1 AND deleted_at IS NULL
               )`,
-          params: [event.id, subscriptionId, event.createdAt, event.createdAt, event.id, subscriptionId]
+          params: [event.id, subscription.id, subscription.generation, event.createdAt,
+            event.createdAt, event.id, subscription.id, subscription.generation]
         })),
         {
           sql: "UPDATE events SET fanout_completed_at = ? WHERE id = ? AND fanout_completed_at IS NULL",
@@ -524,20 +535,24 @@ export class EventsRepository extends Context.Service<EventsRepository, {
           params: [values.eventId, values.projectId, values.externalId, values.reason, values.failedAt]
         }
       ], "ingestion_failures.record_terminal"),
-      unsilenceWithPushJobs: (eventId, subscriptionIds, now) => db.batch([
+      unsilenceWithPushJobs: (eventId, subscriptions, now) => db.batch([
         { sql: "UPDATE events SET silence_id = NULL WHERE id = ?", params: [eventId] },
-        ...subscriptionIds.map((subscriptionId) => ({
+        ...subscriptions.map((subscription) => ({
           sql: `INSERT INTO push_jobs
-            (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
+            (event_id, subscription_id, subscription_generation, state, attempts,
+             available_at, queued_at, lease_until, last_error, updated_at)
+            SELECT ?, ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
             WHERE EXISTS (
               SELECT 1 FROM push_subscriptions
-              WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+              WHERE id = ? AND enrollment_generation = ?
+                AND enabled = 1 AND deleted_at IS NULL
             )
             ON CONFLICT(event_id, subscription_id) DO UPDATE SET
+              subscription_generation = excluded.subscription_generation,
               state = 'pending', available_at = excluded.available_at, queued_at = NULL,
               lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
-          params: [eventId, subscriptionId, now, now, subscriptionId]
+          params: [eventId, subscription.id, subscription.generation, now, now,
+            subscription.id, subscription.generation]
         }))
       ], "events.unsilence_with_push_jobs"),
       pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune"),
@@ -613,6 +628,11 @@ export class SubscriptionsRepository extends Context.Service<SubscriptionsReposi
           previous_renewal_credential_hash = NULL,
           previous_renewal_credential_valid_until = NULL,
           explicitly_enrolled = MAX(push_subscriptions.explicitly_enrolled, excluded.explicitly_enrolled),
+          enrollment_generation = CASE
+            WHEN push_subscriptions.enabled = 0 AND excluded.explicitly_enrolled = 1
+              THEN push_subscriptions.enrollment_generation + 1
+            ELSE push_subscriptions.enrollment_generation
+          END,
           deleted_at = NULL, updated_at = excluded.updated_at
         WHERE excluded.explicitly_enrolled = 1
            OR (push_subscriptions.enabled = 1 AND push_subscriptions.explicitly_enrolled = 0)`,

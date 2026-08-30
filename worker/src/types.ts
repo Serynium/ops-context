@@ -115,6 +115,7 @@ export interface PushSubscriptionRow {
   readonly previous_renewal_credential_valid_until: string | null
   readonly explicitly_enrolled: number
   readonly deleted_at: string | null
+  readonly enrollment_generation: number
   readonly created_at: string
   readonly updated_at: string
 }

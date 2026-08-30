@@ -52,7 +52,7 @@ export const beginPushEnrollment = async (force: boolean): Promise<string | unde
           return
         }
         enrollmentKey = randomEnrollmentKey()
-        store.put({ enrollment_key: enrollmentKey, pending: true, explicit: force }, RECORD_KEY)
+        store.put({ ...current, enrollment_key: enrollmentKey, pending: true, explicit: force }, RECORD_KEY)
       }
       transaction.oncomplete = () => resolve(enrollmentKey)
       transaction.onerror = () => reject(transaction.error ?? new Error("could not store push credential"))

@@ -85,6 +85,7 @@ interface PushContextRow {
   readonly subscription_previous_renewal_credential_valid_until: string | null
   readonly subscription_explicitly_enrolled: number
   readonly subscription_deleted_at: string | null
+  readonly subscription_enrollment_generation: number
   readonly subscription_created_at: string
   readonly subscription_updated_at: string
 }
@@ -144,6 +145,7 @@ const PushContextRowSchema = Schema.Struct({
   subscription_previous_renewal_credential_valid_until: nullableString,
   subscription_explicitly_enrolled: Schema.Number,
   subscription_deleted_at: nullableString,
+  subscription_enrollment_generation: Schema.Number,
   subscription_created_at: Schema.String,
   subscription_updated_at: Schema.String
 })
@@ -234,6 +236,7 @@ const mapContext = (row: PushContextRow): PushContext => ({
     previous_renewal_credential_valid_until: row.subscription_previous_renewal_credential_valid_until,
     explicitly_enrolled: row.subscription_explicitly_enrolled,
     deleted_at: row.subscription_deleted_at,
+    enrollment_generation: row.subscription_enrollment_generation,
     created_at: row.subscription_created_at,
     updated_at: row.subscription_updated_at
   }
@@ -361,6 +364,7 @@ export class PushDeliveryRepository extends Context.Service<
              s.previous_renewal_credential_valid_until AS subscription_previous_renewal_credential_valid_until,
              s.explicitly_enrolled AS subscription_explicitly_enrolled,
              s.deleted_at AS subscription_deleted_at,
+             s.enrollment_generation AS subscription_enrollment_generation,
              s.created_at AS subscription_created_at,
              s.updated_at AS subscription_updated_at
            FROM push_jobs j

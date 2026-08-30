@@ -352,6 +352,11 @@ describe.sequential("installation-scoped push renewal credentials", () => {
     ).bind(id).first<{ readonly state: string }>()
     expect(queuedJob).toBeNull()
 
+    const reenrolled = await Effect.runPromise(
+      registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
+    )
+    expect(reenrolled.subscription).toMatchObject({ id, enabled: true })
+
     await Effect.runPromise(Effect.gen(function*() {
       const events = yield* EventsRepository
       yield* events.initializeIngestion({
@@ -369,21 +374,21 @@ describe.sequential("installation-scoped push renewal credentials", () => {
         occurredAt: now,
         createdAt: now,
         silenceId: null
-      }, [id])
+      }, [{ id, generation: 0 }])
     }).pipe(Effect.provide(database)))
     const staleFanout = await env.DB.prepare(
       "SELECT state FROM push_jobs WHERE event_id = 'evt_renewal_after_removal' AND subscription_id = ?"
     ).bind(id).first<{ readonly state: string }>()
     expect(staleFanout).toBeNull()
 
-    const reenrolled = await Effect.runPromise(
-      registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))
-    )
-    expect(reenrolled.subscription).toMatchObject({ id, enabled: true })
     const restored = await env.DB.prepare(
-      "SELECT deleted_at FROM push_subscriptions WHERE id = ?"
-    ).bind(id).first<{ readonly deleted_at: string | null }>()
+      "SELECT deleted_at, enrollment_generation FROM push_subscriptions WHERE id = ?"
+    ).bind(id).first<{
+      readonly deleted_at: string | null
+      readonly enrollment_generation: number
+    }>()
     expect(restored?.deleted_at).toBeNull()
+    expect(restored?.enrollment_generation).toBe(1)
   })
 
   it("rejects replay after rotating the credential", async () => {
