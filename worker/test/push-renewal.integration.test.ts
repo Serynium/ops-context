@@ -3,7 +3,7 @@ import { createExecutionContext } from "cloudflare:test"
 import { Effect, Layer } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import worker from "../src/index.js"
-import { D1RepositoriesLive } from "../src/repositories.js"
+import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
 import { CredentialCrypto } from "../src/services.js"
 import {
   deleteSubscription,
@@ -351,6 +351,30 @@ describe.sequential("installation-scoped push renewal credentials", () => {
       "SELECT state FROM push_jobs WHERE event_id = 'evt_renewal_removed' AND subscription_id = ?"
     ).bind(id).first<{ readonly state: string }>()
     expect(queuedJob).toBeNull()
+
+    await Effect.runPromise(Effect.gen(function*() {
+      const events = yield* EventsRepository
+      yield* events.initializeIngestion({
+        id: "evt_renewal_after_removal",
+        externalId: null,
+        projectId: "prj_renewal_removed",
+        source: "test",
+        type: "test",
+        level: "info",
+        title: "Fanout after removal",
+        body: "",
+        fingerprint: "renewal-after-removal",
+        payloadJson: "{}",
+        actionsJson: "[]",
+        occurredAt: now,
+        createdAt: now,
+        silenceId: null
+      }, [id])
+    }).pipe(Effect.provide(database)))
+    const staleFanout = await env.DB.prepare(
+      "SELECT state FROM push_jobs WHERE event_id = 'evt_renewal_after_removal' AND subscription_id = ?"
+    ).bind(id).first<{ readonly state: string }>()
+    expect(staleFanout).toBeNull()
 
     const reenrolled = await Effect.runPromise(
       registerSubscription({ ...input, reactivate: true }, "test agent").pipe(Effect.provide(layer))

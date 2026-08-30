@@ -458,8 +458,12 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         ...subscriptionIds.map((subscriptionId) => ({
           sql: `INSERT INTO push_jobs
             (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-            VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)`,
-          params: [event.id, subscriptionId, event.createdAt, event.createdAt]
+            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
+            WHERE EXISTS (
+              SELECT 1 FROM push_subscriptions
+              WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+            )`,
+          params: [event.id, subscriptionId, event.createdAt, event.createdAt, subscriptionId]
         }))
       ], "events.create_with_push_jobs"),
       markPushJobsQueued: (eventId, queuedAt, onlyPending) => db.run(
@@ -481,8 +485,12 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             (event_id, subscription_id, state, attempts, available_at, queued_at,
              lease_until, dead_at, last_error, updated_at)
             SELECT ?, ?, 'pending', 0, ?, NULL, NULL, NULL, '', ?
-            WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND fanout_completed_at IS NULL)`,
-          params: [event.id, subscriptionId, event.createdAt, event.createdAt, event.id]
+            WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND fanout_completed_at IS NULL)
+              AND EXISTS (
+                SELECT 1 FROM push_subscriptions
+                WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+              )`,
+          params: [event.id, subscriptionId, event.createdAt, event.createdAt, event.id, subscriptionId]
         })),
         {
           sql: "UPDATE events SET fanout_completed_at = ? WHERE id = ? AND fanout_completed_at IS NULL",
@@ -521,11 +529,15 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         ...subscriptionIds.map((subscriptionId) => ({
           sql: `INSERT INTO push_jobs
             (event_id, subscription_id, state, attempts, available_at, queued_at, lease_until, last_error, updated_at)
-            VALUES (?, ?, 'pending', 0, ?, NULL, NULL, '', ?)
+            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
+            WHERE EXISTS (
+              SELECT 1 FROM push_subscriptions
+              WHERE id = ? AND enabled = 1 AND deleted_at IS NULL
+            )
             ON CONFLICT(event_id, subscription_id) DO UPDATE SET
               state = 'pending', available_at = excluded.available_at, queued_at = NULL,
               lease_until = NULL, dead_at = NULL, last_error = '', updated_at = excluded.updated_at`,
-          params: [eventId, subscriptionId, now, now]
+          params: [eventId, subscriptionId, now, now, subscriptionId]
         }))
       ], "events.unsilence_with_push_jobs"),
       pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune"),
