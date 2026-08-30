@@ -1,9 +1,16 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server"
 import { Context, Effect, Layer } from "effect"
-import * as z from "zod/v4"
 import type { ApiFailure } from "./api-models.js"
 import { Events, Projects, Settings } from "./application.js"
 import type { EventPage, ListEventsInput } from "./events.js"
+import {
+  GetEventArguments,
+  GetEventGroupArguments,
+  ListEventsArguments,
+  ListProjectsArguments,
+  SearchEventsArguments,
+  type EventFilterArguments
+} from "./mcp-schemas.js"
 import {
   AppConfig,
   CredentialCrypto,
@@ -18,66 +25,42 @@ const readOnlyAnnotations = {
   openWorldHint: false
 } as const
 
-const Level = z.enum(["info", "success", "warning", "error", "critical"])
-const CommonEventFilters = {
-  project: z.string().trim().min(1).optional().describe("Project id or slug"),
-  level: Level.optional(),
-  source: z.string().trim().min(1).optional(),
-  fingerprint: z.string().trim().min(1).optional(),
-  since: z.string().trim().min(1).optional().describe("RFC 3339 timestamp"),
-  until: z.string().trim().min(1).optional().describe("RFC 3339 timestamp"),
-  grouped: z.boolean().optional(),
-  silenced: z.boolean().optional(),
-  before: z.string().trim().min(1).optional().describe("Cursor returned by a previous call"),
-  limit: z.number().int().min(1).max(100).default(25)
-} as const
+const trimmed = (value: string | undefined): string | undefined => {
+  const normalized = value?.trim()
+  return normalized ? normalized : undefined
+}
 
-const ListEventsArguments = z.object(CommonEventFilters).strict()
-const SearchEventsArguments = z.object({
-  query: z.string().trim().min(1),
-  ...CommonEventFilters
-}).strict()
-const GetEventArguments = z.object({
-  id: z.string().trim().min(1)
-}).strict()
-const GetEventGroupArguments = z.object({
-  project: z.string().trim().min(1).describe("Project id or slug"),
-  fingerprint: z.string().trim().min(1),
-  since: z.string().trim().min(1).optional().describe("RFC 3339 timestamp"),
-  until: z.string().trim().min(1).optional().describe("RFC 3339 timestamp"),
-  before: z.string().trim().min(1).optional().describe("Cursor returned by a previous call"),
-  limit: z.number().int().min(1).max(100).default(25)
-}).strict()
-
-interface EventFilterArguments {
-  readonly level?: z.infer<typeof Level> | undefined
-  readonly source?: string | undefined
-  readonly fingerprint?: string | undefined
-  readonly since?: string | undefined
-  readonly until?: string | undefined
-  readonly grouped?: boolean | undefined
-  readonly silenced?: boolean | undefined
-  readonly before?: string | undefined
-  readonly limit: number
+const requiredText = (value: string, name: string): string => {
+  const normalized = value.trim()
+  if (!normalized) throw new Error(`${name} is required`)
+  return normalized
 }
 
 const toListInput = (
   args: EventFilterArguments,
   projectId: string | undefined,
   search?: string
-): ListEventsInput => ({
-  ...(projectId ? { project: projectId } : {}),
-  ...(args.level ? { level: args.level } : {}),
-  ...(args.source ? { source: args.source } : {}),
-  ...(args.fingerprint ? { fingerprint: args.fingerprint } : {}),
-  ...(args.since ? { since: args.since } : {}),
-  ...(args.until ? { until: args.until } : {}),
-  ...(args.grouped !== undefined ? { grouped: String(args.grouped) } : {}),
-  ...(args.silenced !== undefined ? { silenced: String(args.silenced) } : {}),
-  ...(args.before ? { before: args.before } : {}),
-  limit: String(args.limit),
-  ...(search ? { search } : {})
-})
+): ListEventsInput => {
+  const source = trimmed(args.source)
+  const fingerprint = trimmed(args.fingerprint)
+  const since = trimmed(args.since)
+  const until = trimmed(args.until)
+  const before = trimmed(args.before)
+
+  return {
+    ...(projectId ? { project: projectId } : {}),
+    ...(args.level ? { level: args.level } : {}),
+    ...(source ? { source } : {}),
+    ...(fingerprint ? { fingerprint } : {}),
+    ...(since ? { since } : {}),
+    ...(until ? { until } : {}),
+    ...(args.grouped !== undefined ? { grouped: String(args.grouped) } : {}),
+    ...(args.silenced !== undefined ? { silenced: String(args.silenced) } : {}),
+    ...(before ? { before } : {}),
+    limit: String(args.limit ?? 25),
+    ...(search ? { search } : {})
+  }
+}
 
 const eventSummary = (event: EventView) => ({
   id: event.id,
@@ -179,9 +162,10 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       const passwordHasher = yield* PasswordHasher
 
       const resolveProject = async (value: string | undefined) => {
-        if (!value) return undefined
+        const selector = trimmed(value)
+        if (!selector) return undefined
         const available = await runEffect(projects.list)
-        return available.find((project) => project.id === value || project.slug === value)
+        return available.find((project) => project.id === selector || project.slug === selector)
       }
 
       const handler = createMcpHandler(() => {
@@ -204,7 +188,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
           {
             title: "List projects",
             description: "List every project that sends operational events.",
-            inputSchema: z.object({}).strict(),
+            inputSchema: ListProjectsArguments,
             annotations: readOnlyAnnotations
           },
           async () => contentResult({ projects: await runEffect(projects.list) })
@@ -219,8 +203,9 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             annotations: readOnlyAnnotations
           },
           async (args) => {
-            const project = await resolveProject(args.project)
-            if (args.project && !project) throw new Error(`Unknown project: ${args.project}`)
+            const selector = trimmed(args.project)
+            const project = await resolveProject(selector)
+            if (selector && !project) throw new Error(`Unknown project: ${selector}`)
             const page = await runEffect(events.list(toListInput(args, project?.id)))
             return contentResult(eventPageOutput(page))
           }
@@ -235,9 +220,11 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             annotations: readOnlyAnnotations
           },
           async (args) => {
-            const project = await resolveProject(args.project)
-            if (args.project && !project) throw new Error(`Unknown project: ${args.project}`)
-            const page = await runEffect(events.list(toListInput(args, project?.id, args.query)))
+            const selector = trimmed(args.project)
+            const project = await resolveProject(selector)
+            if (selector && !project) throw new Error(`Unknown project: ${selector}`)
+            const query = requiredText(args.query, "query")
+            const page = await runEffect(events.list(toListInput(args, project?.id, query)))
             return contentResult(eventPageOutput(page))
           }
         )
@@ -250,7 +237,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             inputSchema: GetEventArguments,
             annotations: readOnlyAnnotations
           },
-          async ({ id }) => contentResult(await runEffect(events.get(id)))
+          async ({ id }) => contentResult(await runEffect(events.get(requiredText(id, "id"))))
         )
 
         server.registerTool(
@@ -262,24 +249,29 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             annotations: readOnlyAnnotations
           },
           async (args) => {
-            const project = await resolveProject(args.project)
-            if (!project) throw new Error(`Unknown project: ${args.project}`)
+            const selector = requiredText(args.project, "project")
+            const fingerprint = requiredText(args.fingerprint, "fingerprint")
+            const project = await resolveProject(selector)
+            if (!project) throw new Error(`Unknown project: ${selector}`)
+            const since = trimmed(args.since)
+            const until = trimmed(args.until)
+            const before = trimmed(args.before)
             const window: ListEventsInput = {
               project: project.id,
-              fingerprint: args.fingerprint,
-              ...(args.since ? { since: args.since } : {}),
-              ...(args.until ? { until: args.until } : {})
+              fingerprint,
+              ...(since ? { since } : {}),
+              ...(until ? { until } : {})
             }
             const grouped = await runEffect(events.list({ ...window, grouped: "true", limit: "1" }))
             const latest = grouped.events[0]
             if (!latest) {
-              throw new Error(`No events with fingerprint ${args.fingerprint} in project ${args.project}`)
+              throw new Error(`No events with fingerprint ${fingerprint} in project ${selector}`)
             }
             const occurrences = await runEffect(events.list({
               ...window,
               grouped: "false",
-              ...(args.before ? { before: args.before } : {}),
-              limit: String(args.limit)
+              ...(before ? { before } : {}),
+              limit: String(args.limit ?? 25)
             }))
             const group = latest.group ?? {
               count: occurrences.events.length,
@@ -289,7 +281,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             return contentResult({
               project: project.name,
               project_id: project.id,
-              fingerprint: args.fingerprint,
+              fingerprint,
               count: group.count,
               first_seen: group.first_seen,
               last_seen: group.last_seen,

@@ -2,6 +2,12 @@
 
 All notable changes to Ops Context are recorded here.
 
+## [Unreleased]
+
+### Changed
+
+- Replaced the application-level Zod MCP schemas with Effect Schema contracts adapted through Standard Schema V1. HTTP and MCP boundaries now share the same schema system, and `zod` is no longer a direct dependency.
+
 ## [0.3.0] — 2026-08-30
 
 ### Added
