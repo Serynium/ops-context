@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createEventForProject } from "../src/events.js"
 import { D1StructuredLoggerLive } from "../src/database-observability.js"
-import { AppConfig, CredentialCrypto, Database, PushQueue } from "../src/services.js"
+import { processIngestEvent } from "../src/events.js"
+import { QUEUE_COMMAND_VERSION } from "../src/queue-contract.js"
+import { AppConfig, Database, PushQueue } from "../src/services.js"
 import { getSettings } from "../src/settings.js"
 import { matchSilence, type SilenceField } from "../src/silences.js"
 import type { ProjectRow } from "../src/types.js"
@@ -62,15 +63,21 @@ describe("event-ingestion lookups", () => {
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined)
     await Effect.runPromise(
-      createEventForProject(project, {
-        title: "Cold-path event",
-        fingerprint: "cold-path-fingerprint",
-        source: "integration-test"
+      processIngestEvent({
+        _tag: "IngestEvent",
+        version: QUEUE_COMMAND_VERSION,
+        eventId: "evt_cold_path",
+        projectId: project.id,
+        acceptedAt: createdAt,
+        event: {
+          title: "Cold-path event",
+          fingerprint: "cold-path-fingerprint",
+          source: "integration-test"
+        }
       }).pipe(Effect.provide(Layer.mergeAll(
         Database.layer(env.DB),
         AppConfig.layer(env),
         PushQueue.layer(env.PUSH_QUEUE),
-        CredentialCrypto.layer,
         D1StructuredLoggerLive
       )))
     )

@@ -155,6 +155,32 @@ describe("Cloudflare Worker runtime", () => {
     })
   })
 
+  it("returns 202 before the Queue consumer makes the event visible in D1", async () => {
+    const apiKey = await ensureValidationProject()
+    const response = await fetchWorker(new Request("https://ops.example.com/api/v1/events", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        title: "Eventually visible",
+        external_id: "runtime-eventual-consistency"
+      })
+    }))
+
+    expect(response.status).toBe(202)
+    const accepted = await response.json<{ id: string; accepted_at: string; status: string }>()
+    expect(accepted).toMatchObject({ status: "queued" })
+    expect(accepted.id).toMatch(/^evt_/u)
+    expect(new Date(accepted.accepted_at).toISOString()).toBe(accepted.accepted_at)
+
+    const stored = await env.DB.prepare("SELECT id FROM events WHERE id = ?")
+      .bind(accepted.id)
+      .first()
+    expect(stored).toBeNull()
+  })
+
   it("acknowledges a Queue message whose durable job no longer exists", async () => {
     const batch = createMessageBatch<QueueCommand>("ops-context-push", [
       {
