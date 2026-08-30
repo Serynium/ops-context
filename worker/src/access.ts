@@ -51,7 +51,7 @@ export interface CloudflareAccessContext {
   readonly getIdentity: () => Promise<CloudflareAccessIdentity | null>
 }
 
-export type ExecutionContextWithAccess = ExecutionContext & {
+export interface ExecutionContextWithAccess {
   readonly access?: CloudflareAccessContext
 }
 
@@ -113,7 +113,8 @@ export const attachCloudflareAccess = async (
     return recreateRequest(request, headers)
   }
 
-  const identity = await access.getIdentity().catch(() => null)
+  const identity = await access.getIdentity().catch(() => null) as
+    CloudflareAccessIdentity | null
   const email = identity?.email?.trim()
   const name = identity?.name?.trim() || identity?.common_name?.trim()
   const subject = identity?.id?.trim() || identity?.sub?.trim() || email || `service:${access.aud}`
@@ -142,13 +143,14 @@ const fromHttpRequest = (request: HttpServerRequest): HeaderView => ({
   ...(request.headers.authorization ? { authorization: request.headers.authorization } : {})
 })
 
-const fromWebRequest = (request: Request): HeaderView => ({
-  get: (name) => request.headers.get(name) ?? undefined,
-  host: new URL(request.url).host.toLowerCase(),
-  ...(request.headers.get("authorization")
-    ? { authorization: request.headers.get("authorization") ?? undefined }
-    : {})
-})
+const fromWebRequest = (request: Request): HeaderView => {
+  const authorization = request.headers.get("authorization")
+  return {
+    get: (name) => request.headers.get(name) ?? undefined,
+    host: new URL(request.url).host.toLowerCase(),
+    ...(authorization ? { authorization } : {})
+  }
+}
 
 export interface AdministratorIdentityService {
   readonly authenticateHttp: (
@@ -224,7 +226,7 @@ export class AdministratorIdentity extends Context.Service<
             })
           }
 
-          return {
+          const principal: AccessPrincipal = {
             subject,
             kind,
             audience,
@@ -232,6 +234,7 @@ export class AdministratorIdentity extends Context.Service<
             ...(email ? { email } : {}),
             ...(name ? { name } : {})
           }
+          return principal
         }).pipe(Effect.withSpan("AdministratorIdentity.authenticate"))
 
       const requireSameOrigin = Effect.fn("AdministratorIdentity.requireSameOrigin")(
