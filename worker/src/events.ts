@@ -333,44 +333,52 @@ export const listEvents = (
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
 
     let rows: ReadonlyArray<EventRow>
     if (grouped) {
-      const queryParams = [...params]
+      const queryParams = [...params, ...params]
       let outerCursor = ""
       if (cursor) {
         outerCursor = "AND (created_at < ? OR (created_at = ? AND id < ?))"
         queryParams.push(cursor.createdAt, cursor.createdAt, cursor.id)
       }
       queryParams.push(limit + 1)
+      const fingerprintedConditions = [...conditions, "e.fingerprint <> ''"]
+      const ungroupedConditions = [...conditions, "e.fingerprint = ''"]
       rows = yield* db.all<EventRow>(
         "events.list_grouped",
-        `WITH ranked AS (
+        `WITH fingerprinted AS (
            SELECT ${eventColumns},
              COUNT(*) OVER (
-               PARTITION BY e.project_id,
-                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+               PARTITION BY e.project_id, e.fingerprint
              ) AS group_count,
              MIN(e.created_at) OVER (
-               PARTITION BY e.project_id,
-                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+               PARTITION BY e.project_id, e.fingerprint
              ) AS group_first_seen,
              MAX(e.created_at) OVER (
-               PARTITION BY e.project_id,
-                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+               PARTITION BY e.project_id, e.fingerprint
              ) AS group_last_seen,
              ROW_NUMBER() OVER (
-               PARTITION BY e.project_id,
-                 CASE WHEN e.fingerprint = '' THEN e.id ELSE e.fingerprint END
+               PARTITION BY e.project_id, e.fingerprint
                ORDER BY e.created_at DESC, e.id DESC
              ) AS group_rank
            FROM events e
            JOIN projects p ON p.id = e.project_id
-           ${where}
+           WHERE ${fingerprintedConditions.join(" AND ")}
+         ), representatives AS (
+           SELECT * FROM fingerprinted WHERE group_rank = 1
+           UNION ALL
+           SELECT ${eventColumns},
+             1 AS group_count,
+             e.created_at AS group_first_seen,
+             e.created_at AS group_last_seen,
+             1 AS group_rank
+           FROM events e
+           JOIN projects p ON p.id = e.project_id
+           WHERE ${ungroupedConditions.join(" AND ")}
          )
-         SELECT * FROM ranked
-         WHERE group_rank = 1 ${outerCursor}
+         SELECT * FROM representatives
+         WHERE 1 = 1 ${outerCursor}
          ORDER BY created_at DESC, id DESC
          LIMIT ?`,
         queryParams
