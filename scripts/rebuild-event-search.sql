@@ -2,7 +2,8 @@
 -- migrations are applied:
 --   pnpm exec wrangler d1 execute ops-context --remote \
 --     --file scripts/rebuild-event-search.sql
-BEGIN TRANSACTION;
+-- Wrangler submits the file as an atomic D1 batch, so explicit transaction
+-- statements are intentionally omitted.
 
 DELETE FROM event_search;
 
@@ -21,5 +22,3 @@ SELECT
       AND CAST(value.atom AS TEXT) <> '[REDACTED]'
   ), '')
 FROM events AS e;
-
-COMMIT;
