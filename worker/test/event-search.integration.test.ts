@@ -74,7 +74,11 @@ const rebuild = async (): Promise<void> => {
        e.source,
        e.fingerprint,
        COALESCE((
-         SELECT group_concat(CAST(value.atom AS TEXT), ' ')
+         SELECT group_concat(CASE value.type
+           WHEN 'true' THEN 'true'
+           WHEN 'false' THEN 'false'
+           ELSE CAST(value.atom AS TEXT)
+         END, ' ')
          FROM json_tree(CASE WHEN json_valid(e.payload_json) THEN e.payload_json ELSE '{}' END) AS value
          WHERE value.atom IS NOT NULL
            AND value.type IN ('text', 'integer', 'real', 'true', 'false')
@@ -149,11 +153,27 @@ describe("FTS5 event search", () => {
       },
       createdAt: "2026-01-05T00:00:00.000Z"
     })
+    await insertEvent({
+      id: "evt_boolean",
+      title: "Boolean payload",
+      payload: { enabled: true, disabled: false },
+      createdAt: "2026-01-04T00:00:00.000Z"
+    })
+    await insertEvent({
+      id: "evt_numeric",
+      title: "Numeric payload",
+      payload: { one: 1, zero: 0 },
+      createdAt: "2026-01-03T00:00:00.000Z"
+    })
 
     expect(await searchIds('"eu west"')).toEqual(["evt_payload"])
     expect(await searchIds('"visible trace"')).toEqual(["evt_payload"])
     expect(await searchIds("password")).toEqual([])
     expect(await searchIds("redacted")).toEqual([])
+    expect(await searchIds("true")).toEqual(["evt_boolean"])
+    expect(await searchIds("false")).toEqual(["evt_boolean"])
+    expect(await searchIds("1")).toEqual(["evt_numeric"])
+    expect(await searchIds("0")).toEqual(["evt_numeric"])
   })
 
   it("keeps project, time, grouped, ordering, and cursor constraints on normal event columns", async () => {

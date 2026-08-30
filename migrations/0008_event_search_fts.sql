@@ -23,7 +23,11 @@ SELECT
   e.source,
   e.fingerprint,
   COALESCE((
-    SELECT group_concat(CAST(value.atom AS TEXT), ' ')
+    SELECT group_concat(CASE value.type
+      WHEN 'true' THEN 'true'
+      WHEN 'false' THEN 'false'
+      ELSE CAST(value.atom AS TEXT)
+    END, ' ')
     FROM json_tree(CASE WHEN json_valid(e.payload_json) THEN e.payload_json ELSE '{}' END) AS value
     WHERE value.atom IS NOT NULL
       AND value.type IN ('text', 'integer', 'real', 'true', 'false')
@@ -42,7 +46,11 @@ BEGIN
     new.source,
     new.fingerprint,
     COALESCE((
-      SELECT group_concat(CAST(value.atom AS TEXT), ' ')
+      SELECT group_concat(CASE value.type
+        WHEN 'true' THEN 'true'
+        WHEN 'false' THEN 'false'
+        ELSE CAST(value.atom AS TEXT)
+      END, ' ')
       FROM json_tree(CASE WHEN json_valid(new.payload_json) THEN new.payload_json ELSE '{}' END) AS value
       WHERE value.atom IS NOT NULL
         AND value.type IN ('text', 'integer', 'real', 'true', 'false')
@@ -63,7 +71,11 @@ BEGIN
     new.source,
     new.fingerprint,
     COALESCE((
-      SELECT group_concat(CAST(value.atom AS TEXT), ' ')
+      SELECT group_concat(CASE value.type
+        WHEN 'true' THEN 'true'
+        WHEN 'false' THEN 'false'
+        ELSE CAST(value.atom AS TEXT)
+      END, ' ')
       FROM json_tree(CASE WHEN json_valid(new.payload_json) THEN new.payload_json ELSE '{}' END) AS value
       WHERE value.atom IS NOT NULL
         AND value.type IN ('text', 'integer', 'real', 'true', 'false')
