@@ -52,11 +52,11 @@ const finalizeDead = (
   claim: ClaimedPushJob,
   responseStatus: number | null,
   error: string,
-  disableSubscription: boolean
+  revokedEndpoint: string | null
 ): Effect.Effect<void, PushDeliveryError, PushDeliveryRepository> =>
   Effect.gen(function*() {
     const repository = yield* PushDeliveryRepository
-    yield* repository.finalizeDead(claim, responseStatus, error, disableSubscription)
+    yield* repository.finalizeDead(claim, responseStatus, error, revokedEndpoint)
   })
 
 const retryDelaySeconds = (attempts: number): number =>
@@ -80,7 +80,7 @@ const retryOrDead = (
         claim,
         responseStatus,
         `delivery exhausted after ${attempts} attempts: ${error}`,
-        false
+        null
       )
       return { _tag: "PermanentFailure" } as const
     }
@@ -107,11 +107,11 @@ export const processPushMessage = (
 
     const context = yield* repository.loadClaimedContext(claim)
     if (!context) {
-      yield* finalizeDead(claim, null, "event or subscription no longer exists", false)
+      yield* finalizeDead(claim, null, "event or subscription no longer exists", null)
       return { _tag: "PermanentFailure" } as const
     }
     if (context.subscription.enabled !== 1) {
-      yield* finalizeDead(claim, null, "push subscription is disabled", false)
+      yield* finalizeDead(claim, null, "push subscription is disabled", null)
       return { _tag: "PermanentFailure" } as const
     }
 
@@ -178,7 +178,12 @@ export const processPushMessage = (
     }).pipe(Effect.catch(() => Effect.succeed(`push service returned HTTP ${sent.status}`)))
 
     if (sent.status === 404 || sent.status === 410) {
-      yield* finalizeDead(claim, sent.status, details || `push service returned HTTP ${sent.status}`, true)
+      yield* finalizeDead(
+        claim,
+        sent.status,
+        details || `push service returned HTTP ${sent.status}`,
+        context.subscription.endpoint
+      )
       return { _tag: "PermanentFailure" } as const
     }
 
@@ -191,7 +196,7 @@ export const processPushMessage = (
       )
     }
 
-    yield* finalizeDead(claim, sent.status, details || `push service returned HTTP ${sent.status}`, false)
+    yield* finalizeDead(claim, sent.status, details || `push service returned HTTP ${sent.status}`, null)
     return { _tag: "PermanentFailure" } as const
   }).pipe(Effect.withSpan("PushDelivery.process", { attributes: { eventId: message.eventId } }))
 

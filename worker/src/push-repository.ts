@@ -79,6 +79,13 @@ interface PushContextRow {
   readonly subscription_user_agent: string
   readonly subscription_enabled: number
   readonly subscription_last_seen_at: string | null
+  readonly subscription_renewal_credential_hash: string | null
+  readonly subscription_renewal_credential_issued_at: string | null
+  readonly subscription_previous_renewal_credential_hash: string | null
+  readonly subscription_previous_renewal_credential_valid_until: string | null
+  readonly subscription_explicitly_enrolled: number
+  readonly subscription_deleted_at: string | null
+  readonly subscription_enrollment_generation: number
   readonly subscription_created_at: string
   readonly subscription_updated_at: string
 }
@@ -132,6 +139,13 @@ const PushContextRowSchema = Schema.Struct({
   subscription_user_agent: Schema.String,
   subscription_enabled: Schema.Number,
   subscription_last_seen_at: nullableString,
+  subscription_renewal_credential_hash: nullableString,
+  subscription_renewal_credential_issued_at: nullableString,
+  subscription_previous_renewal_credential_hash: nullableString,
+  subscription_previous_renewal_credential_valid_until: nullableString,
+  subscription_explicitly_enrolled: Schema.Number,
+  subscription_deleted_at: nullableString,
+  subscription_enrollment_generation: Schema.Number,
   subscription_created_at: Schema.String,
   subscription_updated_at: Schema.String
 })
@@ -216,6 +230,13 @@ const mapContext = (row: PushContextRow): PushContext => ({
     user_agent: row.subscription_user_agent,
     enabled: row.subscription_enabled,
     last_seen_at: row.subscription_last_seen_at,
+    renewal_credential_hash: row.subscription_renewal_credential_hash,
+    renewal_credential_issued_at: row.subscription_renewal_credential_issued_at,
+    previous_renewal_credential_hash: row.subscription_previous_renewal_credential_hash,
+    previous_renewal_credential_valid_until: row.subscription_previous_renewal_credential_valid_until,
+    explicitly_enrolled: row.subscription_explicitly_enrolled,
+    deleted_at: row.subscription_deleted_at,
+    enrollment_generation: row.subscription_enrollment_generation,
     created_at: row.subscription_created_at,
     updated_at: row.subscription_updated_at
   }
@@ -242,7 +263,7 @@ export interface PushDeliveryRepositoryService {
     claim: ClaimedPushJob,
     responseStatus: number | null,
     error: string,
-    disableSubscription: boolean
+    revokedEndpoint: string | null
   ) => Effect.Effect<void, RepositoryUnavailable | CryptographyUnavailable>
   readonly finalizeDeadLetter: (
     message: DeliverPushCommand,
@@ -337,12 +358,21 @@ export class PushDeliveryRepository extends Context.Service<
              s.user_agent AS subscription_user_agent,
              s.enabled AS subscription_enabled,
              s.last_seen_at AS subscription_last_seen_at,
+             s.renewal_credential_hash AS subscription_renewal_credential_hash,
+             s.renewal_credential_issued_at AS subscription_renewal_credential_issued_at,
+             s.previous_renewal_credential_hash AS subscription_previous_renewal_credential_hash,
+             s.previous_renewal_credential_valid_until AS subscription_previous_renewal_credential_valid_until,
+             s.explicitly_enrolled AS subscription_explicitly_enrolled,
+             s.deleted_at AS subscription_deleted_at,
+             s.enrollment_generation AS subscription_enrollment_generation,
              s.created_at AS subscription_created_at,
              s.updated_at AS subscription_updated_at
            FROM push_jobs j
            JOIN events e ON e.id = j.event_id
            JOIN projects p ON p.id = e.project_id
-           JOIN push_subscriptions s ON s.id = j.subscription_id
+           JOIN push_subscriptions s
+             ON s.id = j.subscription_id
+            AND s.enrollment_generation = j.subscription_generation
            WHERE j.event_id = ? AND j.subscription_id = ?
              AND j.state = 'sending' AND j.lease_until = ?`,
           [claimed.message.eventId, claimed.message.subscriptionId, claimed.leaseUntil]
@@ -409,26 +439,33 @@ export class PushDeliveryRepository extends Context.Service<
         claimed,
         responseStatus,
         error,
-        disableSubscription
+        revokedEndpoint
       ) => Effect.gen(function*() {
         const now = nowIso()
         const deliveryId = yield* crypto.newId("dlv")
         const statements: Array<SqlStatement> = [
           deliveryInsert(deliveryId, claimed, "failed", responseStatus, error, now)
         ]
-        if (disableSubscription) {
+        if (revokedEndpoint !== null) {
           statements.push({
             name: "subscriptions.disable",
             sql: `UPDATE push_subscriptions
-                  SET enabled = 0, updated_at = ?
-                  WHERE id = ? AND EXISTS (
+                  SET enabled = 0,
+                      renewal_credential_hash = NULL,
+                      renewal_credential_issued_at = NULL,
+                      previous_renewal_credential_hash = NULL,
+                      previous_renewal_credential_valid_until = NULL,
+                      updated_at = ?
+                  WHERE id = ? AND endpoint = ? AND EXISTS (
                     SELECT 1 FROM push_jobs
                     WHERE event_id = ? AND subscription_id = ?
                       AND state = 'sending' AND lease_until = ?
+                      AND subscription_generation = push_subscriptions.enrollment_generation
                   )`,
             params: [
               now,
               claimed.message.subscriptionId,
+              revokedEndpoint,
               claimed.message.eventId,
               claimed.message.subscriptionId,
               claimed.leaseUntil

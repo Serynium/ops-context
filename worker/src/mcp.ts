@@ -98,6 +98,9 @@ export const toMcpToolFailure = (failure: ApplicationError): McpToolFailure => {
     case "InvalidEvent":
     case "InvalidProject":
     case "InvalidSubscription":
+    case "SubscriptionDisabled":
+    case "SubscriptionEnrollmentSuperseded":
+    case "InvalidRenewalCredential":
     case "InvalidSilence":
     case "InvalidSettings":
     case "InvalidEventQuery":
@@ -105,11 +108,13 @@ export const toMcpToolFailure = (failure: ApplicationError): McpToolFailure => {
     case "ProjectNotFound":
     case "EventNotFound":
     case "SubscriptionNotFound":
+    case "SubscriptionRevoked":
     case "SilenceNotFound":
     case "InvalidProjectCredential":
       return { code: "not_found", message: failure.message }
     case "DuplicateExternalId":
     case "ProjectDeletionConflict":
+    case "SubscriptionEndpointConflict":
       return { code: "conflict", message: failure.message }
     case "RepositoryUnavailable":
     case "QueueUnavailable":

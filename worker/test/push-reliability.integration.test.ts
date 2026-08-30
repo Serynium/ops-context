@@ -41,7 +41,7 @@ const config = (maxPushAttempts = 6): ConfigService => ({
 const runtimeLayer = (
   response: Response | Error,
   maxPushAttempts = 6,
-  onSend: () => void = () => undefined
+  onSend: () => void | Promise<void> = () => undefined
 ) => {
   const infrastructure = Layer.mergeAll(Database.layer(env.DB), CredentialCrypto.layer)
   const repository = PushDeliveryRepository.layer.pipe(Layer.provide(infrastructure))
@@ -49,11 +49,17 @@ const runtimeLayer = (
     repository,
     Layer.succeed(AppConfig)(config(maxPushAttempts)),
     Layer.succeed(WebPush)({
-      send: () => Effect.sync(onSend).pipe(
-        Effect.flatMap(() => response instanceof Error
-          ? Effect.fail(deliveryTemporarilyUnavailable(response.message, response))
-          : Effect.succeed(response))
-      )
+      send: () => Effect.tryPromise({
+        try: async () => {
+          await onSend()
+          if (response instanceof Error) throw response
+          return response
+        },
+        catch: (cause) => deliveryTemporarilyUnavailable(
+          cause instanceof Error ? cause.message : "test delivery failed",
+          cause
+        )
+      })
     })
   )
 }
@@ -233,6 +239,27 @@ describe("bounded push delivery lifecycle", () => {
     expect((await getJob()).attempts).toBe(2)
   })
 
+  it("terminalizes a job from a prior enrollment generation without sending", async () => {
+    await seed()
+    await env.DB.prepare(
+      "UPDATE push_subscriptions SET enrollment_generation = 1 WHERE id = ?"
+    ).bind(message.subscriptionId).run()
+    let sends = 0
+
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response(null, { status: 201 }), 6, () => {
+          sends += 1
+        }))
+      )
+    )
+
+    expect(outcome._tag).toBe("PermanentFailure")
+    expect(sends).toBe(0)
+    expect((await getJob()).state).toBe("dead")
+    expect((await getJob()).last_error).toContain("no longer exists")
+  })
+
   it("prevents an expired claimant from finalizing over the reclaimed lease", async () => {
     await seed()
     const repositoryLayer = pushRepositoryLayer()
@@ -334,13 +361,80 @@ describe("bounded push delivery lifecycle", () => {
       )
     )
     const subscription = await env.DB.prepare(
-      "SELECT enabled FROM push_subscriptions WHERE id = ?"
-    ).bind(message.subscriptionId).first<{ readonly enabled: number }>()
+      "SELECT enabled, renewal_credential_hash FROM push_subscriptions WHERE id = ?"
+    ).bind(message.subscriptionId).first<{
+      readonly enabled: number
+      readonly renewal_credential_hash: string | null
+    }>()
 
     expect(outcome._tag, await stateSnapshot()).toBe("PermanentFailure")
     expect((await getJob()).state, await stateSnapshot()).toBe("dead")
     expect(subscription?.enabled, await stateSnapshot()).toBe(0)
+    expect(subscription?.renewal_credential_hash, await stateSnapshot()).toBeNull()
     expect(await deliveryCount(), await stateSnapshot()).toBe(1)
+  })
+
+  it("does not revoke an endpoint renewed during an in-flight delivery", async () => {
+    await seed()
+    const renewedEndpoint = "https://push.example.test/renewed-subscription"
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response("gone", { status: 410 }), 6, async () => {
+          await env.DB.prepare(
+            `UPDATE push_subscriptions
+             SET endpoint = ?, renewal_credential_hash = 'renewed-hash'
+             WHERE id = ?`
+          ).bind(renewedEndpoint, message.subscriptionId).run()
+        }))
+      )
+    )
+    const subscription = await env.DB.prepare(
+      "SELECT endpoint, enabled, renewal_credential_hash FROM push_subscriptions WHERE id = ?"
+    ).bind(message.subscriptionId).first<{
+      readonly endpoint: string
+      readonly enabled: number
+      readonly renewal_credential_hash: string | null
+    }>()
+
+    expect(outcome._tag, await stateSnapshot()).toBe("PermanentFailure")
+    expect(subscription).toMatchObject({
+      endpoint: renewedEndpoint,
+      enabled: 1,
+      renewal_credential_hash: "renewed-hash"
+    })
+  })
+
+  it("does not revoke the same endpoint re-enrolled during an in-flight delivery", async () => {
+    await seed()
+    const outcome = await Effect.runPromise(
+      processPushMessage(message).pipe(
+        Effect.provide(runtimeLayer(new Response("gone", { status: 410 }), 6, async () => {
+          await env.DB.prepare(
+            `UPDATE push_subscriptions
+             SET enrollment_generation = enrollment_generation + 1,
+                 renewal_credential_hash = 'reenrolled-hash'
+             WHERE id = ?`
+          ).bind(message.subscriptionId).run()
+        }))
+      )
+    )
+    const subscription = await env.DB.prepare(
+      `SELECT endpoint, enabled, enrollment_generation, renewal_credential_hash
+       FROM push_subscriptions WHERE id = ?`
+    ).bind(message.subscriptionId).first<{
+      readonly endpoint: string
+      readonly enabled: number
+      readonly enrollment_generation: number
+      readonly renewal_credential_hash: string | null
+    }>()
+
+    expect(outcome._tag, await stateSnapshot()).toBe("PermanentFailure")
+    expect(subscription).toMatchObject({
+      endpoint: "https://push.example.test/subscription",
+      enabled: 1,
+      enrollment_generation: 1,
+      renewal_credential_hash: "reenrolled-hash"
+    })
   })
 
   it("lets Queue own ordinary delayed retries", async () => {

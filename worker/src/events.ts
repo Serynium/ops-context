@@ -239,7 +239,10 @@ export const processIngestEvent = (
       occurredAt: normalized.occurred_at ?? command.acceptedAt,
       createdAt: command.acceptedAt,
       silenceId
-    }, subscriptions.map((subscription) => subscription.id))
+    }, subscriptions.map((subscription) => ({
+      id: subscription.id,
+      generation: subscription.enrollment_generation
+    })))
 
     const stored = normalized.external_id
       ? yield* events.findIdByExternalId(project.id, normalized.external_id)
@@ -459,7 +462,10 @@ export const unsilenceEvent = (
 
     const subscriptions = yield* listEnabledSubscriptionRows
     const now = nowIso()
-    yield* events.unsilenceWithPushJobs(resolvedEventId, subscriptions.map((subscription) => subscription.id), now)
+    yield* events.unsilenceWithPushJobs(resolvedEventId, subscriptions.map((subscription) => ({
+      id: subscription.id,
+      generation: subscription.enrollment_generation
+    })), now)
 
     yield* publishPendingPushJobs(resolvedEventId)
 

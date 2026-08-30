@@ -89,6 +89,11 @@ export const PushSubscription = Schema.Struct({
   updated_at: Schema.String
 })
 
+export const PushSubscriptionCredential = Schema.Struct({
+  subscription: PushSubscription,
+  renewal_credential: Schema.String
+})
+
 export const Silence = Schema.Struct({
   id: Schema.String,
   project_id: Schema.NullOr(Schema.String),
@@ -210,6 +215,12 @@ export const BrowserPushSubscription = Schema.Struct({
 
 export const RegisterSubscriptionInput = Schema.Struct({
   name: Schema.optional(Schema.String),
+  enrollment_key: Schema.String,
+  reactivate: Schema.optional(Schema.Boolean),
+  subscription: BrowserPushSubscription
+})
+
+export const RenewSubscriptionInput = Schema.Struct({
   subscription: BrowserPushSubscription
 })
 
@@ -276,6 +287,12 @@ export class ConflictError extends Schema.TaggedError<ConflictError>()(
   { httpApiStatus: 409 }
 ) {}
 
+export class GoneError extends Schema.TaggedError<GoneError>()(
+  "GoneError",
+  errorFields,
+  { httpApiStatus: 410 }
+) {}
+
 export class PayloadTooLargeError extends Schema.TaggedError<PayloadTooLargeError>()(
   "PayloadTooLargeError",
   errorFields,
@@ -309,6 +326,7 @@ export type ApiFailure =
   | ForbiddenError
   | NotFoundError
   | ConflictError
+  | GoneError
   | PayloadTooLargeError
   | InvalidError
   | InternalError
@@ -320,6 +338,7 @@ export const CommonErrors = [
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  GoneError,
   PayloadTooLargeError,
   InvalidError,
   InternalError,
@@ -340,6 +359,16 @@ export const toApiFailure = (failure: ApplicationError): ApiFailure => {
     case "InvalidSettings":
     case "InvalidEventQuery":
       return new InvalidError({ error: "invalid", message: failure.message })
+    case "SubscriptionDisabled":
+      return new BadRequestError({ error: "subscription_disabled", message: failure.message })
+    case "SubscriptionEnrollmentSuperseded":
+      return new BadRequestError({ error: "subscription_enrollment_superseded", message: failure.message })
+    case "InvalidRenewalCredential":
+      return new UnauthorizedError({ error: "unauthorized", message: failure.message })
+    case "SubscriptionRevoked":
+      return new GoneError({ error: "subscription_revoked", message: failure.message })
+    case "SubscriptionEndpointConflict":
+      return new ConflictError({ error: "conflict", message: failure.message })
     case "ProjectNotFound":
     case "EventNotFound":
     case "SubscriptionNotFound":

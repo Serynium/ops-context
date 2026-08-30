@@ -60,8 +60,12 @@ import {
   deleteSubscription,
   listSubscriptions,
   registerSubscription,
+  renewSubscription,
   updateSubscription,
-  type RegisterSubscriptionInput
+  type BrowserPushSubscription,
+  type RegisterSubscriptionInput,
+  type SubscriptionCredentialResult,
+  type SubscriptionOperationError
 } from "./subscriptions.js"
 import { runRetention, type RetentionResult } from "./retention.js"
 import type { DeliverPushCommand, IngestEventCommand } from "./queue-contract.js"
@@ -90,8 +94,7 @@ import type {
   SilenceRow
 } from "./types.js"
 
-type SubscriptionError = InvalidSubscription | SubscriptionNotFound |
-  RepositoryUnavailable | CryptographyUnavailable
+type SubscriptionError = SubscriptionOperationError
 type SilenceError = InvalidSilence | ProjectNotFound | SilenceNotFound |
   RepositoryUnavailable | CryptographyUnavailable
 type SettingsError = InvalidSettings | RepositoryUnavailable
@@ -212,7 +215,13 @@ export class Subscriptions extends Context.Service<Subscriptions, {
   readonly register: (
     input: RegisterSubscriptionInput,
     userAgent: string
-  ) => Effect.Effect<PushSubscriptionView, SubscriptionError>
+  ) => Effect.Effect<SubscriptionCredentialResult, SubscriptionError>
+  readonly renew: (
+    id: string,
+    credential: string,
+    subscription: BrowserPushSubscription,
+    userAgent: string
+  ) => Effect.Effect<SubscriptionCredentialResult, SubscriptionError>
   readonly update: (
     id: string,
     patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
@@ -232,6 +241,9 @@ export class Subscriptions extends Context.Service<Subscriptions, {
         list: provide(listSubscriptions),
         register: Effect.fn("Subscriptions.register")((input, userAgent) =>
           provide(registerSubscription(input, userAgent))
+        ),
+        renew: Effect.fn("Subscriptions.renew")((id, credential, subscription, userAgent) =>
+          provide(renewSubscription(id, credential, subscription, userAgent))
         ),
         update: Effect.fn("Subscriptions.update")((id, patch) =>
           provide(updateSubscription(id, patch))

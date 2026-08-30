@@ -98,4 +98,4 @@ The migration drops the old `admin_sessions` table and invalidates every applica
 
 ## PWA renewal dependency
 
-Issue #16 adds a narrowly scoped credential for background push-subscription renewal. Do not deploy the Access-only release until that credential is available, because a service worker cannot depend on an interactive browser Access session being active during background renewal.
+Background push-subscription renewal uses a narrowly scoped, installation-specific credential instead of an interactive Access session. Add an Access Bypass policy only for `POST /api/v1/push/subscriptions/*/renew` (and the public VAPID-key path needed to create a replacement subscription); the Worker credential check remains mandatory. See [PWA push-subscription renewal](push-renewal.md).

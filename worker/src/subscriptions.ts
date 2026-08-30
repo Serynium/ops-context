@@ -1,11 +1,22 @@
 import { Effect } from "effect"
+import { sha256Hex } from "./crypto.js"
 import {
+  invalidRenewalCredential,
   invalidSubscription,
+  subscriptionDisabled,
+  subscriptionEndpointConflict,
+  subscriptionEnrollmentSuperseded,
   subscriptionNotFound,
+  subscriptionRevoked,
   type CryptographyUnavailable,
+  type InvalidRenewalCredential,
   type InvalidSubscription,
   type RepositoryUnavailable,
-  type SubscriptionNotFound
+  type SubscriptionDisabled,
+  type SubscriptionEndpointConflict,
+  type SubscriptionEnrollmentSuperseded,
+  type SubscriptionNotFound,
+  type SubscriptionRevoked
 } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
 import { SubscriptionsRepository } from "./repositories.js"
@@ -23,8 +34,23 @@ export interface BrowserPushSubscription {
 
 export interface RegisterSubscriptionInput {
   readonly name?: string | undefined
+  readonly enrollment_key: string
+  readonly reactivate?: boolean | undefined
   readonly subscription: BrowserPushSubscription
 }
+
+export interface SubscriptionCredentialResult {
+  readonly subscription: PushSubscriptionView
+  readonly renewal_credential: string
+}
+
+const RENEWAL_CREDENTIAL_PREFIX = "ops_pwa_"
+const RENEWAL_RETRY_GRACE_MS = 5 * 60 * 1_000
+
+export type SubscriptionOperationError = InvalidSubscription | SubscriptionNotFound |
+  SubscriptionDisabled | SubscriptionEnrollmentSuperseded | InvalidRenewalCredential |
+  SubscriptionRevoked | SubscriptionEndpointConflict | RepositoryUnavailable |
+  CryptographyUnavailable
 
 const endpointHost = (endpoint: string): string => {
   try {
@@ -61,10 +87,43 @@ const validateSubscription = (subscription: BrowserPushSubscription): void => {
   }
 }
 
+const deriveRenewalCredential = (
+  credential: string,
+  id: string,
+  endpoint: string
+): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  Effect.map(
+    sha256Hex(`${credential}\u0000${id}\u0000${endpoint}`),
+    (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
+  )
+
+const deriveEnrollmentCredential = (
+  enrollmentKey: string,
+  endpoint: string
+): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  Effect.map(
+    sha256Hex(`${enrollmentKey}\u0000${endpoint}`),
+    (digest) => `${RENEWAL_CREDENTIAL_PREFIX}${digest}`
+  )
+
+const isIdempotentRenewalRetry = (
+  row: PushSubscriptionRow,
+  credentialHash: string,
+  nextHash: string,
+  endpoint: string,
+  now: string
+): boolean =>
+  row.enabled === 1 &&
+  row.previous_renewal_credential_hash === credentialHash &&
+  row.previous_renewal_credential_valid_until !== null &&
+  row.previous_renewal_credential_valid_until >= now &&
+  row.endpoint === endpoint &&
+  row.renewal_credential_hash === nextHash
+
 export const listSubscriptions: Effect.Effect<ReadonlyArray<PushSubscriptionView>, RepositoryUnavailable, SubscriptionsRepository> =
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
-    const rows = yield* subscriptions.list
+    const repository = yield* SubscriptionsRepository
+    const rows = yield* repository.list
     return rows.map(toSubscriptionView)
   })
 
@@ -72,8 +131,8 @@ export const findSubscriptionRow = (
   id: string
 ): Effect.Effect<PushSubscriptionRow, SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
-    const row = yield* subscriptions.findById(id)
+    const repository = yield* SubscriptionsRepository
+    const row = yield* repository.findById(id)
     if (!row) return yield* Effect.fail(subscriptionNotFound())
     return row
   })
@@ -81,9 +140,9 @@ export const findSubscriptionRow = (
 export const registerSubscription = (
   input: RegisterSubscriptionInput,
   userAgent: string
-): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable | CryptographyUnavailable, SubscriptionsRepository | CredentialCrypto> =>
+): Effect.Effect<SubscriptionCredentialResult, SubscriptionOperationError, SubscriptionsRepository | CredentialCrypto> =>
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
+    const repository = yield* SubscriptionsRepository
     yield* Effect.try({
       try: () => validateSubscription(input.subscription),
       catch: (cause) =>
@@ -93,16 +152,138 @@ export const registerSubscription = (
     })
 
     const now = nowIso()
-    const existing = yield* subscriptions.findByEndpoint(input.subscription.endpoint)
+    const existing = yield* repository.findByEndpoint(input.subscription.endpoint)
+    if (existing?.enabled === 0 && input.reactivate !== true) {
+      return yield* Effect.fail(subscriptionDisabled())
+    }
     const id = existing?.id ?? (yield* newId("sub"))
     const name = input.name?.trim().slice(0, 120) || existing?.name || "PWA device"
+    if (!input.enrollment_key.startsWith("ops_enroll_") || input.enrollment_key.length < 54) {
+      return yield* Effect.fail(invalidSubscription("a high-entropy PWA enrollment key is required"))
+    }
+    const credential = yield* deriveEnrollmentCredential(input.enrollment_key, input.subscription.endpoint)
+    const credentialHash = yield* sha256Hex(credential)
 
-    yield* subscriptions.upsert({ id, name, endpoint: input.subscription.endpoint, p256dh: input.subscription.keys.p256dh,
-      auth: input.subscription.keys.auth, userAgent: userAgent.slice(0, 512), now, createdAt: existing?.created_at ?? now })
+    const changed = yield* repository.enroll({
+      id,
+      name,
+      endpoint: input.subscription.endpoint,
+      p256dh: input.subscription.keys.p256dh,
+      auth: input.subscription.keys.auth,
+      userAgent: userAgent.slice(0, 512),
+      credentialHash,
+      explicitlyEnrolled: input.reactivate === true ? 1 : 0,
+      now,
+      createdAt: existing?.created_at ?? now
+    })
 
-    const row = yield* subscriptions.findByEndpoint(input.subscription.endpoint)
+    const row = yield* repository.findByEndpoint(input.subscription.endpoint)
     if (!row) return yield* Effect.fail(subscriptionNotFound("push subscription could not be saved"))
-    return toSubscriptionView(row)
+    if (row.enabled !== 1) {
+      return yield* Effect.fail(subscriptionDisabled())
+    }
+    if (changed !== 1) {
+      return yield* Effect.fail(subscriptionEnrollmentSuperseded())
+    }
+    return { subscription: toSubscriptionView(row), renewal_credential: credential }
+  })
+
+export const renewSubscription = (
+  id: string,
+  credential: string,
+  subscription: BrowserPushSubscription,
+  userAgent: string
+): Effect.Effect<SubscriptionCredentialResult, SubscriptionOperationError, SubscriptionsRepository | CredentialCrypto> =>
+  Effect.gen(function*() {
+    const repository = yield* SubscriptionsRepository
+    yield* Effect.try({
+      try: () => validateSubscription(subscription),
+      catch: (cause) =>
+        typeof cause === "object" && cause !== null && (cause as { _tag?: unknown })._tag === "InvalidSubscription"
+          ? (cause as InvalidSubscription)
+          : invalidSubscription("push subscription is invalid")
+    })
+    if (!credential.startsWith(RENEWAL_CREDENTIAL_PREFIX) || credential.length < 50) {
+      return yield* Effect.fail(invalidRenewalCredential())
+    }
+
+    const current = yield* repository.findById(id)
+    if (!current) {
+      return yield* Effect.fail(invalidRenewalCredential())
+    }
+    if (current.enabled !== 1) {
+      return yield* Effect.fail(subscriptionRevoked())
+    }
+
+    const credentialHash = yield* sha256Hex(credential)
+    const now = nowIso()
+
+    if (current.previous_renewal_credential_hash === credentialHash) {
+      const retryCredential = yield* deriveRenewalCredential(credential, id, subscription.endpoint)
+      const retryHash = yield* sha256Hex(retryCredential)
+      if (!isIdempotentRenewalRetry(
+        current,
+        credentialHash,
+        retryHash,
+        subscription.endpoint,
+        now
+      )) {
+        return yield* Effect.fail(invalidRenewalCredential())
+      }
+      return {
+        subscription: toSubscriptionView(current),
+        renewal_credential: retryCredential
+      }
+    }
+
+    if (current.renewal_credential_hash !== credentialHash) {
+      return yield* Effect.fail(invalidRenewalCredential())
+    }
+
+    const endpointOwner = yield* repository.findByEndpoint(subscription.endpoint)
+    if (endpointOwner && endpointOwner.id !== id) {
+      return yield* Effect.fail(subscriptionEndpointConflict())
+    }
+
+    const nextCredential = yield* deriveRenewalCredential(credential, id, subscription.endpoint)
+    const nextHash = yield* sha256Hex(nextCredential)
+
+    const retryValidUntil = new Date(Date.now() + RENEWAL_RETRY_GRACE_MS).toISOString()
+    const changed = yield* repository.renew({
+      id,
+      expectedCredentialHash: credentialHash,
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+      userAgent: userAgent.slice(0, 512),
+      retryValidUntil,
+      nextCredentialHash: nextHash,
+      now
+    })
+    if (changed !== 1) {
+      const committed = yield* repository.findById(id)
+      if (committed && isIdempotentRenewalRetry(
+        committed,
+        credentialHash,
+        nextHash,
+        subscription.endpoint,
+        now
+      )) {
+        return {
+          subscription: toSubscriptionView(committed),
+          renewal_credential: nextCredential
+        }
+      }
+      if (committed?.enabled === 0) {
+        return yield* Effect.fail(subscriptionRevoked())
+      }
+      return yield* Effect.fail(invalidRenewalCredential())
+    }
+
+    return {
+      subscription: toSubscriptionView(yield* findSubscriptionRow(id)),
+      renewal_credential: nextCredential
+    }
   })
 
 export const updateSubscription = (
@@ -110,24 +291,30 @@ export const updateSubscription = (
   patch: { readonly name?: string | undefined; readonly enabled?: boolean | undefined }
 ): Effect.Effect<PushSubscriptionView, InvalidSubscription | SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
+    const repository = yield* SubscriptionsRepository
     const current = yield* findSubscriptionRow(id)
     const name = patch.name === undefined ? current.name : patch.name.trim().slice(0, 120)
     if (!name) return yield* Effect.fail(invalidSubscription("subscription name cannot be empty"))
-    const enabled = patch.enabled === undefined ? current.enabled : patch.enabled ? 1 : 0
-    yield* subscriptions.update(id, name, enabled, nowIso())
+    const enabledPatch = patch.enabled === undefined ? null : patch.enabled ? 1 : 0
+    if (current.enabled === 0 && enabledPatch === 1) {
+      return yield* Effect.fail(invalidSubscription("disabled subscriptions must be re-enrolled from their installation"))
+    }
+    const changed = yield* repository.update(id, name, enabledPatch, nowIso())
+    if (changed !== 1 && enabledPatch === 1) {
+      return yield* Effect.fail(invalidSubscription("disabled subscriptions must be re-enrolled from their installation"))
+    }
     return toSubscriptionView(yield* findSubscriptionRow(id))
   })
 
 export const deleteSubscription = (id: string): Effect.Effect<void, SubscriptionNotFound | RepositoryUnavailable, SubscriptionsRepository> =>
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
+    const repository = yield* SubscriptionsRepository
     yield* findSubscriptionRow(id)
-    yield* subscriptions.delete(id)
+    yield* repository.remove(id, nowIso())
   })
 
 export const listEnabledSubscriptionRows: Effect.Effect<ReadonlyArray<PushSubscriptionRow>, RepositoryUnavailable, SubscriptionsRepository> =
   Effect.gen(function*() {
-    const subscriptions = yield* SubscriptionsRepository
-    return yield* subscriptions.listEnabled
+    const repository = yield* SubscriptionsRepository
+    return yield* repository.listEnabled
   })

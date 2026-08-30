@@ -13,6 +13,11 @@ export interface InvalidEvent extends TaggedFailure<"InvalidEvent"> {
 }
 export interface InvalidProject extends TaggedFailure<"InvalidProject"> {}
 export interface InvalidSubscription extends TaggedFailure<"InvalidSubscription"> {}
+export interface SubscriptionDisabled extends TaggedFailure<"SubscriptionDisabled"> {}
+export interface SubscriptionEnrollmentSuperseded extends TaggedFailure<"SubscriptionEnrollmentSuperseded"> {}
+export interface InvalidRenewalCredential extends TaggedFailure<"InvalidRenewalCredential"> {}
+export interface SubscriptionRevoked extends TaggedFailure<"SubscriptionRevoked"> {}
+export interface SubscriptionEndpointConflict extends TaggedFailure<"SubscriptionEndpointConflict"> {}
 export interface InvalidSilence extends TaggedFailure<"InvalidSilence"> {}
 export interface InvalidSettings extends TaggedFailure<"InvalidSettings"> {}
 export interface InvalidEventQuery extends TaggedFailure<"InvalidEventQuery"> {}
@@ -41,6 +46,8 @@ export type InfrastructureError = RepositoryUnavailable | QueueUnavailable |
   CryptographyUnavailable | DeliveryTemporarilyUnavailable
 
 export type DomainError = InvalidEvent | InvalidProject | InvalidSubscription |
+  SubscriptionDisabled | SubscriptionEnrollmentSuperseded | InvalidRenewalCredential |
+  SubscriptionRevoked | SubscriptionEndpointConflict |
   InvalidSilence | InvalidSettings | InvalidEventQuery | ProjectNotFound |
   EventNotFound | SubscriptionNotFound | SilenceNotFound |
   InvalidProjectCredential | DuplicateExternalId | ProjectDeletionConflict | PushNotConfigured
@@ -51,6 +58,16 @@ export const invalidEvent = (message: string, issues?: ReadonlyArray<ValidationI
   ({ _tag: "InvalidEvent", message, ...(issues ? { issues } : {}) })
 export const invalidProject = (message: string): InvalidProject => ({ _tag: "InvalidProject", message })
 export const invalidSubscription = (message: string): InvalidSubscription => ({ _tag: "InvalidSubscription", message })
+export const subscriptionDisabled = (message = "this push installation is disabled and requires explicit re-enrollment"): SubscriptionDisabled =>
+  ({ _tag: "SubscriptionDisabled", message })
+export const subscriptionEnrollmentSuperseded = (message = "explicit push enrollment superseded this silent enrollment"): SubscriptionEnrollmentSuperseded =>
+  ({ _tag: "SubscriptionEnrollmentSuperseded", message })
+export const invalidRenewalCredential = (message = "invalid push renewal credential"): InvalidRenewalCredential =>
+  ({ _tag: "InvalidRenewalCredential", message })
+export const subscriptionRevoked = (message = "this push installation has been disabled or removed"): SubscriptionRevoked =>
+  ({ _tag: "SubscriptionRevoked", message })
+export const subscriptionEndpointConflict = (message = "push endpoint belongs to another installation"): SubscriptionEndpointConflict =>
+  ({ _tag: "SubscriptionEndpointConflict", message })
 export const invalidSilence = (message: string): InvalidSilence => ({ _tag: "InvalidSilence", message })
 export const invalidSettings = (message: string): InvalidSettings => ({ _tag: "InvalidSettings", message })
 export const invalidEventQuery = (message: string): InvalidEventQuery => ({ _tag: "InvalidEventQuery", message })
@@ -70,6 +87,8 @@ export const deliveryTemporarilyUnavailable = (message: string, cause?: unknown)
 const applicationErrorTags = new Set<ApplicationError["_tag"]>([
   "InvalidEvent", "InvalidProject", "InvalidSubscription", "InvalidSilence",
   "InvalidSettings", "InvalidEventQuery", "ProjectNotFound", "EventNotFound",
+  "SubscriptionDisabled", "SubscriptionEnrollmentSuperseded", "InvalidRenewalCredential",
+  "SubscriptionRevoked", "SubscriptionEndpointConflict",
   "SubscriptionNotFound", "SilenceNotFound", "InvalidProjectCredential",
   "DuplicateExternalId", "ProjectDeletionConflict", "PushNotConfigured",
   "RepositoryUnavailable", "QueueUnavailable", "CryptographyUnavailable",
