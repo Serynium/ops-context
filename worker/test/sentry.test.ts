@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   SENTRY_MAX_COMPRESSED_BYTES,
+  isRetryableSentryIngestionFailure,
   isSentryEnvelopePath,
   mapSentryEvent,
   readSentryBody,
@@ -8,6 +9,7 @@ import {
   sentryLevel,
   splitSentryEnvelope
 } from "../src/sentry.js"
+import { invalidEvent, queueUnavailable, repositoryUnavailable } from "../src/errors.js"
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -50,6 +52,12 @@ const gzip = async (body: Uint8Array): Promise<ArrayBuffer> => {
 }
 
 describe("Sentry envelope ingestion", () => {
+  it("retries infrastructure failures at the durable ingestion boundary", () => {
+    expect(isRetryableSentryIngestionFailure(queueUnavailable("Queue unavailable"))).toBe(true)
+    expect(isRetryableSentryIngestionFailure(repositoryUnavailable("D1 unavailable"))).toBe(true)
+    expect(isRetryableSentryIngestionFailure(invalidEvent("invalid payload"))).toBe(false)
+  })
+
   it("matches only the exact Sentry envelope route", () => {
     expect(isSentryEnvelopePath("/api/1/envelope/")).toBe(true)
     expect(isSentryEnvelopePath("/api/abc/envelope/")).toBe(true)
@@ -185,7 +193,7 @@ describe("Sentry envelope ingestion", () => {
       tags: { huge: "x".repeat(300 * 1_024) }
     })))
     expect(mapped?.input.title).toBe("boom")
-    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(256 * 1_024)
+    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(120_000)
   })
 
   it("decompresses gzip request bodies", async () => {

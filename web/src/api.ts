@@ -53,6 +53,12 @@ export interface EventPage {
   readonly next_cursor?: string
 }
 
+export interface EventAccepted {
+  readonly id: string
+  readonly accepted_at: string
+  readonly status: "queued"
+}
+
 export interface PushDevice {
   readonly id: string
   readonly name: string
@@ -108,6 +114,7 @@ export interface Status {
   readonly subscriptions: number
   readonly enabled_subscriptions: number
   readonly dead_jobs: number
+  readonly failed_ingests: number
   readonly last_push: unknown
   readonly retention_days: number
   readonly setup_completed: boolean
@@ -229,5 +236,5 @@ export const api = {
   settings,
   updateSettings: (patch: Partial<SettingsWire>) => request<SettingsWire>("PATCH", "/api/v1/settings", patch),
   status: () => request<Status>("GET", "/api/v1/status"),
-  test: (project_id?: string) => request<{ event: EventItem }>("POST", "/api/v1/test", project_id ? { project_id } : {})
+  test: (project_id?: string) => request<{ event: EventAccepted }>("POST", "/api/v1/test", project_id ? { project_id } : {})
 }

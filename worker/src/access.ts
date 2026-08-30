@@ -103,7 +103,7 @@ export const attachCloudflareAccess = async (
   for (const name of internalHeaders) headers.delete(name)
 
   const surface = surfaceFor(request, env)
-  const access = context.access
+  const access = context.access as CloudflareAccessContext | undefined
   if (!surface || !access) {
     return suppliedInternalHeader ? recreateRequest(request, headers) : request
   }
@@ -130,6 +130,9 @@ export const attachCloudflareAccess = async (
 
   return recreateRequest(request, headers)
 }
+
+// Backward-compatible name used by the Access contract tests and adapters.
+export const attachAccessIdentity = attachCloudflareAccess
 
 interface HeaderView {
   readonly get: (name: string) => string | undefined

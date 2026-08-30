@@ -3,16 +3,18 @@ import { SqlSchema } from "effect/unstable/sql"
 import { repositoryUnavailable, type RepositoryUnavailable } from "./errors.js"
 import { rebuildEventGroupsSql } from "./event-groups.js"
 import { Database } from "./services.js"
+import type { DeliverPushCommand } from "./queue-contract.js"
 import type { SilenceField } from "./silences.js"
 import type {
   DeliveryRow,
   EventRow,
   Level,
   ProjectRow,
-  PushJobMessage,
   PushSubscriptionRow,
   SilenceRow
 } from "./types.js"
+
+type PushJobMessage = Pick<DeliverPushCommand, "eventId" | "subscriptionId">
 
 const repositoryFailure = (operation: "read" | "write" | "batch" | "decode"): RepositoryUnavailable =>
   repositoryUnavailable(`repository ${operation} failed`)
@@ -281,6 +283,17 @@ export class EventsRepository extends Context.Service<EventsRepository, {
   readonly list: (criteria: EventListCriteria) => Effect.Effect<ReadonlyArray<EventRow>, RepositoryUnavailable>
   readonly insertWithPushJobs: (event: EventInsert, subscriptionIds: ReadonlyArray<string>) => Effect.Effect<void, RepositoryUnavailable>
   readonly markPushJobsQueued: (eventId: string, queuedAt: string, onlyPending: boolean) => Effect.Effect<void, RepositoryUnavailable>
+  readonly initializeIngestion: (event: EventInsert, subscriptionIds: ReadonlyArray<string>) => Effect.Effect<void, RepositoryUnavailable>
+  readonly insertAlias: (aliasId: string, eventId: string, createdAt: string) => Effect.Effect<void, RepositoryUnavailable>
+  readonly listPendingSubscriptionIds: (eventId: string) => Effect.Effect<ReadonlyArray<string>, RepositoryUnavailable>
+  readonly markPushJobQueued: (eventId: string, subscriptionId: string, queuedAt: string) => Effect.Effect<void, RepositoryUnavailable>
+  readonly recordIngestionFailure: (values: {
+    readonly eventId: string
+    readonly projectId: string
+    readonly externalId: string | null
+    readonly reason: string
+    readonly failedAt: string
+  }) => Effect.Effect<void, RepositoryUnavailable>
   readonly unsilenceWithPushJobs: (eventId: string, subscriptionIds: ReadonlyArray<string>, now: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly pruneBefore: (cutoff: string) => Effect.Effect<number, RepositoryUnavailable>
   readonly rebuildGroups: Effect.Effect<number, RepositoryUnavailable>
@@ -418,7 +431,9 @@ export class EventsRepository extends Context.Service<EventsRepository, {
     }
 
     return EventsRepository.of({
-      findById: (id) => db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [id], "events.get_by_id"),
+      findById: (id) => db.first(EventRowSchema, `${eventSelect}
+        WHERE e.id = COALESCE((SELECT event_id FROM event_aliases WHERE alias_id = ?), ?)`,
+        [id, id], "events.get_by_id_or_alias"),
       findIdByExternalId: (projectId, externalId) => db.first(
         Id, "SELECT id FROM events WHERE project_id = ? AND external_id = ? LIMIT 1", [projectId, externalId],
         "events.get_by_external_id"
@@ -445,6 +460,56 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?${onlyPending ? " AND state = 'pending'" : ""}`,
         [queuedAt, queuedAt, eventId], "push_jobs.mark_queued"
       ).pipe(Effect.asVoid),
+      initializeIngestion: (event, subscriptionIds) => db.batch([
+        {
+          sql: `INSERT OR IGNORE INTO events
+            (id, external_id, project_id, source, type, level, title, body, fingerprint,
+             payload_json, actions_json, occurred_at, created_at, silence_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          params: [event.id, event.externalId, event.projectId, event.source, event.type, event.level,
+            event.title, event.body, event.fingerprint, event.payloadJson, event.actionsJson,
+            event.occurredAt, event.createdAt, event.silenceId]
+        },
+        ...subscriptionIds.map((subscriptionId) => ({
+          sql: `INSERT OR IGNORE INTO push_jobs
+            (event_id, subscription_id, state, attempts, available_at, queued_at,
+             lease_until, dead_at, last_error, updated_at)
+            SELECT ?, ?, 'pending', 0, ?, NULL, NULL, NULL, '', ?
+            WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND fanout_completed_at IS NULL)`,
+          params: [event.id, subscriptionId, event.createdAt, event.createdAt, event.id]
+        })),
+        {
+          sql: "UPDATE events SET fanout_completed_at = ? WHERE id = ? AND fanout_completed_at IS NULL",
+          params: [event.createdAt, event.id]
+        }
+      ], "events.initialize_ingestion_fanout"),
+      insertAlias: (aliasId, eventId, createdAt) => db.run(
+        "INSERT OR IGNORE INTO event_aliases (alias_id, event_id, created_at) VALUES (?, ?, ?)",
+        [aliasId, eventId, createdAt], "event_aliases.insert"
+      ).pipe(Effect.asVoid),
+      listPendingSubscriptionIds: (eventId) => db.all(
+        Schema.Struct({ subscription_id: Schema.String }),
+        "SELECT subscription_id FROM push_jobs WHERE event_id = ? AND state = 'pending' ORDER BY subscription_id",
+        [eventId], "push_jobs.list_pending_for_publication"
+      ).pipe(Effect.map((rows) => rows.map((row) => row.subscription_id))),
+      markPushJobQueued: (eventId, subscriptionId, queuedAt) => db.run(
+        `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ?
+         WHERE event_id = ? AND subscription_id = ? AND state = 'pending'`,
+        [queuedAt, queuedAt, eventId, subscriptionId], "push_jobs.mark_queued"
+      ).pipe(Effect.asVoid),
+      recordIngestionFailure: (values) => db.batch([
+        {
+          sql: `UPDATE push_jobs SET state = 'dead', lease_until = NULL, dead_at = ?,
+            last_error = ?, updated_at = ? WHERE event_id = ? AND state = 'pending'`,
+          params: [values.failedAt, values.reason, values.failedAt, values.eventId]
+        },
+        {
+          sql: `INSERT INTO ingestion_failures (event_id, project_id, external_id, error, failed_at)
+            VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET
+            error = excluded.error, failed_at = excluded.failed_at`,
+          params: [values.eventId, values.projectId, values.externalId, values.reason, values.failedAt]
+        }
+      ], "ingestion_failures.record_terminal"),
       unsilenceWithPushJobs: (eventId, subscriptionIds, now) => db.batch([
         { sql: "UPDATE events SET silence_id = NULL WHERE id = ?", params: [eventId] },
         ...subscriptionIds.map((subscriptionId) => ({
@@ -720,6 +785,7 @@ export interface SystemCounts {
   readonly subscriptions: number
   readonly enabled_subscriptions: number
   readonly dead_jobs: number
+  readonly failed_ingests: number
 }
 
 export class SystemRepository extends Context.Service<SystemRepository, {
@@ -731,7 +797,7 @@ export class SystemRepository extends Context.Service<SystemRepository, {
     const Health = Schema.Struct({ ok: Schema.Number })
     const Counts = Schema.Struct({
       projects: Schema.Number, events: Schema.Number, subscriptions: Schema.Number,
-      enabled_subscriptions: Schema.Number, dead_jobs: Schema.Number
+      enabled_subscriptions: Schema.Number, dead_jobs: Schema.Number, failed_ingests: Schema.Number
     })
     return SystemRepository.of({
       health: db.first(Health, "SELECT 1 AS ok", [], "system.health").pipe(Effect.asVoid),
@@ -740,8 +806,9 @@ export class SystemRepository extends Context.Service<SystemRepository, {
         (SELECT COUNT(*) FROM events) AS events,
         (SELECT COUNT(*) FROM push_subscriptions) AS subscriptions,
         (SELECT COUNT(*) FROM push_subscriptions WHERE enabled = 1) AS enabled_subscriptions,
-        (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs`, [], "system.counts"
-      ).pipe(Effect.map((row) => row ?? { projects: 0, events: 0, subscriptions: 0, enabled_subscriptions: 0, dead_jobs: 0 }))
+        (SELECT COUNT(*) FROM push_jobs WHERE state = 'dead') AS dead_jobs,
+        (SELECT COUNT(*) FROM ingestion_failures) AS failed_ingests`, [], "system.counts"
+      ).pipe(Effect.map((row) => row ?? { projects: 0, events: 0, subscriptions: 0, enabled_subscriptions: 0, dead_jobs: 0, failed_ingests: 0 }))
     })
   }))
 }

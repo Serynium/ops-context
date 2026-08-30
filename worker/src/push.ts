@@ -4,8 +4,9 @@ import {
   PushDeliveryRepository,
   type PushDeliveryRepositoryError
 } from "./push-repository.js"
+import type { DeliverPushCommand } from "./queue-contract.js"
 import { AppConfig, WebPush } from "./services.js"
-import type { EventAction, PushJobMessage } from "./types.js"
+import type { EventAction } from "./types.js"
 
 export type { PushJobRow, PushJobState } from "./push-repository.js"
 
@@ -91,7 +92,7 @@ const retryOrDead = (
   })
 
 export const processPushMessage = (
-  message: PushJobMessage
+  message: DeliverPushCommand
 ): Effect.Effect<PushOutcome, PushDeliveryError, PushDeliveryRepository | WebPush | AppConfig> =>
   Effect.gen(function*() {
     const repository = yield* PushDeliveryRepository
@@ -195,7 +196,7 @@ export const processPushMessage = (
   }).pipe(Effect.withSpan("PushDelivery.process", { attributes: { eventId: message.eventId } }))
 
 export const processDeadLetterMessage = (
-  message: PushJobMessage,
+  message: DeliverPushCommand,
   reason = "Cloudflare Queue moved the message to the dead-letter queue"
 ): Effect.Effect<PushOutcome, PushDeliveryError, PushDeliveryRepository> =>
   Effect.gen(function*() {

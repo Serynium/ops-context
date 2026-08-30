@@ -2,21 +2,25 @@ import { Effect } from "effect"
 import { decodeCreateEventInput, type CreateEventInput } from "./event-contract.js"
 import {
   eventNotFound,
+  invalidEvent,
   invalidEventQuery,
+  projectNotFound,
   type CryptographyUnavailable,
   type EventNotFound,
   type InvalidEvent,
   type InvalidEventQuery,
+  type ProjectNotFound,
   type QueueUnavailable,
   type RepositoryUnavailable
 } from "./errors.js"
-import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
+import { base64UrlDecode, base64UrlEncode, sha256Hex } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
 import { redactValue } from "./redact.js"
 import {
   DeliveriesRepository,
   EventsRepository,
+  ProjectsRepository,
   SettingsRepository,
   SilencesRepository,
   SubscriptionsRepository,
@@ -26,14 +30,19 @@ import { AppConfig, CredentialCrypto, PushQueue } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
+import {
+  encodedQueueCommandBytes,
+  QUEUE_COMMAND_MAX_BYTES,
+  QUEUE_COMMAND_VERSION,
+  type IngestEventCommand
+} from "./queue-contract.js"
 import type {
   DeliveryRow,
   EventAction,
   EventRow,
   EventView,
   Level,
-  ProjectRow,
-  PushJobMessage
+  ProjectRow
 } from "./types.js"
 
 const encoder = new TextEncoder()
@@ -48,7 +57,7 @@ export interface EventPage {
 }
 
 export type EventError = InvalidEvent | InvalidEventQuery | EventNotFound |
-  RepositoryUnavailable | QueueUnavailable | CryptographyUnavailable
+  ProjectNotFound | RepositoryUnavailable | QueueUnavailable | CryptographyUnavailable
 
 const parsePayload = (value: string): Record<string, unknown> => {
   try {
@@ -113,43 +122,110 @@ export const getEvent = (id: string): Effect.Effect<EventView, EventNotFound | R
     return toEventView(row)
   })
 
-export const createEventForProject = (
+export interface EventAccepted {
+  readonly id: string
+  readonly accepted_at: string
+  readonly status: "queued"
+}
+
+const idempotentEventId = (
+  projectId: string,
+  externalId: string
+): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  sha256Hex(`${projectId}\u0000${externalId}`).pipe(
+    Effect.map((digest) => `evt_${digest.slice(0, 32)}`)
+  )
+
+export const enqueueEventForProject = (
   project: ProjectRow,
   input: CreateEventInput
-): Effect.Effect<EventView, EventError, EventsRepository | DeliveriesRepository | PushQueue | AppConfig | CredentialCrypto | SettingsRepository | SilencesRepository | SubscriptionsRepository> =>
+): Effect.Effect<EventAccepted, EventError, EventsRepository | SettingsRepository | PushQueue | CredentialCrypto | AppConfig> =>
+  Effect.gen(function*() {
+    const queue = yield* PushQueue
+    const normalized = yield* decodeCreateEventInput(input)
+    let queuedEvent = normalized
+    if (normalized.data !== undefined) {
+      const settings = yield* getSettings
+      const redacted = redactValue(normalized.data, settings.redact_keys)
+      queuedEvent = {
+        ...normalized,
+        data: typeof redacted === "object" && redacted !== null && !Array.isArray(redacted)
+          ? redacted as Record<string, unknown>
+          : {}
+      }
+    }
+    const acceptedAt = nowIso()
+    let eventId: string
+    if (normalized.external_id) {
+      const events = yield* EventsRepository
+      const existing = yield* events.findIdByExternalId(project.id, normalized.external_id).pipe(
+        // Preserve IDs created by pre-Queue releases when D1 is healthy, but
+        // never make durable Queue acceptance depend on this compatibility read.
+        Effect.catchTag("RepositoryUnavailable", () => Effect.succeed(null))
+      )
+      eventId = existing ?? (yield* idempotentEventId(project.id, normalized.external_id))
+    } else {
+      eventId = yield* newId("evt")
+    }
+    const command: IngestEventCommand = {
+      _tag: "IngestEvent",
+      version: QUEUE_COMMAND_VERSION,
+      eventId,
+      projectId: project.id,
+      acceptedAt,
+      event: queuedEvent
+    }
+    if (encodedQueueCommandBytes(command) > QUEUE_COMMAND_MAX_BYTES) {
+      return yield* Effect.fail(invalidEvent("event is too large for durable Queue acceptance"))
+    }
+    yield* queue.send(command)
+    return { id: eventId, accepted_at: acceptedAt, status: "queued" }
+  })
+
+const publishPendingPushJobs = (
+  eventId: string
+): Effect.Effect<void, RepositoryUnavailable | QueueUnavailable, EventsRepository | PushQueue> =>
   Effect.gen(function*() {
     const events = yield* EventsRepository
     const queue = yield* PushQueue
-    const createdAt = nowIso()
-    const normalized = yield* decodeCreateEventInput(input)
-
-    if (normalized.external_id) {
-      const existing = yield* events.findIdByExternalId(project.id, normalized.external_id)
-      if (existing) return yield* getEvent(existing)
+    const pending = yield* events.listPendingSubscriptionIds(eventId)
+    for (const subscriptionId of pending) {
+      yield* queue.send({
+        _tag: "DeliverPush",
+        version: QUEUE_COMMAND_VERSION,
+        eventId,
+        subscriptionId
+      })
+      const queuedAt = nowIso()
+      yield* events.markPushJobQueued(eventId, subscriptionId, queuedAt)
     }
+  })
 
+export const processIngestEvent = (
+  command: IngestEventCommand
+): Effect.Effect<void, EventError, ProjectsRepository | EventsRepository | SettingsRepository | SilencesRepository | SubscriptionsRepository | PushQueue | AppConfig> =>
+  Effect.gen(function*() {
+    const projects = yield* ProjectsRepository
+    const events = yield* EventsRepository
+    const project = yield* projects.findById(command.projectId)
+    if (!project) return yield* Effect.fail(projectNotFound("ingest project no longer exists"))
+
+    const normalized = command.event
     const settings = yield* getSettings
     const payload = redactValue(normalized.data ?? {}, settings.redact_keys)
     const data = typeof payload === "object" && payload !== null && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
       : {}
-
     const silenceId = yield* matchSilence(project.id, [
       ["fingerprint", normalized.fingerprint ?? ""],
       ["title", normalized.title],
       ["source", normalized.source ?? ""]
     ])
-
-    const eventId = yield* newId("evt")
-    const shouldNotify = project.notify === 1 && atLeast(normalized.level ?? "info", project.min_level) && !silenceId
+    const shouldNotify = project.notify === 1 &&
+      atLeast(normalized.level ?? "info", project.min_level) && !silenceId
     const subscriptions = shouldNotify ? yield* listEnabledSubscriptionRows : []
-    const messages: ReadonlyArray<PushJobMessage> = subscriptions.map((subscription) => ({
-      eventId,
-      subscriptionId: subscription.id
-    }))
-
-    yield* events.insertWithPushJobs({
-      id: eventId,
+    yield* events.initializeIngestion({
+      id: command.eventId,
       externalId: normalized.external_id ?? null,
       projectId: project.id,
       source: normalized.source ?? "",
@@ -160,24 +236,42 @@ export const createEventForProject = (
       fingerprint: normalized.fingerprint ?? "",
       payloadJson: JSON.stringify(data),
       actionsJson: JSON.stringify(normalized.actions ?? []),
-      occurredAt: normalized.occurred_at ?? createdAt,
-      createdAt,
+      occurredAt: normalized.occurred_at ?? command.acceptedAt,
+      createdAt: command.acceptedAt,
       silenceId
     }, subscriptions.map((subscription) => subscription.id))
 
-    if (messages.length > 0) {
-      const published = yield* queue.sendMany(messages).pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false))
-      )
-      if (published) {
-        const queuedAt = nowIso()
-        yield* events.markPushJobsQueued(eventId, queuedAt, true)
-      }
+    const stored = normalized.external_id
+      ? yield* events.findIdByExternalId(project.id, normalized.external_id)
+      : (yield* events.findById(command.eventId))?.id ?? null
+    if (!stored) return yield* Effect.fail(eventNotFound("ingested event could not be loaded"))
+
+    if (stored !== command.eventId) {
+      yield* events.insertAlias(command.eventId, stored, command.acceptedAt)
     }
 
-    return yield* getEvent(eventId)
-  })
+    yield* publishPendingPushJobs(stored)
+  }).pipe(Effect.withSpan("EventIngestion.process", { attributes: { eventId: command.eventId } }))
+
+export const processIngestDeadLetter = (
+  command: IngestEventCommand
+): Effect.Effect<void, EventError, ProjectsRepository | EventsRepository | SettingsRepository | SilencesRepository | SubscriptionsRepository | PushQueue | AppConfig> =>
+  processIngestEvent(command).pipe(
+    Effect.catch((failure) =>
+      Effect.gen(function*() {
+        const events = yield* EventsRepository
+        const failedAt = nowIso()
+        const reason = `ingestion exhausted Queue retries: ${failure.message}`.slice(0, 4_000)
+        yield* events.recordIngestionFailure({
+          eventId: command.eventId,
+          projectId: command.projectId,
+          externalId: command.event.external_id ?? null,
+          reason,
+          failedAt
+        })
+      })
+    )
+  ).pipe(Effect.withSpan("EventIngestion.deadLetter", { attributes: { eventId: command.eventId } }))
 
 interface Cursor {
   readonly createdAt: string
@@ -224,7 +318,6 @@ export const listEvents = (
 ): Effect.Effect<EventPage, InvalidEventQuery | RepositoryUnavailable, EventsRepository> =>
   Effect.gen(function*() {
     const events = yield* EventsRepository
-
     if (input.level) {
       if (!isLevel(input.level)) return yield* Effect.fail(invalidEventQuery("level filter is invalid"))
     }
@@ -243,7 +336,6 @@ export const listEvents = (
     if (since && until && since > until) {
       return yield* Effect.fail(invalidEventQuery("since must not be later than until"))
     }
-
     if (input.grouped !== undefined && input.grouped !== "true" && input.grouped !== "false") {
       return yield* Effect.fail(invalidEventQuery("grouped filter must be true or false"))
     }
@@ -253,6 +345,7 @@ export const listEvents = (
 
     const requestedLimit = Number.parseInt(input.limit ?? "50", 10)
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1, 100)
+
     const search = input.search?.trim().slice(0, 240)
     const criteria: EventListCriteria = {
       ...(input.project ? { project: input.project } : {}),
@@ -283,8 +376,8 @@ export const eventDeliveries = (
 ): Effect.Effect<ReadonlyArray<DeliveryRow>, EventNotFound | RepositoryUnavailable, EventsRepository | DeliveriesRepository> =>
   Effect.gen(function*() {
     const deliveries = yield* DeliveriesRepository
-    yield* getEvent(eventId)
-    return yield* deliveries.listForEvent(eventId)
+    const event = yield* getEvent(eventId)
+    return yield* deliveries.listForEvent(event.id)
   })
 
 export const unsilenceEvent = (
@@ -292,30 +385,21 @@ export const unsilenceEvent = (
 ): Effect.Effect<{ readonly event: EventView; readonly deliveries: ReadonlyArray<DeliveryRow> }, EventNotFound | RepositoryUnavailable | QueueUnavailable, EventsRepository | DeliveriesRepository | SubscriptionsRepository | PushQueue> =>
   Effect.gen(function*() {
     const events = yield* EventsRepository
-    const queue = yield* PushQueue
     const current = yield* getEvent(eventId)
+    const resolvedEventId = current.id
     if (!current.silenced) {
-      return { event: current, deliveries: yield* eventDeliveries(eventId) }
+      yield* publishPendingPushJobs(resolvedEventId)
+      return { event: current, deliveries: yield* eventDeliveries(resolvedEventId) }
     }
 
     const subscriptions = yield* listEnabledSubscriptionRows
     const now = nowIso()
-    yield* events.unsilenceWithPushJobs(eventId, subscriptions.map((subscription) => subscription.id), now)
+    yield* events.unsilenceWithPushJobs(resolvedEventId, subscriptions.map((subscription) => subscription.id), now)
 
-    const messages = subscriptions.map((subscription) => ({ eventId, subscriptionId: subscription.id }))
-    if (messages.length > 0) {
-      const published = yield* queue.sendMany(messages).pipe(
-        Effect.map(() => true),
-        Effect.catch(() => Effect.succeed(false))
-      )
-      if (published) {
-        const queuedAt = nowIso()
-        yield* events.markPushJobsQueued(eventId, queuedAt, false)
-      }
-    }
+    yield* publishPendingPushJobs(resolvedEventId)
 
     return {
-      event: yield* getEvent(eventId),
-      deliveries: yield* eventDeliveries(eventId)
+      event: yield* getEvent(resolvedEventId),
+      deliveries: yield* eventDeliveries(resolvedEventId)
     }
   })

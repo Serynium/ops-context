@@ -14,7 +14,7 @@ Cloudflare Queue owns ordinary transient retry timing. D1 owns durable idempoten
 
 A transient failure records `retry_scheduled_until`; scheduled recovery excludes such jobs. When the durable attempt ceiling is reached, the job enters the existing terminal `failed` state and records `dead_at`. Provider-permanent outcomes enter the same terminal state immediately.
 
-The later Queue-first ingestion refactor will remove delivery-repair Cron processing entirely. This ADR remains the delivery-state contract for that architecture.
+Queue-first ingestion removes delivery-repair Cron processing entirely. This ADR remains the delivery-state contract for that architecture.
 
 ## Consequences
 
