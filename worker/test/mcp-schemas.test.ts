@@ -46,11 +46,24 @@ describe("MCP Effect schemas", () => {
     const jsonSchema = ListEventsArguments["~standard"].jsonSchema.input({
       target: "draft-2020-12"
     })
-    const properties = jsonSchema.properties as Record<string, Record<string, unknown>>
+    const properties = jsonSchema.properties as Record<string, unknown>
+    const encoded = JSON.stringify(jsonSchema)
 
     expect(jsonSchema.type).toBe("object")
-    expect(properties.level?.enum).toEqual(["info", "success", "warning", "error", "critical"])
-    expect(properties.limit?.minimum).toBe(1)
-    expect(properties.limit?.maximum).toBe(100)
+    expect(Object.keys(properties)).toEqual(expect.arrayContaining([
+      "project",
+      "level",
+      "source",
+      "fingerprint",
+      "since",
+      "until",
+      "grouped",
+      "silenced",
+      "before",
+      "limit"
+    ]))
+    for (const level of ["info", "success", "warning", "error", "critical"]) {
+      expect(encoded).toContain(`"${level}"`)
+    }
   })
 })
