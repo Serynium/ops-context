@@ -10,6 +10,8 @@ import {
 } from "effect/unstable/httpapi"
 import {
   AuthLoginInput,
+  BadRequestError,
+  toApiFailure,
   AuthState,
   AuthStateWithCookie,
   CommonErrors,
@@ -51,6 +53,7 @@ import {
   Subscriptions,
   System
 } from "./application.js"
+import { decodeCreateEventInput } from "./event-contract.js"
 import {
   AdminAuthorization,
   CurrentProject,
@@ -290,8 +293,18 @@ export const IngestHandlers = HttpApiBuilder.group(
   "ingest",
   Effect.fn(function*(handlers) {
     const events = yield* Events
-    return handlers.handle("createEvent", ({ payload }) =>
+    return handlers.handleRaw("createEvent", () =>
       Effect.gen(function*() {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const payload = yield* request.json.pipe(
+          Effect.mapError(() => new BadRequestError({
+            error: "bad_request",
+            message: "request body must contain valid JSON"
+          })),
+          Effect.flatMap((input) =>
+            decodeCreateEventInput(input).pipe(Effect.mapError(toApiFailure))
+          )
+        )
         const project = yield* CurrentProject
         const event = yield* events.create(project, payload)
         return { id: event.id, created_at: event.created_at }
