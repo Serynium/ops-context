@@ -1,0 +1,53 @@
+name: Sync release metadata
+
+on:
+  push:
+    branches: [feature/boop-1.2-parity]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/boop-1.2-parity
+      - name: Update source version metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("worker/src/api.ts"): [
+                  ('version: "0.2.0"', 'version: "0.3.0"'),
+                  (
+                      'description: "Operational events, browser push subscriptions, silences, and administration."',
+                      'description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and administration."'
+                  ),
+              ],
+              Path("worker/src/application.ts"): [
+                  ('version: "0.2.0"', 'version: "0.3.0"'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              source = path.read_text()
+              for before, after in pairs:
+                  if before not in source:
+                      raise SystemExit(f"Expected text not found in {path}: {before}")
+                  source = source.replace(before, after, 1)
+              path.write_text(source)
+          PY
+      - name: Commit release metadata
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker/src/api.ts worker/src/application.ts
+          git commit -m "Sync 0.3.0 API version metadata"
+          git push origin HEAD:feature/boop-1.2-parity
