@@ -317,7 +317,10 @@ export const AdminHandlers = HttpApiBuilder.group(
         const request = yield* HttpServerRequest.HttpServerRequest
         return yield* subscriptions.register(payload, request.headers["user-agent"] ?? "")
       }),
-      updateSubscription: ({ params, payload }) => subscriptions.update(params.id, payload),
+      updateSubscription: ({ params, payload }) => subscriptions.update(params.id, {
+        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {})
+      }),
       deleteSubscription: ({ params }) => subscriptions.delete(params.id),
 
       listSilences: () => silences.listSummary,

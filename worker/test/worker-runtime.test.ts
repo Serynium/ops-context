@@ -57,7 +57,7 @@ describe("Cloudflare Worker runtime", () => {
     const request = new Request(
       "https://ops.example.com/health"
     ) as Parameters<typeof worker.fetch>[0]
-    const response = await worker.fetch(request, env)
+    const response = await worker.fetch(request, env, createExecutionContext())
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: "ok" })
   })
@@ -68,7 +68,7 @@ describe("Cloudflare Worker runtime", () => {
       { headers: { authorization: "Bearer ops_proj_not_admin" } }
     ) as Parameters<typeof worker.fetch>[0]
 
-    const response = await worker.fetch(request, env)
+    const response = await worker.fetch(request, env, createExecutionContext())
     expect([401, 403]).toContain(response.status)
   })
 
@@ -79,7 +79,7 @@ describe("Cloudflare Worker runtime", () => {
       body: JSON.stringify({ title: "Oversized", body: "x".repeat(256 * 1_024) })
     }) as Parameters<typeof worker.fetch>[0]
 
-    const response = await worker.fetch(request, env)
+    const response = await worker.fetch(request, env, createExecutionContext())
     expect(response.status).toBe(413)
     await expect(response.json()).resolves.toEqual({
       error: "payload_too_large",
@@ -105,7 +105,7 @@ describe("Cloudflare Worker runtime", () => {
       body
     }) as Parameters<typeof worker.fetch>[0]
 
-    const response = await worker.fetch(request, env)
+    const response = await worker.fetch(request, env, createExecutionContext())
     expect(response.status).toBe(413)
     expect(cancelled).toBe(true)
     expect(pulls).toBeLessThan(10)
@@ -122,7 +122,7 @@ describe("Cloudflare Worker runtime", () => {
       body: JSON.stringify({ title: "x".repeat(241) })
     }) as Parameters<typeof worker.fetch>[0]
 
-    const response = await worker.fetch(request, env)
+    const response = await worker.fetch(request, env, createExecutionContext())
     expect(response.status).toBe(422)
     await expect(response.json()).resolves.toMatchObject({
       error: "validation_error",
