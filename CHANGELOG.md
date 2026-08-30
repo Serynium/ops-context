@@ -6,6 +6,8 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- A measured `event_groups` read model for default grouped inbox pages, with atomic insert/delete maintenance, retention-safe recomputation, project isolation, migration backfill, and an authenticated idempotent repair operation.
+- Grouped-inbox D1 measurements and integration coverage comparing the read model to the exact dynamic query. On the 10,000-event fixture, rows read fell from 51,502 to 154 and median local latency from 8 ms to below 1 ms.
 - Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.
 - D1 observability guidance for read amplification, write volume, latency, failures, and before/after performance comparisons.
 - A measured D1 index baseline, query-plan integration guardrails, and safe rollout/rollback guidance for event listing, grouping, recovery, delivery history, project authentication, and silence matching.
@@ -24,6 +26,7 @@ All notable changes to Ops Context are recorded here.
 
 ### Changed
 
+- Default grouped pages now scan materialized groups rather than all fingerprinted occurrences. Level, source, fingerprint, search, time, and silence filters continue to use the exact dynamic query.
 - Project-scoped event listing now uses an ordered `(project_id, created_at DESC, id DESC)` index in place of the redundant project-only index. Grouped reads use the existing fingerprint index while preserving distinct empty-fingerprint events.
 - Event fields are rejected instead of silently truncated, and invalid `occurred_at` values no longer fall back to the server timestamp. The same contract is enforced by the HTTP boundary and application service.
 

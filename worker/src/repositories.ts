@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { SqlSchema } from "effect/unstable/sql"
 import { repositoryUnavailable, type RepositoryUnavailable } from "./errors.js"
+import { rebuildEventGroupsSql } from "./event-groups.js"
 import { Database } from "./services.js"
 import type { SilenceField } from "./silences.js"
 import type {
@@ -282,6 +283,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
   readonly markPushJobsQueued: (eventId: string, queuedAt: string, onlyPending: boolean) => Effect.Effect<void, RepositoryUnavailable>
   readonly unsilenceWithPushJobs: (eventId: string, subscriptionIds: ReadonlyArray<string>, now: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly pruneBefore: (cutoff: string) => Effect.Effect<number, RepositoryUnavailable>
+  readonly rebuildGroups: Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/EventsRepository") {
   static readonly layer = Layer.effect(EventsRepository, Effect.gen(function*() {
     const db = yield* D1Executor
@@ -303,6 +305,83 @@ export class EventsRepository extends Context.Service<EventsRepository, {
       if (criteria.since) { conditions.push("e.created_at >= ?"); params.push(criteria.since) }
       if (criteria.until) { conditions.push("e.created_at <= ?"); params.push(criteria.until) }
       if (criteria.grouped) {
+        const supportsReadModel = criteria.level === undefined &&
+          criteria.source === undefined &&
+          criteria.fingerprint === undefined &&
+          criteria.search === undefined &&
+          criteria.since === undefined &&
+          criteria.until === undefined &&
+          criteria.silenced === undefined
+
+        if (supportsReadModel) {
+          const queryParams: Array<unknown> = []
+          const groupConditions: Array<string> = []
+          const eventConditions = ["e.fingerprint = ''"]
+          const emptyFingerprintIndex = criteria.project
+            ? "events_project_empty_fingerprint_created"
+            : "events_empty_fingerprint_created"
+
+          if (criteria.project) {
+            groupConditions.push("g.project_id = ?")
+            queryParams.push(criteria.project)
+          }
+          if (criteria.cursor) {
+            groupConditions.push(
+              "(g.last_seen < ? OR (g.last_seen = ? AND g.latest_event_id < ?))"
+            )
+            queryParams.push(
+              criteria.cursor.createdAt,
+              criteria.cursor.createdAt,
+              criteria.cursor.id
+            )
+          }
+          queryParams.push(criteria.limit)
+
+          if (criteria.project) {
+            eventConditions.push("e.project_id = ?")
+            queryParams.push(criteria.project)
+          }
+          if (criteria.cursor) {
+            eventConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))")
+            queryParams.push(
+              criteria.cursor.createdAt,
+              criteria.cursor.createdAt,
+              criteria.cursor.id
+            )
+          }
+          queryParams.push(criteria.limit, criteria.limit)
+
+          return db.all(EventRowSchema, `WITH grouped_representatives AS (
+            SELECT ${eventColumns},
+              g.occurrence_count AS group_count,
+              g.first_seen AS group_first_seen,
+              g.last_seen AS group_last_seen
+            FROM event_groups g
+            JOIN events e ON e.id = g.latest_event_id
+            JOIN projects p ON p.id = g.project_id
+            ${groupConditions.length > 0 ? `WHERE ${groupConditions.join(" AND ")}` : ""}
+            ORDER BY g.last_seen DESC, g.latest_event_id DESC
+            LIMIT ?
+          ), ungrouped_representatives AS (
+            SELECT ${eventColumns},
+              1 AS group_count,
+              e.created_at AS group_first_seen,
+              e.created_at AS group_last_seen
+            FROM events e INDEXED BY ${emptyFingerprintIndex}
+            JOIN projects p ON p.id = e.project_id
+            WHERE ${eventConditions.join(" AND ")}
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT ?
+          ), representatives AS (
+            SELECT * FROM grouped_representatives
+            UNION ALL
+            SELECT * FROM ungrouped_representatives
+          )
+          SELECT * FROM representatives
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`, queryParams, "events.list_grouped_fast")
+        }
+
         const fingerprintedConditions = [...conditions, "e.fingerprint <> ''"]
         const ungroupedConditions = [...conditions, "e.fingerprint = ''"]
         const queryParams = [...params, ...params]
@@ -378,7 +457,19 @@ export class EventsRepository extends Context.Service<EventsRepository, {
           params: [eventId, subscriptionId, now, now]
         }))
       ], "events.unsilence_with_push_jobs"),
-      pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune")
+      pruneBefore: (cutoff) => db.run("DELETE FROM events WHERE created_at < ?", [cutoff], "events.prune"),
+      rebuildGroups: db.batch([
+        { sql: "DELETE FROM event_groups" },
+        { sql: rebuildEventGroupsSql }
+      ], "event_groups.rebuild").pipe(
+        Effect.andThen(db.first(
+          Schema.Struct({ count: Schema.Number }),
+          "SELECT COUNT(*) AS count FROM event_groups",
+          [],
+          "event_groups.count_after_rebuild"
+        )),
+        Effect.map((row) => row?.count ?? 0)
+      )
     })
   }))
 }
