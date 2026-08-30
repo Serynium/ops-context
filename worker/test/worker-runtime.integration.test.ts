@@ -68,6 +68,7 @@ describe("Cloudflare Worker runtime", () => {
       expect.arrayContaining([
         "deliveries",
         "event_aliases",
+        "event_groups",
         "events",
         "ingestion_failures",
         "projects",
@@ -347,5 +348,46 @@ describe("Cloudflare Worker runtime", () => {
       accessContext()
     )
     expect(sameOrigin.status).toBe(201)
+  })
+
+  it("repairs grouped-event drift through the protected same-origin operation", async () => {
+    const now = "2026-01-01T00:00:00.000Z"
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO projects
+          (id, name, slug, icon, api_key_hash, notify, min_level, created_at, updated_at)
+         VALUES ('prj_group_repair_api', 'Group repair', 'group-repair-api', '',
+                 'hash-group-repair-api', 0, 'info', ?, ?)`
+      ).bind(now, now),
+      env.DB.prepare(
+        `INSERT INTO events
+          (id, external_id, project_id, source, type, level, title, body, fingerprint,
+           payload_json, actions_json, occurred_at, created_at, silence_id)
+         VALUES ('evt_group_repair_api', NULL, 'prj_group_repair_api', 'test', 'test',
+                 'info', 'Repair me', '', 'repair-api', '{}', '[]', ?, ?, NULL)`
+      ).bind(now, now)
+    ])
+    await env.DB.prepare(
+      "UPDATE event_groups SET occurrence_count = 7 WHERE project_id = 'prj_group_repair_api'"
+    ).run()
+
+    const response = await fetchWorker(
+      new Request("https://ops.example.com/api/v1/maintenance/event-groups/rebuild", {
+        method: "POST",
+        headers: {
+          origin: "https://ops.example.com",
+          "x-forwarded-host": "ops.example.com",
+          "x-forwarded-proto": "https"
+        }
+      }),
+      accessContext()
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ groups: expect.any(Number) })
+    const repaired = await env.DB.prepare(
+      "SELECT occurrence_count FROM event_groups WHERE project_id = 'prj_group_repair_api'"
+    ).first<{ readonly occurrence_count: number }>()
+    expect(repaired?.occurrence_count).toBe(1)
   })
 })

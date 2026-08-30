@@ -18,6 +18,7 @@ import {
   Deliveries,
   Event,
   EventAccepted,
+  EventGroupsRebuilt,
   EventListQuery,
   EventPage,
   Health,
@@ -206,6 +207,10 @@ export class AdminApiGroup extends HttpApiGroup.make("admin")
       success: Status,
       error: CommonErrors
     }),
+    HttpApiEndpoint.post("rebuildEventGroups", "/maintenance/event-groups/rebuild", {
+      success: EventGroupsRebuilt,
+      error: CommonErrors
+    }).middleware(SameOrigin),
     HttpApiEndpoint.post("testNotification", "/test", {
       payload: TestNotificationInput,
       success: TestNotificationResult.pipe(HttpApiSchema.status(202)),
@@ -340,6 +345,7 @@ export const AdminHandlers = HttpApiBuilder.group(
         const request = yield* HttpServerRequest.HttpServerRequest
         return yield* toHttpFailure(system.status(requestOrigin(request)))
       }),
+      rebuildEventGroups: () => toHttpFailure(system.rebuildEventGroups),
       testNotification: ({ payload }) => toHttpFailure(system.testNotification(payload.project_id))
     })
   })

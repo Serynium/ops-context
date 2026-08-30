@@ -11,6 +11,7 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 - Bounded Queue retries and terminal delivery state.
 - Cloudflare Access-only authentication for the private PWA, administrator API, and MCP surfaces.
 - Workers-runtime testing with real D1 migrations.
+- A measured materialized fast path for the default grouped inbox.
 
 ## Near term
 
@@ -25,7 +26,6 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 These features should be implemented only when production measurements justify them:
 
 - D1 index tuning from query plans and rows-read/write metadata (#18).
-- A materialized fast path for the default grouped inbox (#19).
 - FTS5 search instead of broad substring scans (#20).
 - D1 Sessions/read-replication evaluation for global read latency (#21).
 - Splitting MCP or push delivery into separate Worker deployments (#22).
