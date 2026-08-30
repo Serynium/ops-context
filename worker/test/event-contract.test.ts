@@ -1,6 +1,6 @@
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { describe, expect, it } from "vitest"
-import { toApiFailure } from "../src/api-models.js"
+import { EventAction, toApiFailure } from "../src/api-models.js"
 import {
   decodeCreateEventInput,
   encodedEventPayloadBytes,
@@ -103,6 +103,25 @@ describe("event ingestion contract", () => {
       occurred_at: "2026-08-30T14:30:00+02:30"
     })
     expect(decoded.occurred_at).toBe("2026-08-30T12:00:00.000Z")
+
+    const historical = await decode({
+      title: "Historical event",
+      occurred_at: "0099-01-01T00:00:00Z"
+    })
+    expect(historical.occurred_at).toBe("0099-01-01T00:00:00.000Z")
+  })
+
+  it("encodes legacy absolute action URL schemes in event responses", async () => {
+    const legacyActions = [
+      { label: "Email on-call", url: "mailto:on-call@example.com" },
+      { label: "Open archive", url: "ftp://example.com/archive.zip" }
+    ]
+
+    for (const action of legacyActions) {
+      await expect(
+        Effect.runPromise(Schema.encodeUnknownEffect(EventAction)(action))
+      ).resolves.toEqual(action)
+    }
   })
 
   it("requires data to be a bounded JSON object", async () => {

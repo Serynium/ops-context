@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { HttpApiSchema } from "effect/unstable/httpapi"
 import {
   CreateEventInputSchema,
-  EventActionInputSchema,
+  EventActionOutputSchema,
   EventLevel
 } from "./event-contract.js"
 import { validationIssuesFromCause, type AppError } from "./errors.js"
@@ -15,7 +15,7 @@ export type SilenceField = typeof SilenceField.Type
 
 export const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
 
-export const EventAction = EventActionInputSchema
+export const EventAction = EventActionOutputSchema
 
 export const EventGroup = Schema.Struct({
   count: Schema.Int,
