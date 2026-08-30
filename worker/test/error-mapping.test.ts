@@ -1,7 +1,8 @@
+import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
 import { toApiFailure } from "../src/api-models.js"
 import type { ApplicationError } from "../src/errors.js"
-import { toMcpToolFailure } from "../src/mcp.js"
+import { runMcpEffect, toMcpToolFailure } from "../src/mcp.js"
 
 const failures: ReadonlyArray<ApplicationError> = [
   { _tag: "InvalidEvent", message: "invalid event", issues: [{ path: ["title"], message: "required" }] },
@@ -59,5 +60,17 @@ describe("adapter error mappings", () => {
       "not_found", "not_found", "conflict", "conflict", "unavailable", "unavailable",
       "unavailable", "unavailable", "unavailable"
     ])
+  })
+
+  it("maps typed failures before crossing the promise boundary", async () => {
+    await expect(runMcpEffect(Effect.fail({
+      _tag: "EventNotFound" as const,
+      message: "event not found"
+    }))).rejects.toThrow("not_found: event not found")
+
+    await expect(runMcpEffect(Effect.fail({
+      _tag: "RepositoryUnavailable" as const,
+      message: "sensitive D1 details"
+    }))).rejects.toThrow("unavailable: Tool service is temporarily unavailable")
   })
 })
