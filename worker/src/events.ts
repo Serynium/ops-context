@@ -249,6 +249,58 @@ const normalizeFilterTime = (value: string, name: "since" | "until"): string => 
   return date.toISOString()
 }
 
+interface SearchPart {
+  readonly value: string
+  readonly prefix: boolean
+}
+
+export const compileEventSearchQuery = (input: string): string => {
+  const parts: Array<SearchPart> = []
+  let offset = 0
+
+  while (offset < input.length) {
+    while (/\s/u.test(input[offset] ?? "")) offset += 1
+    if (offset >= input.length) break
+
+    if (input[offset] === '"') {
+      offset += 1
+      let value = ""
+      let closed = false
+      while (offset < input.length) {
+        const character = input[offset] ?? ""
+        if (character === "\\" && input[offset + 1] === '"') {
+          value += '"'
+          offset += 2
+          continue
+        }
+        if (character === '"') {
+          closed = true
+          offset += 1
+          break
+        }
+        value += character
+        offset += 1
+      }
+      if (!closed) throw invalidEventQuery("search phrase has an unterminated quote")
+      if (value.trim()) parts.push({ value: value.trim(), prefix: false })
+      continue
+    }
+
+    const start = offset
+    while (offset < input.length && !/\s/u.test(input[offset] ?? "")) offset += 1
+    const raw = input.slice(start, offset)
+    const prefix = raw.endsWith("*")
+    const value = (prefix ? raw.slice(0, -1) : raw).trim()
+    if (value) parts.push({ value, prefix })
+  }
+
+  if (parts.length === 0) throw invalidEventQuery("search must contain a token")
+  return parts.map(({ value, prefix }) => {
+    const phrase = `"${value.replaceAll('"', '""')}"`
+    return prefix ? `${phrase}*` : phrase
+  }).join(" AND ")
+}
+
 export interface ListEventsInput {
   readonly project?: string | undefined
   readonly level?: string | undefined
@@ -270,6 +322,7 @@ export const listEvents = (
     const db = yield* Database
     const conditions: Array<string> = []
     const params: Array<unknown> = []
+    let searchJoin = ""
 
     if (input.project) {
       conditions.push("e.project_id = ?")
@@ -291,11 +344,15 @@ export const listEvents = (
     if (input.search) {
       const search = input.search.trim().slice(0, 240)
       if (search) {
-        const pattern = `%${search}%`
-        conditions.push(
-          "(e.title LIKE ? OR e.body LIKE ? OR e.source LIKE ? OR e.fingerprint LIKE ? OR e.payload_json LIKE ?)"
-        )
-        params.push(pattern, pattern, pattern, pattern, pattern)
+        let query: string
+        try {
+          query = compileEventSearchQuery(search)
+        } catch (cause) {
+          return yield* Effect.fail(cause as InvalidEventQuery)
+        }
+        searchJoin = "JOIN event_search ON event_search.rowid = e.rowid"
+        conditions.push("event_search MATCH ?")
+        params.push(query)
       }
     }
     if (input.silenced !== undefined && input.silenced !== "true" && input.silenced !== "false") {
@@ -364,6 +421,7 @@ export const listEvents = (
              ) AS group_rank
            FROM events e
            JOIN projects p ON p.id = e.project_id
+           ${searchJoin}
            WHERE ${fingerprintedConditions.join(" AND ")}
          ), representatives AS (
            SELECT * FROM fingerprinted WHERE group_rank = 1
@@ -375,6 +433,7 @@ export const listEvents = (
              1 AS group_rank
            FROM events e
            JOIN projects p ON p.id = e.project_id
+           ${searchJoin}
            WHERE ${ungroupedConditions.join(" AND ")}
          )
          SELECT * FROM representatives
@@ -396,7 +455,7 @@ export const listEvents = (
       ]
       rows = yield* db.all<EventRow>(
         "events.list",
-        `${eventSelect}
+        `${eventSelect} ${searchJoin}
          ${allConditions.length > 0 ? `WHERE ${allConditions.join(" AND ")}` : ""}
          ORDER BY e.created_at DESC, e.id DESC
          LIMIT ?`,

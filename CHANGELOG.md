@@ -6,6 +6,8 @@ All notable changes to Ops Context are recorded here.
 
 ### Added
 
+- A measured FTS5 event-search index with Unicode token and explicit-prefix search, redacted structured-value projection, atomic trigger maintenance, and an idempotent rebuild path.
+
 - Stable D1 query names with span and structured-log telemetry for duration, rows returned, rows read, and rows written. SQL text, bound parameters, payloads, and driver error messages are excluded.
 - D1 observability guidance for read amplification, write volume, latency, failures, and before/after performance comparisons.
 - A measured D1 index baseline, query-plan integration guardrails, and safe rollout/rollback guidance for event listing, grouping, recovery, delivery history, project authentication, and silence matching.
