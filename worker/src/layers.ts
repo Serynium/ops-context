@@ -16,6 +16,7 @@ import {
   Subscriptions,
   System
 } from "./application.js"
+import { McpEndpoint } from "./mcp.js"
 import {
   AdminAuthorizationLive,
   ProjectAuthorizationLive,
@@ -92,7 +93,8 @@ export const makeLayers = (env: Env) => {
     Layer.provide(Layer.mergeAll(infrastructure, webPush))
   )
   const maintenance = Maintenance.layer.pipe(Layer.provide(infrastructure))
-  const programs = Layer.mergeAll(delivery, maintenance)
+  const mcp = McpEndpoint.layer.pipe(Layer.provide(base))
+  const programs = Layer.mergeAll(delivery, maintenance, mcp)
 
   return { http, programs } as const
 }
