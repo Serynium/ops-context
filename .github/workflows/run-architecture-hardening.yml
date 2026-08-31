@@ -1,0 +1,39 @@
+name: Run architecture hardening
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.issue.number == 46 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.body == '/run-hardening'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: codex/issue-46-architecture-hardening
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/apply-flexible-patches.mjs
+      - run: node scripts/apply-architecture-hardening.mjs
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm check
+      - name: Commit validated hardening changes
+        run: |
+          rm .github/workflows/apply-architecture-hardening.yml
+          rm scripts/apply-architecture-hardening.mjs
+          rm scripts/apply-flexible-patches.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden Access, Queue delivery, and operations [hardening-applied]"
+          git push origin HEAD:codex/issue-46-architecture-hardening
