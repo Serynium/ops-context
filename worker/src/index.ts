@@ -118,6 +118,38 @@ const eventRequestExceedsLimit = async (
   }
 }
 
+interface SafeCommandIdentity {
+  readonly command: string
+  readonly event_id?: string
+  readonly project_id?: string
+  readonly subscription_id?: string
+}
+
+const safeIdentifier = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0
+    ? value.slice(0, 160)
+    : undefined
+
+const safeCommandIdentity = (body: unknown): SafeCommandIdentity => {
+  if (typeof body !== "object" || body === null) return { command: "unknown" }
+  const record = body as Record<string, unknown>
+  const command = record._tag === "IngestEvent" || record._tag === "DeliverPush"
+    ? record._tag
+    : "unknown"
+  const eventId = safeIdentifier(record.eventId)
+  const projectId = safeIdentifier(record.projectId)
+  const subscriptionId = safeIdentifier(record.subscriptionId)
+  return {
+    command,
+    ...(eventId ? { event_id: eventId } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+    ...(subscriptionId ? { subscription_id: subscriptionId } : {})
+  }
+}
+
+const errorClass = (cause: unknown): string =>
+  cause instanceof Error && cause.name ? cause.name.slice(0, 120) : "unknown"
+
 export default {
   async fetch(request, env, context): Promise<Response> {
     const authenticatedRequest = await attachCloudflareAccess(
@@ -166,14 +198,28 @@ export default {
     const deadLetterBatch = batch.queue.endsWith("-dlq")
 
     for (const message of batch.messages) {
+      const identity = safeCommandIdentity(message.body)
       try {
         const command = await runtime.runPromise(decodeQueueCommand(message.body))
         if (command._tag === "IngestEvent") {
-          await runtime.runPromise(
+          const outcome = await runtime.runPromise(
             Effect.flatMap(EventIngestion, (ingestion) =>
               deadLetterBatch ? ingestion.deadLetter(command) : ingestion.process(command)
             )
           )
+          if (deadLetterBatch) {
+            const telemetry = {
+              event: outcome._tag === "Terminalized"
+                ? "queue.dlq.terminalized"
+                : "queue.dlq.recovered",
+              queue: batch.queue,
+              command: command._tag,
+              event_id: command.eventId,
+              project_id: command.projectId
+            }
+            if (outcome._tag === "Terminalized") console.error(telemetry)
+            else console.warn(telemetry)
+          }
           message.ack()
           continue
         }
@@ -186,10 +232,31 @@ export default {
         if (!deadLetterBatch && outcome._tag === "Retry") {
           message.retry({ delaySeconds: outcome.delaySeconds })
         } else {
+          if (deadLetterBatch) {
+            const telemetry = {
+              event: outcome._tag === "PermanentFailure"
+                ? "queue.dlq.terminalized"
+                : "queue.dlq.reconciled",
+              queue: batch.queue,
+              command: command._tag,
+              event_id: command.eventId,
+              subscription_id: command.subscriptionId,
+              outcome: outcome._tag
+            }
+            if (outcome._tag === "PermanentFailure") console.error(telemetry)
+            else console.warn(telemetry)
+          }
           message.ack()
         }
       } catch (cause) {
-        console.error(deadLetterBatch ? "dead-letter consumer defect" : "push consumer defect", cause)
+        console.error({
+          event: deadLetterBatch
+            ? "queue.dlq.reconciliation_failed"
+            : "queue.consumer.failed",
+          queue: batch.queue,
+          ...identity,
+          "error.class": errorClass(cause)
+        })
         message.retry({ delaySeconds: deadLetterBatch ? 60 : 30 })
       }
     }
