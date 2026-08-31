@@ -3,14 +3,19 @@ import { CreateEventInputSchema } from "./event-contract.js"
 import { invalidEvent, type InvalidEvent } from "./errors.js"
 
 export const QUEUE_COMMAND_VERSION = 1 as const
-// Cloudflare measures 1 KB as 1,000 bytes and counts approximately 100 bytes
-// of internal metadata against the 128 KB per-message limit.
+// Cloudflare bills Queue payloads in 64 KB chunks and measures 1 KB as 1,000
+// bytes. The hard per-message ceiling also includes about 100 bytes of
+// platform metadata.
+export const QUEUE_BILLING_CHUNK_BYTES = 64_000
 export const QUEUE_COMMAND_MAX_BYTES = 127_900
 
 const encoder = new TextEncoder()
 
 export const encodedQueueCommandBytes = (command: QueueCommand): number =>
   encoder.encode(JSON.stringify(command)).byteLength
+
+export const queueBillingChunks = (bytes: number): number =>
+  Math.max(1, Math.ceil(Math.max(0, bytes) / QUEUE_BILLING_CHUNK_BYTES))
 
 export const IngestEventCommandSchema = Schema.Struct({
   _tag: Schema.Literal("IngestEvent"),
