@@ -106,3 +106,34 @@ await replaceRequired(
           continue
         }`
 )
+
+const observabilityTestPath = "worker/test/database-observability.test.ts"
+let observabilityTests = await readFile(observabilityTestPath, "utf8")
+observabilityTests = observabilityTests.replace(
+  '"db.rows_read": 12,',
+  '"db.rows_read": 1000,'
+)
+const sampledTest = 'it("samples routine successes but always logs expensive queries"'
+const remoteTest = 'it("records remote serving location without inventing local values"'
+let firstSample = observabilityTests.indexOf(sampledTest)
+let duplicateSample = firstSample >= 0
+  ? observabilityTests.indexOf(sampledTest, firstSample + sampledTest.length)
+  : -1
+while (duplicateSample >= 0) {
+  const nextRemoteTest = observabilityTests.indexOf(remoteTest, duplicateSample)
+  if (nextRemoteTest < 0) {
+    throw new Error("Could not locate the test following duplicated sampling coverage")
+  }
+  observabilityTests =
+    observabilityTests.slice(0, duplicateSample) +
+    observabilityTests.slice(nextRemoteTest)
+  firstSample = observabilityTests.indexOf(sampledTest)
+  duplicateSample = observabilityTests.indexOf(
+    sampledTest,
+    firstSample + sampledTest.length
+  )
+}
+if ((observabilityTests.match(/samples routine successes but always logs expensive queries/gu) ?? []).length !== 1) {
+  throw new Error("Expected exactly one D1 success sampling test")
+}
+await writeFile(observabilityTestPath, observabilityTests)
