@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ops-context",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-29",
+  "minify": true,
+  "upload_source_maps": true,
+
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health", "/mcp"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ops-context",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "queues": {
+    "producers": [
+      {
+        "binding": "PUSH_QUEUE",
+        "queue": "ops-context-push"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ops-context-push",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "ops-context-push-dlq",
+        "max_concurrency": 4
+      },
+      {
+        "queue": "ops-context-push-dlq",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "max_concurrency": 1
+      }
+    ]
+  },
+
+  "vars": {
+    "OPS_BASE_URL": "https://app.ops.example.com",
+    "OPS_APP_HOST": "app.ops.example.com",
+    "OPS_MCP_HOST": "mcp.ops.example.com",
+    "OPS_ACCESS_TEAM_DOMAIN": "REPLACE_WITH_ACCESS_TEAM_DOMAIN",
+    "OPS_ACCESS_APP_AUD": "REPLACE_WITH_APP_ACCESS_AUD",
+    "OPS_ACCESS_MCP_AUD": "REPLACE_WITH_MCP_ACCESS_AUD",
+    "OPS_RETENTION_DAYS": "0",
+    "OPS_PUSH_MAX_ATTEMPTS": "6"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
