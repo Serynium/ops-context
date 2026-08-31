@@ -109,10 +109,6 @@ await replaceRequired(
 
 const observabilityTestPath = "worker/test/database-observability.test.ts"
 let observabilityTests = await readFile(observabilityTestPath, "utf8")
-observabilityTests = observabilityTests.replace(
-  '"db.rows_read": 12,',
-  '"db.rows_read": 1000,'
-)
 const sampledTest = 'it("samples routine successes but always logs expensive queries"'
 const remoteTest = 'it("records remote serving location without inventing local values"'
 let firstSample = observabilityTests.indexOf(sampledTest)
@@ -136,4 +132,32 @@ while (duplicateSample >= 0) {
 if ((observabilityTests.match(/samples routine successes but always logs expensive queries/gu) ?? []).length !== 1) {
   throw new Error("Expected exactly one D1 success sampling test")
 }
+
+const replaceInsideTest = (title, nextTitle, oldValue, newValue) => {
+  const start = observabilityTests.indexOf(`it("${title}"`)
+  const end = observabilityTests.indexOf(`it("${nextTitle}"`, start + 1)
+  if (start < 0 || end < 0) throw new Error(`Could not locate test section: ${title}`)
+  const section = observabilityTests.slice(start, end)
+  if (!section.includes(oldValue)) {
+    if (section.includes(newValue)) return
+    throw new Error(`Missing expected value in test section: ${title}`)
+  }
+  observabilityTests =
+    observabilityTests.slice(0, start) +
+    section.replace(oldValue, newValue) +
+    observabilityTests.slice(end)
+}
+
+replaceInsideTest(
+  "extracts row counts and prefers the precise SQL duration",
+  "samples routine successes but always logs expensive queries",
+  '"db.rows_read": 1000,',
+  '"db.rows_read": 12,'
+)
+replaceInsideTest(
+  "forwards telemetry as a top-level structured console record",
+  "classifies failures without logging driver error messages",
+  '"db.rows_read": 12',
+  '"db.rows_read": 1000'
+)
 await writeFile(observabilityTestPath, observabilityTests)
