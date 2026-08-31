@@ -377,3 +377,7 @@ pnpm check
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Architecture and operations
+
+The production security, Queue/D1 cost model, DLQ alerts, no-Cron deployment, and smoke-test checklist are documented in [`docs/operations-hardening.md`](docs/operations-hardening.md).

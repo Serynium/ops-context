@@ -313,7 +313,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
   readonly initializeIngestion: (event: EventInsert, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>) => Effect.Effect<void, RepositoryUnavailable>
   readonly insertAlias: (aliasId: string, eventId: string, createdAt: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly listPendingSubscriptionIds: (eventId: string) => Effect.Effect<ReadonlyArray<string>, RepositoryUnavailable>
-  readonly markPushJobQueued: (eventId: string, subscriptionId: string, queuedAt: string) => Effect.Effect<void, RepositoryUnavailable>
+readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly recordIngestionFailure: (values: {
     readonly eventId: string
     readonly projectId: string
@@ -322,7 +322,7 @@ export class EventsRepository extends Context.Service<EventsRepository, {
     readonly failedAt: string
   }) => Effect.Effect<void, RepositoryUnavailable>
   readonly unsilenceWithPushJobs: (eventId: string, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>, now: string) => Effect.Effect<void, RepositoryUnavailable>
-  readonly pruneBefore: (cutoff: string) => Effect.Effect<number, RepositoryUnavailable>
+  readonly pruneBefore: (cutoff: string, limit: number) => Effect.Effect<number, RepositoryUnavailable>
   readonly rebuildGroups: Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/EventsRepository") {
   static readonly layer = Layer.effect(EventsRepository, Effect.gen(function*() {
@@ -530,15 +530,20 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         [aliasId, eventId, createdAt], "event_aliases.insert"
       ).pipe(Effect.asVoid),
       listPendingSubscriptionIds: (eventId) => db.all(
-        Schema.Struct({ subscription_id: Schema.String }),
-        "SELECT subscription_id FROM push_jobs WHERE event_id = ? AND state = 'pending' ORDER BY subscription_id",
-        [eventId], "push_jobs.list_pending_for_publication"
-      ).pipe(Effect.map((rows) => rows.map((row) => row.subscription_id))),
-      markPushJobQueued: (eventId, subscriptionId, queuedAt) => db.run(
-        `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ?
-         WHERE event_id = ? AND subscription_id = ? AND state = 'pending'`,
-        [queuedAt, queuedAt, eventId, subscriptionId], "push_jobs.mark_queued"
-      ).pipe(Effect.asVoid),
+  Schema.Struct({ subscription_id: Schema.String }),
+  `SELECT j.subscription_id
+   FROM push_jobs j
+   JOIN events e ON e.id = j.event_id
+   WHERE j.event_id = ? AND j.state = 'pending'
+     AND e.fanout_published_at IS NULL
+   ORDER BY j.subscription_id`,
+  [eventId], "push_jobs.list_pending_for_publication"
+).pipe(Effect.map((rows) => rows.map((row) => row.subscription_id))),
+markFanoutPublished: (eventId, publishedAt) => db.run(
+  `UPDATE events SET fanout_published_at = ?
+   WHERE id = ? AND fanout_published_at IS NULL`,
+  [publishedAt, eventId], "events.mark_fanout_published"
+).pipe(Effect.asVoid),
       recordIngestionFailure: (values) => db.batch([
         {
           sql: `UPDATE push_jobs SET state = 'dead', lease_until = NULL, dead_at = ?,
@@ -553,7 +558,10 @@ export class EventsRepository extends Context.Service<EventsRepository, {
         }
       ], "ingestion_failures.record_terminal"),
       unsilenceWithPushJobs: (eventId, subscriptions, now) => db.batch([
-        { sql: "UPDATE events SET silence_id = NULL WHERE id = ?", params: [eventId] },
+        {
+  sql: "UPDATE events SET silence_id = NULL, fanout_published_at = NULL WHERE id = ?",
+  params: [eventId]
+},
         ...subscriptions.map((subscription) => ({
           sql: `INSERT INTO push_jobs
             (event_id, subscription_id, subscription_generation, state, attempts,
@@ -572,11 +580,17 @@ export class EventsRepository extends Context.Service<EventsRepository, {
             subscription.id, subscription.generation]
         }))
       ], "events.unsilence_with_push_jobs"),
-      pruneBefore: (cutoff) => db.runCounted(
-        "DELETE FROM events WHERE created_at < ?",
-        [cutoff],
-        "events.prune"
-      ),
+      pruneBefore: (cutoff, limit) => db.runCounted(
+  `DELETE FROM events
+   WHERE id IN (
+     SELECT id FROM events
+     WHERE created_at < ?
+     ORDER BY created_at ASC, id ASC
+     LIMIT ?
+   )`,
+  [cutoff, limit],
+  "events.prune"
+),
       rebuildGroups: db.batch([
         { sql: "DELETE FROM event_groups" },
         { sql: rebuildEventGroupsSql }

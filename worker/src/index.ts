@@ -202,12 +202,12 @@ export default {
       try {
         const command = await runtime.runPromise(decodeQueueCommand(message.body))
         if (command._tag === "IngestEvent") {
-          const outcome = await runtime.runPromise(
-            Effect.flatMap(EventIngestion, (ingestion) =>
-              deadLetterBatch ? ingestion.deadLetter(command) : ingestion.process(command)
-            )
-          )
           if (deadLetterBatch) {
+            const outcome = await runtime.runPromise(
+              Effect.flatMap(EventIngestion, (ingestion) =>
+                ingestion.deadLetter(command)
+              )
+            )
             const telemetry = {
               event: outcome._tag === "Terminalized"
                 ? "queue.dlq.terminalized"
@@ -219,7 +219,15 @@ export default {
             }
             if (outcome._tag === "Terminalized") console.error(telemetry)
             else console.warn(telemetry)
+            message.ack()
+            continue
           }
+
+          await runtime.runPromise(
+            Effect.flatMap(EventIngestion, (ingestion) =>
+              ingestion.process(command)
+            )
+          )
           message.ack()
           continue
         }

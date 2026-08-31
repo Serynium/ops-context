@@ -12,7 +12,8 @@ import {
   type EventAccepted,
   type EventPage,
   type EventError,
-  type ListEventsInput
+type IngestDeadLetterOutcome,
+type ListEventsInput
 } from "./events.js"
 import {
   projectNotFound,
@@ -455,7 +456,7 @@ export class PushDelivery extends Context.Service<PushDelivery, {
 
 export class EventIngestion extends Context.Service<EventIngestion, {
   readonly process: (message: IngestEventCommand) => Effect.Effect<void, EventError>
-  readonly deadLetter: (message: IngestEventCommand) => Effect.Effect<void, EventError>
+readonly deadLetter: (message: IngestEventCommand) => Effect.Effect<IngestDeadLetterOutcome, EventError>
 }>()("ops-context/EventIngestion") {
   static readonly layer = Layer.effect(
     EventIngestion,

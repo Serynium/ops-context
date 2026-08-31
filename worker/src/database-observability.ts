@@ -107,7 +107,7 @@ const d1StructuredLogger = Logger.make(({ logLevel, message }) => {
     if (!isD1Telemetry(value)) continue
     if (logLevel === "Error" || logLevel === "Fatal") {
       console.error(value)
-    } else if (logLevel === "Warning") {
+    } else if (logLevel === "Warn") {
       console.warn(value)
     } else {
       console.log(value)

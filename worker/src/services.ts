@@ -2,8 +2,10 @@ import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto"
 import { buildPushHTTPRequest, type PushMessage, type PushSubscription } from "@pushforge/builder"
 import { Context, Crypto, Effect, Layer } from "effect"
 import {
+  classifyD1SuccessTelemetry,
   d1FailureTelemetry,
   d1SuccessTelemetry,
+  type D1SuccessTelemetry,
   type DatabaseOperation
 } from "./database-observability.js"
 import {
@@ -71,19 +73,26 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
       name: string,
       operation: DatabaseOperation,
       execute: () => Promise<A>,
-      successTelemetry: (result: A) => ReadonlyArray<Record<string, unknown>>
+      successTelemetry: (result: A) => ReadonlyArray<D1SuccessTelemetry>
     ): Effect.Effect<A, RepositoryUnavailable> =>
       Effect.tryPromise({
         try: execute,
         catch: (cause) => repositoryUnavailable(`database ${operation} failed`, cause)
       }).pipe(
         Effect.tap((result) =>
-          Effect.forEach(successTelemetry(result), (telemetry) =>
-            Effect.all([
-              Effect.annotateCurrentSpan(telemetry),
-              Effect.logInfo(telemetry)
-            ], { discard: true }), { discard: true })
-        ),
+  Effect.forEach(successTelemetry(result), (telemetry) => {
+    const decision = classifyD1SuccessTelemetry(telemetry)
+    const log = decision === "warning"
+      ? Effect.logWarning(telemetry)
+      : decision === "info"
+        ? Effect.logInfo(telemetry)
+        : Effect.void
+    return Effect.all([
+      Effect.annotateCurrentSpan(telemetry),
+      log
+    ], { discard: true })
+  }, { discard: true })
+),
         Effect.tapError(() => {
           const telemetry = d1FailureTelemetry(name, operation)
           return Effect.all([
@@ -155,8 +164,9 @@ export interface ConfigService {
   readonly baseUrl?: string
   readonly appOrigin: string
   readonly appHost: string
-  readonly mcpHost?: string
-  readonly accessAppAudience?: string
+readonly mcpHost?: string
+readonly accessTeamDomain?: string
+readonly accessAppAudience?: string
   readonly accessMcpAudience?: string
   readonly defaultRetentionDays: number
   readonly maxPushAttempts: number
@@ -190,7 +200,8 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
     const baseUrl = env.OPS_BASE_URL?.trim()
     const appHost = env.OPS_APP_HOST?.trim().toLowerCase() || hostFromUrl(baseUrl)
     const mcpHost = env.OPS_MCP_HOST?.trim().toLowerCase()
-    const accessAppAudience = env.OPS_ACCESS_APP_AUD?.trim()
+const accessTeamDomain = env.OPS_ACCESS_TEAM_DOMAIN?.trim().toLowerCase()
+const accessAppAudience = env.OPS_ACCESS_APP_AUD?.trim()
     const accessMcpAudience = env.OPS_ACCESS_MCP_AUD?.trim()
 
     return Layer.succeed(AppConfig)({
@@ -198,10 +209,12 @@ export class AppConfig extends Context.Service<AppConfig, ConfigService>()("ops-
       appOrigin: originFromUrl(baseUrl, appHost),
       appHost,
       ...(mcpHost ? { mcpHost } : {}),
-      ...(accessAppAudience ? { accessAppAudience } : {}),
+...(accessTeamDomain ? { accessTeamDomain } : {}),
+...(accessAppAudience ? { accessAppAudience } : {}),
       ...(accessMcpAudience ? { accessMcpAudience } : {}),
       defaultRetentionDays: Number.parseInt(env.OPS_RETENTION_DAYS ?? "90", 10) || 90,
-      maxPushAttempts: Math.min(20, Math.max(1, Number.parseInt(env.OPS_PUSH_MAX_ATTEMPTS ?? "6", 10) || 6)),
+      // The primary Queue permits five retries after the first delivery.
+maxPushAttempts: Math.min(6, Math.max(1, Number.parseInt(env.OPS_PUSH_MAX_ATTEMPTS ?? "6", 10) || 6)),
       vapidPublicKey: env.VAPID_PUBLIC_KEY,
       vapidPrivateJwk: env.VAPID_PRIVATE_JWK,
       vapidSubject: env.VAPID_SUBJECT

@@ -17,16 +17,20 @@
     "test:integration": "pnpm build:web && vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.unit.config.ts",
     "test:integration:watch": "pnpm build:web && vitest --config vitest.config.ts",
-    "check": "pnpm typecheck && pnpm test && pnpm build:worker",
+    "check": "pnpm check:migrations && pnpm typecheck && pnpm test && pnpm build:worker && pnpm build:worker:no-cron",
     "deploy": "pnpm build:web && wrangler deploy",
     "cf:types": "wrangler types worker-configuration.d.ts",
-    "secrets": "node scripts/generate-secrets.mjs"
+    "secrets": "node scripts/generate-secrets.mjs",
+    "check:migrations": "node scripts/check-migration-prefixes.mjs",
+    "build:worker:no-cron": "wrangler deploy --dry-run --config wrangler.no-cron.jsonc --outdir .worker-dist-no-cron",
+    "deploy:no-cron": "pnpm build:web && wrangler deploy --config wrangler.no-cron.jsonc"
   },
   "dependencies": {
     "@effect/platform-browser": "4.0.0-rc.112",
     "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
-    "effect": "4.0.0-rc.112"
+    "effect": "4.0.0-rc.112",
+    "jose": "6.2.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
