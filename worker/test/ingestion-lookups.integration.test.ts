@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers"
 import { Effect, Layer } from "effect"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { D1StructuredLoggerLive } from "../src/database-observability.js"
 import { processIngestEvent } from "../src/events.js"
 import { QUEUE_COMMAND_VERSION } from "../src/queue-contract.js"
@@ -27,6 +27,12 @@ const queryLogs = (spy: ConsoleLogSpy): ReadonlyArray<Record<string, unknown>> =
   spy.mock.calls
     .map((call) => call[0])
     .filter(isQueryLog)
+
+beforeEach(() => {
+  // Production samples routine successful D1 operations. Tests that assert
+  // query cardinality force the sampler open so the assertion is deterministic.
+  vi.spyOn(Math, "random").mockReturnValue(0)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()

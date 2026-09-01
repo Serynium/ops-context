@@ -151,3 +151,9 @@ not require a D1 rollback.
 - The repository has a repeatable bundle baseline and explicit evidence thresholds.
 - A future split has a least-privilege target, CI contract, and reversible rollout plan
   rather than treating deployment extraction as a file move.
+## 2026-08-31 hardening amendment
+
+The repository now has Workers-runtime D1/Queue integration tests, decoded repository ports, tagged protocol-independent errors, Queue-first ingestion, FTS, and a grouped-event read model.
+
+The Static Assets router does not always forward `ctx.access`. This is not a reason to split the deployment: the Worker now verifies the forwarded Access JWT against Cloudflare's JWKS when the direct runtime context is absent. The single-Worker decision remains accepted. Reconsider it only when production measurements or security policy require an independent deployment boundary.
+

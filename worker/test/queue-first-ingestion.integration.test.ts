@@ -11,8 +11,10 @@ import {
 import { queueUnavailable, repositoryUnavailable } from "../src/errors.js"
 import {
   encodedQueueCommandBytes,
-  QUEUE_COMMAND_MAX_BYTES,
-  QUEUE_COMMAND_VERSION,
+queueBillingChunks,
+QUEUE_BILLING_CHUNK_BYTES,
+QUEUE_COMMAND_MAX_BYTES,
+QUEUE_COMMAND_VERSION,
   decodeQueueCommand,
   type IngestEventCommand,
   type QueueCommand
@@ -251,9 +253,8 @@ describe("Queue-first event ingestion", () => {
       "SELECT state, COUNT(*) AS count FROM push_jobs GROUP BY state ORDER BY state"
     ).all<{ state: string; count: number }>()
     expect(afterCrash.results).toEqual([
-      { state: "pending", count: 2 },
-      { state: "queued", count: 1 }
-    ])
+  { state: "pending", count: 3 }
+])
 
     const recovered: QueueCommand[] = []
     await Effect.runPromise(
@@ -263,11 +264,17 @@ describe("Queue-first event ingestion", () => {
         ))
       )
     )
-    expect(recovered).toHaveLength(2)
-    const finalJobs = await env.DB.prepare(
-      "SELECT state, COUNT(*) AS count FROM push_jobs GROUP BY state"
-    ).all<{ state: string; count: number }>()
-    expect(finalJobs.results).toEqual([{ state: "queued", count: 3 }])
+    // The already-published destination may be republished after a crash. The
+// delivery consumer's conditional claim makes the duplicate harmless.
+expect(recovered).toHaveLength(3)
+const finalJobs = await env.DB.prepare(
+  "SELECT state, COUNT(*) AS count FROM push_jobs GROUP BY state"
+).all<{ state: string; count: number }>()
+expect(finalJobs.results).toEqual([{ state: "pending", count: 3 }])
+const fanout = await env.DB.prepare(
+  "SELECT fanout_published_at FROM events WHERE id = ?"
+).bind(command().eventId).first<{ fanout_published_at: string | null }>()
+expect(fanout?.fanout_published_at).not.toBeNull()
   })
 
   it("keeps external_id stable across producer retries and contains no reusable credentials", async () => {
@@ -324,14 +331,20 @@ describe("Queue-first event ingestion", () => {
     }).pipe(Effect.provide(layer)))
 
     expect(accepted).toHaveLength(1)
-    expect(encodedQueueCommandBytes(accepted[0]!)).toBeLessThanOrEqual(QUEUE_COMMAND_MAX_BYTES)
+const bytes = encodedQueueCommandBytes(accepted[0]!)
+expect(bytes).toBeGreaterThan(QUEUE_BILLING_CHUNK_BYTES)
+expect(bytes).toBeLessThanOrEqual(QUEUE_COMMAND_MAX_BYTES)
+expect(queueBillingChunks(bytes)).toBe(2)
   })
 
   it("records an operator-visible terminal outcome when ingestion reaches the DLQ", async () => {
     const failed = ingestionLayer(() => Effect.fail(queueUnavailable("downstream Queue unavailable")))
-    await Effect.runPromise(processIngestDeadLetter(command()).pipe(Effect.provide(failed)))
+const outcome = await Effect.runPromise(
+  processIngestDeadLetter(command()).pipe(Effect.provide(failed))
+)
+expect(outcome).toEqual({ _tag: "Terminalized" })
 
-    const failure = await env.DB.prepare(
+const failure = await env.DB.prepare(
       "SELECT error FROM ingestion_failures WHERE event_id = ?"
     ).bind(command().eventId).first<{ error: string }>()
     expect(failure?.error).toContain("downstream Queue unavailable")
@@ -373,6 +386,10 @@ describe("Queue-first event ingestion", () => {
     const pending = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM push_jobs WHERE event_id = 'evt_silenced' AND state = 'pending'"
     ).first<{ count: number }>()
-    expect(pending?.count).toBe(0)
+    expect(pending?.count).toBe(3)
+const fanout = await env.DB.prepare(
+  "SELECT fanout_published_at FROM events WHERE id = 'evt_silenced'"
+).first<{ fanout_published_at: string | null }>()
+expect(fanout?.fanout_published_at).not.toBeNull()
   })
 })

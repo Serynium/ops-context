@@ -32,8 +32,10 @@ import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
 import {
   encodedQueueCommandBytes,
-  QUEUE_COMMAND_MAX_BYTES,
-  QUEUE_COMMAND_VERSION,
+queueBillingChunks,
+QUEUE_BILLING_CHUNK_BYTES,
+QUEUE_COMMAND_MAX_BYTES,
+QUEUE_COMMAND_VERSION,
   type IngestEventCommand
 } from "./queue-contract.js"
 import type {
@@ -128,6 +130,10 @@ export interface EventAccepted {
   readonly status: "queued"
 }
 
+export type IngestDeadLetterOutcome =
+  | { readonly _tag: "Recovered" }
+  | { readonly _tag: "Terminalized" }
+
 const idempotentEventId = (
   projectId: string,
   externalId: string
@@ -175,10 +181,27 @@ export const enqueueEventForProject = (
       acceptedAt,
       event: queuedEvent
     }
-    if (encodedQueueCommandBytes(command) > QUEUE_COMMAND_MAX_BYTES) {
-      return yield* Effect.fail(invalidEvent("event is too large for durable Queue acceptance"))
-    }
-    yield* queue.send(command)
+    const commandBytes = encodedQueueCommandBytes(command)
+const billingChunks = queueBillingChunks(commandBytes)
+yield* Effect.annotateCurrentSpan({
+  "queue.command": command._tag,
+  "queue.command.bytes": commandBytes,
+  "queue.command.billing_chunks": billingChunks
+})
+if (commandBytes > QUEUE_BILLING_CHUNK_BYTES) {
+  yield* Effect.logWarning({
+    event: "queue.command.large",
+    command: command._tag,
+    event_id: eventId,
+    bytes: commandBytes,
+    billing_chunks: billingChunks,
+    billing_chunk_bytes: QUEUE_BILLING_CHUNK_BYTES
+  })
+}
+if (commandBytes > QUEUE_COMMAND_MAX_BYTES) {
+  return yield* Effect.fail(invalidEvent("event is too large for durable Queue acceptance"))
+}
+yield* queue.send(command)
     return { id: eventId, accepted_at: acceptedAt, status: "queued" }
   })
 
@@ -190,15 +213,17 @@ const publishPendingPushJobs = (
     const queue = yield* PushQueue
     const pending = yield* events.listPendingSubscriptionIds(eventId)
     for (const subscriptionId of pending) {
-      yield* queue.send({
-        _tag: "DeliverPush",
-        version: QUEUE_COMMAND_VERSION,
-        eventId,
-        subscriptionId
-      })
-      const queuedAt = nowIso()
-      yield* events.markPushJobQueued(eventId, subscriptionId, queuedAt)
-    }
+  yield* queue.send({
+    _tag: "DeliverPush",
+    version: QUEUE_COMMAND_VERSION,
+    eventId,
+    subscriptionId
+  })
+}
+// One event-level marker replaces one D1 update per destination. If the
+// consumer crashes before this write, replay may republish messages; the
+// delivery claim makes those duplicates harmless.
+yield* events.markFanoutPublished(eventId, nowIso())
   })
 
 export const processIngestEvent = (
@@ -258,8 +283,9 @@ export const processIngestEvent = (
 
 export const processIngestDeadLetter = (
   command: IngestEventCommand
-): Effect.Effect<void, EventError, ProjectsRepository | EventsRepository | SettingsRepository | SilencesRepository | SubscriptionsRepository | PushQueue | AppConfig> =>
+): Effect.Effect<IngestDeadLetterOutcome, EventError, ProjectsRepository | EventsRepository | SettingsRepository | SilencesRepository | SubscriptionsRepository | PushQueue | AppConfig> =>
   processIngestEvent(command).pipe(
+    Effect.as({ _tag: "Recovered" } as const),
     Effect.catch((failure) =>
       Effect.gen(function*() {
         const events = yield* EventsRepository
@@ -272,6 +298,7 @@ export const processIngestDeadLetter = (
           reason,
           failedAt
         })
+        return { _tag: "Terminalized" } as const
       })
     )
   ).pipe(Effect.withSpan("EventIngestion.deadLetter", { attributes: { eventId: command.eventId } }))

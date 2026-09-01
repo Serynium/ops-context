@@ -2,6 +2,7 @@ import { Effect, Logger } from "effect"
 import { describe, expect, it, vi } from "vitest"
 import {
   D1StructuredLoggerLive,
+  classifyD1SuccessTelemetry,
   d1SuccessTelemetry
 } from "../src/database-observability.js"
 import type { RepositoryUnavailable } from "../src/errors.js"
@@ -53,7 +54,24 @@ describe("D1 query observability", () => {
     })
   })
 
-  it("records remote serving location without inventing local values", () => {
+  it("samples routine successes but always logs expensive queries", () => {
+  const routine = d1SuccessTelemetry(
+    "projects.get_by_id",
+    "query",
+    result([{ id: "prj_1" }], { rows_read: 1, rows_written: 0, duration: 1 })
+  )
+  expect(classifyD1SuccessTelemetry(routine, 0.99)).toBe("none")
+  expect(classifyD1SuccessTelemetry(routine, 0)).toBe("info")
+
+  const expensive = d1SuccessTelemetry(
+    "events.list",
+    "query",
+    result([], { rows_read: 2_000, rows_written: 0, duration: 5 })
+  )
+  expect(classifyD1SuccessTelemetry(expensive, 0.99)).toBe("warning")
+})
+
+it("records remote serving location without inventing local values", () => {
     expect(d1SuccessTelemetry("events.list", "query", result([], {
       served_by_region: "EEUR",
       served_by_primary: false
@@ -74,7 +92,10 @@ describe("D1 query observability", () => {
     const db = {
       prepare: () => ({
         bind: () => ({
-          all: () => Promise.resolve(result([{ id: "evt_1" }]))
+          all: () => Promise.resolve(result(
+  [{ id: "evt_1" }],
+  { rows_read: 1_000 }
+))
         })
       })
     } as unknown as D1Database
@@ -100,11 +121,14 @@ describe("D1 query observability", () => {
   })
 
   it("forwards telemetry as a top-level structured console record", async () => {
-    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const db = {
       prepare: () => ({
         bind: () => ({
-          all: () => Promise.resolve(result([{ id: "evt_1" }]))
+          all: () => Promise.resolve(result(
+  [{ id: "evt_1" }],
+  { rows_read: 1_000 }
+))
         })
       })
     } as unknown as D1Database
@@ -118,12 +142,12 @@ describe("D1 query observability", () => {
       )
     )
 
-    expect(consoleLog).toHaveBeenCalledWith(expect.objectContaining({
+    expect(consoleWarn).toHaveBeenCalledWith(expect.objectContaining({
       event: "d1.query",
       "db.query.name": "events.list",
-      "db.rows_read": 12
+      "db.rows_read": 1000
     }))
-    consoleLog.mockRestore()
+    consoleWarn.mockRestore()
   })
 
   it("classifies failures without logging driver error messages", async () => {

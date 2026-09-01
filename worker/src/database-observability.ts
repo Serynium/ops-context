@@ -1,6 +1,13 @@
 import { Logger } from "effect"
 
 export type DatabaseOperation = "query" | "write" | "batch"
+export type D1SuccessLogDecision = "none" | "info" | "warning"
+
+export const D1_SLOW_QUERY_MS = 100
+export const D1_HIGH_ROWS_READ = 1_000
+export const D1_HIGH_ROWS_WRITTEN = 100
+export const D1_HIGH_READ_AMPLIFICATION = 100
+export const D1_ROUTINE_SAMPLE_RATE = 0.05
 
 interface D1Metadata {
   readonly duration?: unknown
@@ -21,11 +28,22 @@ interface D1ResultLike {
 const nonNegativeNumber = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0
 
+export interface D1SuccessTelemetry extends Record<string, unknown> {
+  readonly event: "d1.query"
+  readonly "db.system": "cloudflare-d1"
+  readonly "db.query.name": string
+  readonly "db.operation": DatabaseOperation
+  readonly "db.rows_returned": number
+  readonly "db.rows_read": number
+  readonly "db.rows_written": number
+  readonly "db.duration_ms": number
+}
+
 export const d1SuccessTelemetry = (
   queryName: string,
   operation: DatabaseOperation,
   result: D1ResultLike
-) => {
+): D1SuccessTelemetry => {
   const region = result.meta?.served_by_region
   const primary = result.meta?.served_by_primary
   return {
@@ -55,6 +73,28 @@ export const d1FailureTelemetry = (
   "error.class": `d1_${operation}_failed`
 })
 
+export const classifyD1SuccessTelemetry = (
+  telemetry: D1SuccessTelemetry,
+  sample = Math.random()
+): D1SuccessLogDecision => {
+  const rowsRead = telemetry["db.rows_read"]
+  const rowsWritten = telemetry["db.rows_written"]
+  const rowsReturned = telemetry["db.rows_returned"]
+  const duration = telemetry["db.duration_ms"]
+  const amplification = rowsRead / Math.max(1, rowsReturned)
+
+  if (
+    duration >= D1_SLOW_QUERY_MS ||
+    rowsRead >= D1_HIGH_ROWS_READ ||
+    rowsWritten >= D1_HIGH_ROWS_WRITTEN ||
+    (rowsRead >= D1_HIGH_READ_AMPLIFICATION && amplification >= D1_HIGH_READ_AMPLIFICATION)
+  ) {
+    return "warning"
+  }
+
+  return sample < D1_ROUTINE_SAMPLE_RATE ? "info" : "none"
+}
+
 const isD1Telemetry = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" &&
   value !== null &&
@@ -67,6 +107,8 @@ const d1StructuredLogger = Logger.make(({ logLevel, message }) => {
     if (!isD1Telemetry(value)) continue
     if (logLevel === "Error" || logLevel === "Fatal") {
       console.error(value)
+    } else if (logLevel === "Warn") {
+      console.warn(value)
     } else {
       console.log(value)
     }

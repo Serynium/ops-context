@@ -1,5 +1,9 @@
 # Cloudflare Access is configured through Worker variables and Access policies,
 # not through local administrator passwords or application session secrets.
+# Runtime variables normally live in wrangler.jsonc or Cloudflare environments:
+# OPS_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
+# OPS_ACCESS_APP_AUD=<application audience>
+# OPS_ACCESS_MCP_AUD=<MCP application audience>
 VAPID_PUBLIC_KEY=REPLACE_WITH_PUBLIC_KEY
 VAPID_PRIVATE_JWK={"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."}
 VAPID_SUBJECT=mailto:you@example.com

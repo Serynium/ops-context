@@ -1,6 +1,7 @@
 node_modules/
 web/dist/
 .worker-dist/
+.worker-dist-no-cron/
 .dev.vars
 .env
 .wrangler/

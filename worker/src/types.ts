@@ -21,8 +21,9 @@ export interface Env {
 
   readonly OPS_BASE_URL?: string
   readonly OPS_APP_HOST?: string
-  readonly OPS_MCP_HOST?: string
-  readonly OPS_ACCESS_APP_AUD?: string
+readonly OPS_MCP_HOST?: string
+readonly OPS_ACCESS_TEAM_DOMAIN?: string
+readonly OPS_ACCESS_APP_AUD?: string
   readonly OPS_ACCESS_MCP_AUD?: string
   readonly OPS_RETENTION_DAYS?: string
   readonly OPS_PUSH_MAX_ATTEMPTS?: string

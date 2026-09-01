@@ -16,6 +16,12 @@ const config: ConfigService = {
   vapidSubject: "mailto:test@example.com"
 }
 
+const layer = () =>
+  Layer.mergeAll(
+    D1RepositoriesLive(env.DB),
+    Layer.succeed(AppConfig)(config)
+  )
+
 describe("scheduled retention", () => {
   beforeEach(async () => {
     await env.DB.batch([
@@ -45,10 +51,55 @@ describe("scheduled retention", () => {
   })
 
   it("prunes only expired events without any Queue dependency", async () => {
-    const result = await Effect.runPromise(runRetention.pipe(Effect.provide(
-      Layer.mergeAll(D1RepositoriesLive(env.DB), Layer.succeed(AppConfig)(config))
-    )))
-    expect(result).toEqual({ prunedEvents: 1 })
+    const result = await Effect.runPromise(
+      runRetention.pipe(Effect.provide(layer()))
+    )
+    expect(result).toEqual({
+      prunedEvents: 1,
+      batches: 1,
+      continuationRequired: false
+    })
+    const ids = await env.DB.prepare("SELECT id FROM events ORDER BY id").all<{ id: string }>()
+    expect(ids.results).toEqual([{ id: "evt_current" }])
+  })
+
+  it("uses bounded statements and continues across multiple batches", async () => {
+    const old = "2020-01-01T00:00:00.000Z"
+    await env.DB.prepare(
+      `WITH RECURSIVE sequence(value) AS (
+         SELECT 1
+         UNION ALL
+         SELECT value + 1 FROM sequence WHERE value < 500
+       )
+       INSERT INTO events
+       (id, external_id, project_id, source, type, level, title, body, fingerprint,
+        payload_json, actions_json, occurred_at, created_at, silence_id)
+       SELECT
+         'evt_batch_' || value,
+         NULL,
+         'prj_retention',
+         '',
+         '',
+         'info',
+         'Batch ' || value,
+         '',
+         '',
+         '{}',
+         '[]',
+         ?,
+         ?,
+         NULL
+       FROM sequence`
+    ).bind(old, old).run()
+
+    const result = await Effect.runPromise(
+      runRetention.pipe(Effect.provide(layer()))
+    )
+    expect(result).toEqual({
+      prunedEvents: 501,
+      batches: 2,
+      continuationRequired: false
+    })
     const ids = await env.DB.prepare("SELECT id FROM events ORDER BY id").all<{ id: string }>()
     expect(ids.results).toEqual([{ id: "evt_current" }])
   })

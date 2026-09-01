@@ -48,10 +48,6 @@
     ]
   },
 
-  "triggers": {
-    "crons": ["0 3 * * *"]
-  },
-
   "vars": {
     "OPS_BASE_URL": "https://app.ops.example.com",
     "OPS_APP_HOST": "app.ops.example.com",
@@ -59,7 +55,7 @@
     "OPS_ACCESS_TEAM_DOMAIN": "REPLACE_WITH_ACCESS_TEAM_DOMAIN",
     "OPS_ACCESS_APP_AUD": "REPLACE_WITH_APP_ACCESS_AUD",
     "OPS_ACCESS_MCP_AUD": "REPLACE_WITH_MCP_ACCESS_AUD",
-    "OPS_RETENTION_DAYS": "90",
+    "OPS_RETENTION_DAYS": "0",
     "OPS_PUSH_MAX_ATTEMPTS": "6"
   },
 

@@ -1,3 +1,10 @@
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  jwtVerify,
+  type JSONWebKeySet,
+  type JWTPayload
+} from "jose"
 import { Context, Effect, Layer } from "effect"
 import type { HttpServerRequest } from "effect/unstable/http/HttpServerRequest"
 import {
@@ -15,6 +22,7 @@ const ACCESS_KIND = "x-ops-access-kind"
 const ACCESS_SUBJECT = "x-ops-access-subject"
 const ACCESS_EMAIL = "x-ops-access-email"
 const ACCESS_NAME = "x-ops-access-name"
+const ACCESS_ASSERTION = "cf-access-jwt-assertion"
 
 const internalHeaders = [
   ACCESS_VERIFIED,
@@ -55,6 +63,17 @@ export interface ExecutionContextWithAccess {
   readonly access?: CloudflareAccessContext
 }
 
+export interface VerifiedAccessJwt {
+  readonly audience: string
+  readonly identity: CloudflareAccessIdentity | null
+}
+
+export type AccessJwtVerifier = (
+  token: string,
+  teamDomain: string,
+  audience: string
+) => Promise<VerifiedAccessJwt | null>
+
 const normalizedHost = (value: string | undefined): string =>
   (value ?? "").trim().toLowerCase()
 
@@ -66,6 +85,19 @@ const hostFromBaseUrl = (value: string | undefined): string => {
     return ""
   }
 }
+
+const normalizeTeamDomain = (value: string | undefined): string => {
+  const raw = (value ?? "").trim().toLowerCase()
+  if (!raw) return ""
+  try {
+    return new URL(raw.includes("://") ? raw : `https://${raw}`).host.toLowerCase()
+  } catch {
+    return ""
+  }
+}
+
+const issuerFor = (teamDomain: string): string =>
+  `https://${normalizeTeamDomain(teamDomain)}`
 
 const appHostFromEnv = (env: Env): string =>
   normalizedHost(env.OPS_APP_HOST) || hostFromBaseUrl(env.OPS_BASE_URL)
@@ -88,47 +120,175 @@ const audienceFor = (surface: AccessSurface, env: Env): string | undefined =>
 const recreateRequest = (request: Request, headers: Headers): Request =>
   new Request(request, { headers })
 
+const optionalClaim = (payload: JWTPayload, name: string): string | undefined => {
+  const value = payload[name]
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+const identityFromClaims = (payload: JWTPayload): CloudflareAccessIdentity | null => {
+  const sub = optionalClaim(payload, "sub")
+  const email = optionalClaim(payload, "email")
+  const name = optionalClaim(payload, "name")
+  const commonName = optionalClaim(payload, "common_name")
+
+  if (!sub && !email && !name && !commonName) return null
+  return {
+    ...(sub ? { id: sub, sub } : {}),
+    ...(email ? { email } : {}),
+    ...(name ? { name } : {}),
+    ...(commonName ? { common_name: commonName } : {})
+  }
+}
+
+type RemoteResolver = ReturnType<typeof createRemoteJWKSet>
+const remoteResolvers = new Map<string, RemoteResolver>()
+
+const resolverFor = (teamDomain: string): RemoteResolver => {
+  const normalized = normalizeTeamDomain(teamDomain)
+  const cached = remoteResolvers.get(normalized)
+  if (cached) return cached
+
+  const resolver = createRemoteJWKSet(
+    new URL(`${issuerFor(normalized)}/cdn-cgi/access/certs`),
+    {
+      cooldownDuration: 30_000,
+      cacheMaxAge: 6 * 60 * 60 * 1_000,
+      timeoutDuration: 5_000
+    }
+  )
+  remoteResolvers.set(normalized, resolver)
+  return resolver
+}
+
+const verifyWithResolver = async (
+  token: string,
+  teamDomain: string,
+  audience: string,
+  resolver: RemoteResolver
+): Promise<VerifiedAccessJwt | null> => {
+  const normalized = normalizeTeamDomain(teamDomain)
+  if (!normalized || !audience.trim()) return null
+
+  const { payload } = await jwtVerify(token, resolver, {
+    algorithms: ["RS256"],
+    issuer: issuerFor(normalized),
+    audience
+  })
+
+  if (payload.type !== "app") return null
+  return {
+    audience,
+    identity: identityFromClaims(payload)
+  }
+}
+
+export const verifyCloudflareAccessJwt: AccessJwtVerifier = (
+  token,
+  teamDomain,
+  audience
+) => verifyWithResolver(token, teamDomain, audience, resolverFor(teamDomain))
+
 /**
- * Converts Cloudflare's validated `ctx.access` identity into private headers
- * consumed by the Effect application. All caller-supplied copies of those
- * headers are removed first, so they are never a trust boundary by themselves.
+ * Test adapter that exercises the same signature and claim validation against
+ * an in-memory JWKS. Production always uses Cloudflare's remote certificate set.
  */
-export const attachCloudflareAccess = async (
+export const verifyCloudflareAccessJwtWithJwks = (
+  token: string,
+  teamDomain: string,
+  audience: string,
+  jwks: JSONWebKeySet
+): Promise<VerifiedAccessJwt | null> =>
+  verifyWithResolver(
+    token,
+    teamDomain,
+    audience,
+    createLocalJWKSet(jwks) as unknown as RemoteResolver
+  )
+
+const attachVerifiedIdentity = (
   request: Request,
-  env: Env,
-  context: ExecutionContextWithAccess
-): Promise<Request> => {
-  const headers = new Headers(request.headers)
-  const suppliedInternalHeader = internalHeaders.some((name) => headers.has(name))
-  for (const name of internalHeaders) headers.delete(name)
-
-  const surface = surfaceFor(request, env)
-  const access = context.access as CloudflareAccessContext | undefined
-  if (!surface || !access) {
-    return suppliedInternalHeader ? recreateRequest(request, headers) : request
-  }
-
-  const expectedAudience = audienceFor(surface, env)?.trim()
-  if (!expectedAudience || access.aud !== expectedAudience) {
-    return recreateRequest(request, headers)
-  }
-
-  const identity = await access.getIdentity().catch(() => null) as
-    CloudflareAccessIdentity | null
+  headers: Headers,
+  surface: AccessSurface,
+  audience: string,
+  identity: CloudflareAccessIdentity | null
+): Request => {
   const email = identity?.email?.trim()
   const name = identity?.name?.trim() || identity?.common_name?.trim()
-  const subject = identity?.id?.trim() || identity?.sub?.trim() || email || `service:${access.aud}`
+  const subject = identity?.id?.trim() ||
+    identity?.sub?.trim() ||
+    email ||
+    identity?.common_name?.trim() ||
+    `service:${audience}`
   const kind: AccessPrincipalKind = email ? "user" : "service-token"
 
   headers.set(ACCESS_VERIFIED, "1")
   headers.set(ACCESS_SURFACE, surface)
-  headers.set(ACCESS_AUDIENCE, access.aud)
+  headers.set(ACCESS_AUDIENCE, audience)
   headers.set(ACCESS_KIND, kind)
   headers.set(ACCESS_SUBJECT, subject)
   if (email) headers.set(ACCESS_EMAIL, email)
   if (name) headers.set(ACCESS_NAME, name)
 
   return recreateRequest(request, headers)
+}
+
+/**
+ * Converts a Cloudflare-validated identity into private headers consumed by the
+ * Effect application. `ctx.access` is the fast path for direct Worker requests.
+ * Workers Static Assets invoke the user Worker through a router that does not
+ * forward `ctx.access`, so the fallback verifies `Cf-Access-Jwt-Assertion`.
+ */
+export const attachCloudflareAccess = async (
+  request: Request,
+  env: Env,
+  context: ExecutionContextWithAccess,
+  verifyJwt: AccessJwtVerifier = verifyCloudflareAccessJwt
+): Promise<Request> => {
+  const headers = new Headers(request.headers)
+  const suppliedInternalHeader = internalHeaders.some((name) => headers.has(name))
+  for (const name of internalHeaders) headers.delete(name)
+
+  const assertion = headers.get(ACCESS_ASSERTION)?.trim()
+  headers.delete(ACCESS_ASSERTION)
+
+  const surface = surfaceFor(request, env)
+  const expectedAudience = audienceFor(surface ?? "app", env)?.trim()
+  if (!surface || !expectedAudience) {
+    return suppliedInternalHeader || assertion
+      ? recreateRequest(request, headers)
+      : request
+  }
+
+  const access = context.access as CloudflareAccessContext | undefined
+  if (access) {
+    if (access.aud !== expectedAudience) return recreateRequest(request, headers)
+    const identity = await access.getIdentity().catch(() => null) as
+      CloudflareAccessIdentity | null
+    return attachVerifiedIdentity(
+      request,
+      headers,
+      surface,
+      access.aud,
+      identity
+    )
+  }
+
+  const teamDomain = normalizeTeamDomain(env.OPS_ACCESS_TEAM_DOMAIN)
+  if (!assertion || !teamDomain) return recreateRequest(request, headers)
+
+  const verified = await verifyJwt(assertion, teamDomain, expectedAudience)
+    .catch(() => null)
+  if (!verified || verified.audience !== expectedAudience) {
+    return recreateRequest(request, headers)
+  }
+
+  return attachVerifiedIdentity(
+    request,
+    headers,
+    surface,
+    verified.audience,
+    verified.identity
+  )
 }
 
 // Backward-compatible name used by the Access contract tests and adapters.
