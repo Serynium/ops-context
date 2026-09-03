@@ -1,6 +1,6 @@
 # Error boundaries
 
-Ops Context represents expected failures as tagged domain, application, and
+Flarebox represents expected failures as tagged domain, application, and
 infrastructure values. These values never contain HTTP status codes or
 protocol-specific response objects.
 

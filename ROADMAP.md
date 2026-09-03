@@ -1,6 +1,6 @@
 # Roadmap
 
-Ops Context intentionally starts as a small operational event inbox rather than a full incident-management system.
+Flarebox intentionally starts as a small operational event inbox rather than a full incident-management system.
 
 ## Completed foundations
 
@@ -13,20 +13,10 @@ Ops Context intentionally starts as a small operational event inbox rather than 
 - Workers-runtime testing with real D1 migrations.
 - A measured materialized fast path for the default grouped inbox.
 
-## Near term
-
-- Scoped PWA credentials for background push-subscription renewal (#16).
-- Tagged domain/application errors and repository ports with runtime D1 row decoding (#9, #10).
-- D1 query cost instrumentation and hot-path consolidation (#11, #12, #17).
-- Queue-first event acceptance and removal of the remaining repair Cron (#14) are implemented.
-- Complete race, retry, crash-recovery, and idempotency integration tests (#8).
-
 ## Measurement-driven work
 
 These features should be implemented only when production measurements justify them:
 
-- D1 index tuning from query plans and rows-read/write metadata (#18).
-- FTS5 search instead of broad substring scans (#20).
 - D1 Sessions/read-replication evaluation retained primary-only reads pending production regional p95 evidence (#21; [ADR 0003](docs/decisions/0003-retain-primary-d1-reads.md)).
 - Splitting MCP or push delivery into separate Worker deployments (#22).
 

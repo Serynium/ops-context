@@ -1,4 +1,4 @@
-const CACHE = "ops-context-v3"
+const CACHE = "ops-context-v4"
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]
 const CREDENTIAL_DATABASE = "ops-context-pwa"
 const CREDENTIAL_STORE = "credentials"
@@ -105,7 +105,7 @@ const reportRenewalFailure = async () => {
   const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true })
   for (const client of windows) client.postMessage({ type: "push-renewal-failed" })
   await self.registration.showNotification("Push notifications need attention", {
-    body: "Open Ops Context and enable push notifications on this device again.",
+    body: "Open Flarebox and enable push notifications on this device again.",
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",
     tag: "ops-context-push-renewal-failed",
@@ -158,7 +158,7 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("push", (event) => {
   let payload = {
-    title: "Ops Context",
+    title: "Flarebox",
     body: "Something happened in one of your systems.",
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",

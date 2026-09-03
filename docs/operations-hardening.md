@@ -5,9 +5,9 @@
 Use three hostnames with one Worker deployment:
 
 ```text
-ingest.ops.example.com  public network, project bearer key required
-app.ops.example.com     Cloudflare Access user identity required
-mcp.ops.example.com     Cloudflare Access user or service token required
+ingest.flarebox.example.com  public network, project bearer key required
+app.flarebox.example.com     Cloudflare Access user identity required
+mcp.flarebox.example.com     Cloudflare Access user or service token required
 ```
 
 Workers Static Assets run in front of the user Worker. The router does not always
@@ -56,7 +56,7 @@ retries in `wrangler.jsonc`.
 
 ## Queue payload billing
 
-Cloudflare bills Queue payloads in 64,000-byte chunks. Ops Context caps the
+Cloudflare bills Queue payloads in 64,000-byte chunks. Flarebox caps the
 complete encoded `IngestEvent` command at 63,800 bytes and the normalized event
 at 60,000 bytes, keeping ordinary ingestion inside one billing chunk.
 

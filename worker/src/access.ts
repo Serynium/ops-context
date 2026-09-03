@@ -314,9 +314,6 @@ export const attachCloudflareAccess = async (
   )
 }
 
-// Backward-compatible name used by the Access contract tests and adapters.
-export const attachAccessIdentity = attachCloudflareAccess
-
 interface HeaderView {
   readonly get: (name: string) => string | undefined
   readonly host: string

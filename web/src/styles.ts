@@ -16,16 +16,6 @@ export const styles = stylex.create({
 	mark: {
 		width: 22,
 		height: 22,
-		borderRadius: 999,
-		backgroundColor: "#7c83e8",
-		display: "grid",
-		placeItems: "center",
-	},
-	markInner: {
-		width: 8,
-		height: 8,
-		borderRadius: 999,
-		backgroundColor: "#fdfdfe",
 	},
 	wordmark: {
 		fontSize: 20,

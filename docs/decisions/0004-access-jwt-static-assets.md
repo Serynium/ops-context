@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-Ops Context deploys the PWA through Workers Static Assets and routes `/api/*`,
+Flarebox deploys the PWA through Workers Static Assets and routes `/api/*`,
 `/health`, and `/mcp` through the Worker. Cloudflare Access can expose a
 validated identity through `ctx.access` when a request invokes a Worker
 directly. The Static Assets router does not always forward that runtime context,

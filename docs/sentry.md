@@ -1,21 +1,21 @@
 # Sentry SDK ingestion
 
-Ops Context accepts error events from server-side Sentry SDKs through Sentry's envelope transport. Existing applications can keep their Sentry integration and change only the DSN.
+Flarebox accepts error events from server-side Sentry SDKs through Sentry's envelope transport. Existing applications can keep their Sentry integration and change only the DSN.
 
 ## Configure the DSN
 
-Use the Ops Context origin as the DSN host. Sentry SDKs restrict DSN public keys
+Use the Flarebox origin as the DSN host. Sentry SDKs restrict DSN public keys
 to word characters, so hex-encode the complete project API key and prefix it
 with `ops_sentry_`:
 
 ```text
-SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@ops.example.com/1
+SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@flarebox.example.com/1
 ```
 
 The Worker decodes the DSN key before normal project-key authentication. The
 trailing project id is required by the Sentry DSN format but is ignored.
 
-> Keep this DSN server-side. A normal Sentry DSN public key is designed to be public, but this DSN contains a write-capable Ops Context project API key. Do not embed it in browser bundles, mobile applications, or other untrusted clients.
+> Keep this DSN server-side. A normal Sentry DSN public key is designed to be public, but this DSN contains a write-capable Flarebox project API key. Do not embed it in browser bundles, mobile applications, or other untrusted clients.
 
 Most SDKs read `SENTRY_DSN` directly. SDK-specific configuration can use the same DSN string.
 
@@ -38,9 +38,9 @@ The Worker accepts identity, gzip, and deflate request bodies. It limits the req
 
 ## Event mapping
 
-Each Sentry `event` envelope item becomes a normal Ops Context event and enters the same Queue-first pipeline as `POST /api/v1/events`. Envelope acceptance therefore precedes eventual D1 visibility; the `IngestEvent` consumer preserves recursive redaction, silence matching, fingerprint grouping, durable push jobs, notification thresholds, and Queue delivery.
+Each Sentry `event` envelope item becomes a normal Flarebox event and enters the same Queue-first pipeline as `POST /api/v1/events`. Envelope acceptance therefore precedes eventual D1 visibility; the `IngestEvent` consumer preserves recursive redaction, silence matching, fingerprint grouping, durable push jobs, notification thresholds, and Queue delivery.
 
-| Sentry field | Ops Context field |
+| Sentry field | Flarebox field |
 |---|---|
 | exception type and value | one-line `title`, such as `ValueError: invalid card` |
 | formatted message | message-event `title` |
@@ -67,7 +67,7 @@ body='{"event_id":"0123456789abcdef0123456789abcdef"}
 {"type":"event"}
 {"event_id":"0123456789abcdef0123456789abcdef","level":"error","message":"checkout failed"}'
 
-curl -i https://ops.example.com/api/1/envelope/ \
+curl -i https://flarebox.example.com/api/1/envelope/ \
   -H 'Content-Type: application/x-sentry-envelope' \
   -H 'X-Sentry-Auth: Sentry sentry_version=7,sentry_key=ops_proj_REPLACE_ME' \
   --data-binary "$body"

@@ -201,13 +201,13 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
       const handler = createMcpHandler(() => {
         const server = new McpServer(
           {
-            name: "ops-context",
-            title: "Ops Context",
+            name: "flarebox",
+            title: "Flarebox",
             version: "0.3.0"
           },
           {
             instructions:
-              "Ops Context stores operational events from applications. These tools are read-only. " +
+              "Flarebox stores operational events from applications. These tools are read-only. " +
               "Events belong to projects, and repeated fingerprints are occurrences of the same event within a project. " +
               "Start with list_projects, then list_events or search_events, and use get_event for complete structured context."
           }

@@ -1,6 +1,6 @@
 # Web Push delivery lifecycle
 
-Ops Context accepts events into Cloudflare Queue before touching D1. The `IngestEvent` consumer idempotently persists events/jobs and publishes `DeliverPush`; D1 is then the durable source of truth for active attempts, dead jobs, and delivery outcomes. Successful jobs are deleted atomically with their delivery insert. Cloudflare Queue is the only ordinary retry scheduler.
+Flarebox accepts events into Cloudflare Queue before touching D1. The `IngestEvent` consumer idempotently persists events/jobs and publishes `DeliverPush`; D1 is then the durable source of truth for active attempts, dead jobs, and delivery outcomes. Successful jobs are deleted atomically with their delivery insert. Cloudflare Queue is the only ordinary retry scheduler.
 
 ## State machine
 
@@ -91,7 +91,7 @@ Removing the five-minute repair schedule eliminates 288 periodic Worker invocati
 
 Web Push delivery is independent from interactive administrator authentication. Cloudflare Access protects the PWA and private APIs, while Queue consumers use internal Worker bindings and durable D1 job state. No administrator password, cookie, or Access browser session is involved in delivery.
 
-Issue #16 adds a narrowly scoped credential for service-worker subscription renewal so that background renewal also does not depend on an active interactive Access session.
+Service-worker subscription renewal uses a narrowly scoped installation credential, so background renewal does not depend on an active interactive Access session.
 
 ## Idempotency
 

@@ -12,8 +12,6 @@ export interface EventGroup {
   readonly last_seen: string
 }
 
-export type { DeliverPushCommand, IngestEventCommand, QueueCommand } from "./queue-contract.js"
-
 export interface Env {
   readonly DB: D1Database
   readonly PUSH_QUEUE: Queue<import("./queue-contract.js").QueueCommand>

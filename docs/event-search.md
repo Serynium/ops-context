@@ -1,6 +1,6 @@
 # Event search
 
-Ops Context uses a measured SQLite FTS5 index for event search. Exact project,
+Flarebox uses a measured SQLite FTS5 index for event search. Exact project,
 level, source, fingerprint, time, silence, ordering, and cursor constraints still
 run against the normal `events` table and its indexes; FTS5 only selects matching
 event IDs.

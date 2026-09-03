@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted on 2026-08-31. Revisit when a trigger below is sustained and issues #8, #9,
-and #10 have established the required test and application boundaries.
+Accepted on 2026-08-31. The test and application-boundary prerequisites are now
+complete; revisit when a trigger below is sustained.
 
 ## Context
 
@@ -14,12 +14,10 @@ and concurrency profiles, so separate deployments could eventually improve isola
 They would also introduce multiple configurations, coordinated releases, shared D1
 schema compatibility, more dashboards, and more rollback paths.
 
-Issue #22 requires measured evidence before introducing that operational boundary.
-It also depends on the delivery integration tests in #8, repository ports in #9, and
-protocol-independent errors in #10. Issue state was checked against `main`: #8 is
-only partially complete, while application modules still call the generic `Database`
-service and use HTTP-shaped `AppError` values, confirming that #9 and #10 are not yet
-implemented.
+Issue #22 required measured evidence before introducing that operational boundary.
+At decision time, it also depended on unfinished delivery integration tests,
+repository ports, and protocol-independent errors. Those prerequisites have since
+landed; the measurement requirement remains.
 
 ## Current evidence
 
@@ -81,15 +79,11 @@ microservices.
 
 Keep option 1. The optional MCP dependency is material in the raw bundle, but there is
 no measured startup, CPU, reliability, backlog, security-policy, ownership, or release
-problem that offsets the operational cost of a second deployment. More importantly,
-the shared repository and error boundaries required for a safe split are not complete.
+problem that offsets the operational cost of a second deployment.
 
-Continue improving internal module boundaries. Shared application ports, tagged
-errors, Queue message types, and storage schemas must remain dependency-free from
-HTTP, MCP, Wrangler, and Web Push adapters. Issue #9 should introduce narrow
-use-case-oriented repository ports rather than a generic shared CRUD package. Until
-that work lands, extracting a deployment would copy or reach through implementation
-details and create circular coupling.
+Shared application ports, tagged errors, Queue message types, and storage schemas must
+remain dependency-free from HTTP, MCP, Wrangler, and Web Push adapters. The repository
+ports are narrow and use-case-oriented rather than a generic shared CRUD package.
 
 Because no second deployment is introduced:
 
@@ -103,8 +97,7 @@ Because no second deployment is introduced:
 ## Requirements for a future split
 
 A replacement ADR must include measured before/after bundles and production profile
-metrics. It must not be accepted until #8, #9, and #10 are complete and the following
-controls exist.
+metrics. The following controls must also exist.
 
 ### Bindings and secrets
 
@@ -156,4 +149,3 @@ not require a D1 rollback.
 The repository now has Workers-runtime D1/Queue integration tests, decoded repository ports, tagged protocol-independent errors, Queue-first ingestion, FTS, and a grouped-event read model.
 
 The Static Assets router does not always forward `ctx.access`. This is not a reason to split the deployment: the Worker now verifies the forwarded Access JWT against Cloudflare's JWKS when the direct runtime context is absent. The single-Worker decision remains accepted. Reconsider it only when production measurements or security policy require an independent deployment boundary.
-

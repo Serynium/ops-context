@@ -5,7 +5,7 @@ import { createContext } from "../../context";
 
 export type TableVariant = "default" | "card";
 const TableContext = createContext<TableVariant>("default");
-const TableSectionContext = createContext<"body" | "footer" | "other">(
+const TableSectionContext = createContext<"body" | "other">(
   "other",
 );
 
@@ -38,7 +38,6 @@ const styles = stylex.create({
     borderBottomColor: "rgba(0, 0, 0, 0.08)",
   },
   rowBody: { ":last-child": { borderBottomWidth: 0 } },
-  rowFooter: { ":last-child": { borderBottomWidth: 0 } },
   rowDefault: {
     ":hover": { backgroundColor: "rgba(0, 0, 0, 0.02)" },
   },
@@ -108,17 +107,6 @@ const styles = stylex.create({
       borderEndEndRadius: "var(--table-cell-end-radius)",
     },
   },
-  cellFooter: { paddingBlock: 14 },
-  footer: {
-    borderTopWidth: 1,
-    borderTopStyle: "solid",
-    borderTopColor: "rgba(0, 0, 0, 0.08)",
-    backgroundColor: "rgba(0, 0, 0, 0.02)",
-    fontWeight: 500,
-  },
-  footerCard: { borderTopWidth: 0, backgroundColor: "transparent" },
-  caption: { marginTop: 16, color: "#686868", fontSize: 14 },
-  captionCard: { marginBlock: 16 },
 });
 
 const classes = (...values: Array<string | undefined>) =>
@@ -184,25 +172,6 @@ export function TableBody({ className, ...props }: ComponentProps<"tbody">) {
   );
 }
 
-export function TableFooter({ className, ...props }: ComponentProps<"tfoot">) {
-  const variant = useContext(TableContext);
-  return (
-    <TableSectionContext.Provider value="footer">
-      <tfoot
-        {...props}
-        className={classes(
-          stylex.props(
-            styles.footer,
-            variant === "card" && styles.footerCard,
-          ).className,
-          className,
-        )}
-        data-slot="table-footer"
-      />
-    </TableSectionContext.Provider>
-  );
-}
-
 export function TableRow({
   className,
   hoverable = true,
@@ -217,7 +186,6 @@ export function TableRow({
         stylex.props(
           styles.row,
           section === "body" && styles.rowBody,
-          section === "footer" && styles.rowFooter,
           variant === "default" && hoverable && styles.rowDefault,
           variant === "card" && section === "body" && styles.rowCard,
           variant === "card" &&
@@ -256,31 +224,10 @@ export function TableCell({ className, ...props }: ComponentProps<"td">) {
         stylex.props(
           styles.cell,
           variant === "card" && styles.cellCard,
-          section === "footer" && styles.cellFooter,
         ).className,
         className,
       )}
       data-slot="table-cell"
-    />
-  );
-}
-
-export function TableCaption({
-  className,
-  ...props
-}: ComponentProps<"caption">) {
-  const variant = useContext(TableContext);
-  return (
-    <caption
-      {...props}
-      className={classes(
-        stylex.props(
-          styles.caption,
-          variant === "card" && styles.captionCard,
-        ).className,
-        className,
-      )}
-      data-slot="table-caption"
     />
   );
 }

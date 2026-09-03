@@ -11,7 +11,7 @@ authenticated HTTP acceptance, Queue persistence, subscription fan-out,
 deferred retry, storage amplification, and bounded retention.
 
 The primary Queue uses eight concurrent consumers. The sustained 1,000-event
-local benchmark improved from about 329 events/s at four consumers to 362
+local benchmark improved from about 329 events/s at four consumers to 361
 events/s at eight; sixteen consumers fell back to about 335 events/s from D1
 contention. Keep the dead-letter consumer at one to favor deterministic repair.
 
@@ -43,8 +43,8 @@ deliveries. Successful
 jobs are deleted atomically after their delivery row is recorded; dead and
 legacy sent jobs are retained for seven days. Successful delivery history for
 events older than seven days is removed; failed history follows event retention.
-Active jobs are not affected. With compact IDs, the local benchmark reclaimed about 315
-bytes per terminal job, or 3.15 KB/event with ten subscriptions, at one D1
+Active jobs are not affected. With compact IDs, the local benchmark reclaimed about 287
+bytes per terminal job, or 2.87 KB/event with ten subscriptions, at one D1
 row-write/job. Successful jobs now reclaim that space immediately and avoid the
 later cleanup write.
 
@@ -52,13 +52,16 @@ New opaque IDs and deterministic external-event IDs encode their 128-bit values
 as 22 base64url characters instead of 32 hexadecimal characters. Existing IDs
 remain valid, avoiding a storage-heavy table rewrite while shortening each new
 ID by 10 bytes. Contentless FTS and compact integer-millisecond time indexes
-reduced the 10,000-event fixture from 10.6 to 8.9 MiB, raising projected 10 GB
-capacity from 9.24 to 11.05 million events. RFC 3339 values remain the API and
-durable-row representation; generated virtual integers replace repeated text
-timestamps only inside hot ordering indexes.
+reduced the narrow 10,000-event fixture from 10.6 to 8.9 MiB. RFC 3339 values
+remain the API and durable-row representation; generated virtual integers
+replace repeated text timestamps only inside hot ordering indexes. The latest
+comprehensive 1,000,000-event fixture measured 902.8 MiB total, or 946.2
+database bytes/event, projecting about 528,449 events at the Free tier's 500 MB
+per-database limit and 10,568,995 at the Paid tier's 10 GB limit.
+
 On the noisy 100-event, ten-subscription ingestion fixture, the atomic five-minute
 fingerprint window collapsed 1,000 potential jobs to 100 and reduced fan-out
-storage from 3,973 to 1,638 bytes/event. A delivery row fell from 299 to about
+storage from 3,973 to 1,761 bytes/event. A delivery row fell from 299 to about
 123 database bytes. Delivery IDs use SQLite's rowid-backed
 `INTEGER PRIMARY KEY` while the API casts them to opaque strings. Removing the
 separate text-primary-key and global time indexes cut delivery creation from

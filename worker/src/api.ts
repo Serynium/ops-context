@@ -260,13 +260,13 @@ export class AdminApiGroup extends HttpApiGroup.make("admin")
   .prefix("/api/v1")
 {}
 
-export class OpsApi extends HttpApi.make("ops-context")
+export class OpsApi extends HttpApi.make("flarebox")
   .add(HealthApiGroup)
   .add(PublicApiGroup)
   .add(IngestApiGroup)
   .add(AdminApiGroup)
   .annotateMerge(OpenApi.annotations({
-    title: "Ops Context API",
+    title: "Flarebox API",
     version: "0.3.0",
     description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and Cloudflare Access administration."
   }))

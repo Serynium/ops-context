@@ -33,7 +33,7 @@ export const systemStatus = Effect.fn("System.status")(function*(origin: string)
 
   return {
     version: "0.3.0",
-    server: "ops-context/effect-v4/cloudflare-workers",
+    server: "flarebox/effect-v4/cloudflare-workers",
     database: "Cloudflare D1 / Effect SQL",
     base_url: config.baseUrl ?? origin,
     uptime_seconds: null,
@@ -76,10 +76,10 @@ export const testNotification = Effect.fn("System.testNotification")(function*(
     config.vapidPublicKey && config.vapidPrivateJwk && config.vapidSubject
   )
   const event = yield* enqueueEventForProject(selected, {
-    title: "Ops Context is connected",
+    title: "Flarebox is connected",
     body: "Web Push delivery is working.",
     level: "success",
-    source: "ops-context",
+    source: "flarebox",
     type: "test",
     // Test clicks must not be suppressed by incident deduplication.
     actions: [{

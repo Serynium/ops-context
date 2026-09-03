@@ -75,10 +75,8 @@ export function RootLayout() {
       <Page>
         <header {...stylex.props(styles.header)}>
           <Link to="/" {...stylex.props(styles.brand)}>
-            <span {...stylex.props(styles.mark)}>
-              <span {...stylex.props(styles.markInner)} />
-            </span>
-            <span {...stylex.props(styles.wordmark)}>Ops Context</span>
+            <img src="/logo.svg" alt="" {...stylex.props(styles.mark)} />
+            <span {...stylex.props(styles.wordmark)}>Flarebox</span>
           </Link>
           <div {...stylex.props(styles.headerRight)}>
             <div {...stylex.props(styles.desktopOnly)}>
@@ -126,7 +124,7 @@ export function RootLayout() {
           <Outlet />
         </main>
         <footer {...stylex.props(styles.footer)}>
-          Ops Context · self-hosted ·{" "}
+          Flarebox · self-hosted ·{" "}
           <Link to="/settings" {...stylex.props(styles.link)}>
             status
           </Link>

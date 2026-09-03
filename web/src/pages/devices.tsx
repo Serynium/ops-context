@@ -144,7 +144,7 @@ export function DevicesPage() {
       {iphoneNeedsInstall && (
         <Alert variant="warning">
           <AlertDescription>
-            On iOS, open Share → Add to Home Screen, launch Ops Context from the
+            On iOS, open Share → Add to Home Screen, launch Flarebox from the
             icon, then enable push.
           </AlertDescription>
         </Alert>

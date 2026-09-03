@@ -1,6 +1,6 @@
 # Cloudflare Access administration
 
-Ops Context delegates private-surface authentication to Cloudflare Access. The Worker does not maintain administrator passwords, Basic authentication, session cookies, or D1 administrator sessions.
+Flarebox delegates private-surface authentication to Cloudflare Access. The Worker does not maintain administrator passwords, Basic authentication, session cookies, or D1 administrator sessions.
 
 ## Trust boundary
 
@@ -19,9 +19,9 @@ Project bearer keys remain valid only for public event ingestion and are rejecte
 
 | Host | Access policy | Purpose |
 |---|---|---|
-| `ingest.ops.example.com` | Public network access | Event ingestion authenticated by project keys |
-| `app.ops.example.com` | Human-user Access policy | PWA and administrator API |
-| `mcp.ops.example.com` | Human and/or service-token Access policy | Read-only MCP endpoint |
+| `ingest.flarebox.example.com` | Public network access | Event ingestion authenticated by project keys |
+| `app.flarebox.example.com` | Human-user Access policy | PWA and administrator API |
+| `mcp.flarebox.example.com` | Human and/or service-token Access policy | Read-only MCP endpoint |
 
 Do not expose administrator or MCP routes through an unprotected `workers.dev` hostname. Disable the route for production or ensure it is not reachable outside an equivalent Access policy.
 
@@ -32,10 +32,10 @@ Configure the following non-secret variables in `wrangler.jsonc`:
 ```jsonc
 {
   "vars": {
-    "OPS_BASE_URL": "https://app.ops.example.com",
-    "OPS_APP_HOST": "app.ops.example.com",
+    "OPS_BASE_URL": "https://app.flarebox.example.com",
+    "OPS_APP_HOST": "app.flarebox.example.com",
     "OPS_ACCESS_APP_AUD": "<APP_ACCESS_AUDIENCE>",
-    "OPS_MCP_HOST": "mcp.ops.example.com",
+    "OPS_MCP_HOST": "mcp.flarebox.example.com",
     "OPS_ACCESS_MCP_AUD": "<MCP_ACCESS_AUDIENCE>",
     "OPS_RETENTION_DAYS": "90",
     "OPS_PUSH_MAX_ATTEMPTS": "6"
@@ -49,16 +49,16 @@ The audience values come from the corresponding Access applications. Keep separa
 
 ### Application/PWA
 
-Create a self-hosted Access application for `app.ops.example.com/*` and allow only intended operators. Require your chosen identity provider and MFA policy. The interactive app accepts only a user identity containing an email address; service tokens are rejected.
+Create a self-hosted Access application for `app.flarebox.example.com/*` and allow only intended operators. Require your chosen identity provider and MFA policy. The interactive app accepts only a user identity containing an email address; service tokens are rejected.
 
 ### MCP
 
-Create a second self-hosted Access application for `mcp.ops.example.com/mcp`. It may allow:
+Create a second self-hosted Access application for `mcp.flarebox.example.com/mcp`. It may allow:
 
 - interactive users; and/or
 - Access service tokens for non-browser MCP clients.
 
-MCP is still disabled by default in Ops Context settings. Both the Access policy and the application setting must allow the request.
+MCP is still disabled by default in Flarebox settings. Both the Access policy and the application setting must allow the request.
 
 ### Public ingestion
 

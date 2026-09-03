@@ -1,9 +1,9 @@
 {
-  "name": "ops-context",
+  "name": "flarebox",
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "A tiny operational event inbox and PWA Web Push service on Cloudflare, built with Effect v4.",
+  "description": "A tiny self-hosted notification inbox for developers, powered by Cloudflare and Web Push.",
   "license": "MIT",
   "scripts": {
     "dev": "wrangler dev",

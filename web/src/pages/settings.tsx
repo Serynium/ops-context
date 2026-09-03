@@ -169,7 +169,7 @@ export function SettingsPage() {
             <Alert variant="warning">
               <AlertDescription>
                 Pushes are stored but not sent. Configure the Web Push VAPID
-                environment variables and redeploy Ops Context.
+                environment variables and redeploy Flarebox.
               </AlertDescription>
             </Alert>
           )}

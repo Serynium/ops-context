@@ -2,11 +2,11 @@
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability involving authentication bypass, credential exposure, Web Push encryption, D1 data access, or event redaction. Contact the repository owner privately and include reproduction steps, affected routes, expected impact, and any proposed mitigation.
+Do not open a public issue for a suspected vulnerability involving authentication bypass, credential exposure, Web Push encryption, D1 data access, or event redaction. [Report it privately through GitHub Security Advisories](https://github.com/Serynium/ops-context/security/advisories/new) and include reproduction steps, affected routes, expected impact, and any proposed mitigation.
 
 ## Authentication boundaries
 
-Ops Context has two intentionally separate credential classes.
+Flarebox has two intentionally separate credential classes.
 
 ### Project ingestion keys
 
@@ -33,9 +33,9 @@ See [docs/cloudflare-access.md](docs/cloudflare-access.md).
 Use separate hosts:
 
 ```text
-ingest.ops.example.com  public event ingestion with project keys
-app.ops.example.com     Access-protected PWA and administrator API
-mcp.ops.example.com     Access-protected MCP endpoint
+ingest.flarebox.example.com  public event ingestion with project keys
+app.flarebox.example.com     Access-protected PWA and administrator API
+mcp.flarebox.example.com     Access-protected MCP endpoint
 ```
 
 Disable or equivalently protect the production `workers.dev` route so it cannot bypass the Access applications.
@@ -50,7 +50,7 @@ VAPID_PUBLIC_KEY
 VAPID_SUBJECT
 ```
 
-Cloudflare Access service-token secrets belong in the MCP client or deployment secret store, not in Ops Context application settings or source control.
+Cloudflare Access service-token secrets belong in the MCP client or deployment secret store, not in Flarebox application settings or source control.
 
 Do not commit project API keys, D1 exports containing operational data, push-subscription encryption keys, Access service-token secrets, or generated `.dev.vars` files.
 
@@ -62,7 +62,7 @@ PWA renewal credentials are installation-scoped bearer credentials stored raw on
 
 ## Data handling
 
-Ops Context applies recursive sensitive-key redaction before storing event context. Redaction is defense in depth, not a substitute for avoiding secrets in event payloads.
+Flarebox applies recursive sensitive-key redaction before storing event context. Redaction is defense in depth, not a substitute for avoiding secrets in event payloads.
 
 Use least-privilege project keys, configure retention, and review custom redaction keys. Action URLs are displayed to operators and must not contain reusable credentials.
 

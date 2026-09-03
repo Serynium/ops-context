@@ -1,6 +1,6 @@
 {
-  "name": "Ops Context",
-  "short_name": "Ops Context",
+  "name": "Flarebox",
+  "short_name": "Flarebox",
   "description": "A tiny operational event inbox with native Web Push notifications.",
   "id": "/",
   "start_url": "/",

@@ -233,7 +233,6 @@ export const CreateEventInputSchema = Schema.Struct({
 })
 
 export type CreateEventInput = typeof CreateEventInputSchema.Type
-export type EventActionInput = typeof EventActionInputSchema.Type
 
 const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1()
 

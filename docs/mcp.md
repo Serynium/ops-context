@@ -1,9 +1,9 @@
 # Read-only MCP endpoint
 
-Ops Context exposes an optional Model Context Protocol endpoint at:
+Flarebox exposes an optional Model Context Protocol endpoint at:
 
 ```text
-https://mcp.ops.example.com/mcp
+https://mcp.flarebox.example.com/mcp
 ```
 
 It uses Streamable HTTP through the official `@modelcontextprotocol/server` TypeScript SDK. The MCP adapter is wrapped by an Effect service and reuses the same project, event, settings, and D1 capabilities as the HTTP API.
@@ -28,7 +28,7 @@ MCP is protected only by Cloudflare Access.
 Use a dedicated Access application for the MCP hostname and configure:
 
 ```text
-OPS_MCP_HOST=mcp.ops.example.com
+OPS_MCP_HOST=mcp.flarebox.example.com
 OPS_ACCESS_MCP_AUD=<MCP_ACCESS_AUDIENCE>
 ```
 
@@ -89,12 +89,12 @@ Conceptual configuration:
 ```json
 {
   "mcpServers": {
-    "ops-context": {
+    "flarebox": {
       "type": "streamable-http",
-      "url": "https://mcp.ops.example.com/mcp",
+      "url": "https://mcp.flarebox.example.com/mcp",
       "headers": {
-        "CF-Access-Client-Id": "${OPS_CONTEXT_ACCESS_CLIENT_ID}",
-        "CF-Access-Client-Secret": "${OPS_CONTEXT_ACCESS_CLIENT_SECRET}"
+        "CF-Access-Client-Id": "${FLAREBOX_ACCESS_CLIENT_ID}",
+        "CF-Access-Client-Secret": "${FLAREBOX_ACCESS_CLIENT_SECRET}"
       }
     }
   }

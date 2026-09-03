@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-31
-- Decision owners: Ops Context maintainers
+- Decision owners: Flarebox maintainers
 - Supersedes: none
 
 ## Context
@@ -13,7 +13,7 @@ sequential consistency: writes are forwarded to the primary, later reads in that
 session see those writes, and a bookmark can continue the consistency position in a
 new request.
 
-Ops Context has geographically movable administrator and MCP read paths, but it has
+Flarebox has geographically movable administrator and MCP read paths, but it has
 no production traffic or regional latency history yet. Event ingestion, Queue
 consumption, delivery state, retention, and all mutations require the authoritative
 write path. Administrator event creation/test flows require read-after-write, while

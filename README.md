@@ -1,63 +1,75 @@
-# Ops Context
+<p align="center">
+  <img src="web/public/logo.svg" width="160" alt="Flarebox logo">
+</p>
 
-A compact operational event inbox with encrypted PWA push notifications, built on Cloudflare and Effect v4.
+<h1 align="center">Flarebox</h1>
 
-Ops Context is the Cloudflare + Effect interpretation of the same idea behind Boop: an application posts an operational event, the event is stored in a focused inbox, and enrolled browser installations receive native notifications. There is no Slack workspace, Telegram bot, native mobile binary, or always-running server to operate.
+<p align="center">
+  <img src="https://github.com/Serynium/ops-context/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <img src="https://img.shields.io/github/license/Serynium/ops-context" alt="License">
+</p>
 
-## What is implemented
+A tiny, self-hosted notification inbox for developers. Something happened in one of your apps; Flarebox tells you on every enrolled browser.
 
-- Schema-first Effect v4 HTTP API using `HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, tagged errors, services, Layers, and reusable managed runtimes.
-- Cloudflare D1 persistence with atomic event and durable push-job batches.
-- Named D1 query telemetry for duration, rows returned, rows read, and rows written, without SQL parameters or payload values. See [D1 query observability](docs/d1-observability.md).
-- Primary-only D1 reads retained after a Sessions/read-replication prototype; adoption is gated on production regional and tail-latency evidence. See [ADR 0003](docs/decisions/0003-retain-primary-d1-reads.md).
-- Measured FTS5 event search with documented token, phrase, prefix, redaction, maintenance, and rebuild behavior. See [Event search](docs/event-search.md).
-- Project-scoped API keys. Only SHA-256 hashes are stored, and newly generated keys are shown once.
-- Event ingestion with levels, source, type, fingerprint, external-id idempotency, structured context, recursive sensitive-key redaction, and bounded fields.
-- Drop-in Sentry SDK ingestion through the modern envelope endpoint, with compressed bodies, Sentry grouping fingerprints, and the same event creation and notification pipeline.
-- Up to three validated event actions, rendered in event details and encrypted Web Push notifications.
-- Fingerprint grouping scoped to each project, including occurrence count, first seen, last seen, and occurrence drill-down.
-- Cursor pagination and filters for project, level, source, fingerprint, search text, RFC 3339 time ranges, grouped state, and silenced state.
-- PWA event export through plain-text copy, sectioned Markdown for coding/operations agents, and the Web Share API.
-- Project CRUD, notification thresholds, enable/disable controls, API-key rotation, and test events.
-- Encrypted standards-based Web Push using VAPID and `@pushforge/builder`, compatible with Cloudflare Workers.
-- Installable PWA with an offline shell, push-subscription management, notification action buttons, tap-through, and iOS Home Screen guidance.
-- Queue-first event acceptance, durable push jobs, leases, bounded Queue-owned retries, terminal dead-letter outcomes, and expired-subscription disabling.
-- Silence rules by fingerprint, title, or source, including project-specific and global rules.
-- Optional read-only MCP Streamable HTTP endpoint using the official `@modelcontextprotocol/server` TypeScript SDK.
-- Cloudflare Access administrator identity, same-origin checks, retention settings, and optional 15-minute bounded retention.
-- Static PWA assets served through Workers Static Assets.
+One Cloudflare Worker, one D1 database, and standards-based Web Push. There is no native app, Slack workspace, Telegram bot, hosted relay, or always-running server to operate.
+
+```bash
+curl https://flarebox.example.com/api/v1/events \
+  -H "Authorization: Bearer ops_proj_REPLACE_ME" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Backup complete","level":"success"}'
+```
+
+Flarebox is the Cloudflare + Effect interpretation of the idea behind [Boop](https://github.com/chrisgreg/boop): an application posts an operational event, the event is stored in a focused inbox, and enrolled browser installations receive native notifications.
+
+## Features
+
+- Receive operational events through a small JSON API or an existing server-side Sentry SDK.
+- Browse, search, filter, group, silence, and export events from an installable PWA.
+- Send encrypted Web Push notifications, including up to three event action links.
+- Isolate event sources with project-scoped API keys, notification thresholds, and key rotation.
+- Redact sensitive context before durable processing and store only hashed credentials.
+- Preserve accepted events with Queue-backed ingestion, idempotency, retries, and dead-letter recovery.
+- Give coding and operations agents optional read-only access through five MCP tools.
+- Self-host the entire service on one Cloudflare Worker, one Queue, and one D1 database.
 
 The repository is production-oriented but remains pre-1.0. See [ROADMAP.md](ROADMAP.md) for remaining hardening work and [CHANGELOG.md](CHANGELOG.md) for release details.
 
+## Capacity and Cloudflare tiers
+
+Current Cloudflare limits as of **September 3, 2026**:
+
+| Limit | Workers Free | Workers Paid |
+| --- | ---: | ---: |
+| Worker requests | 100,000/day | 10 million/month included, then metered |
+| HTTP CPU per invocation | 10 ms | 30 seconds default, configurable up to 5 minutes |
+| D1 database size | 500 MB | 10 GB |
+| Total D1 storage | 5 GB/account | 1 TB/account |
+| D1 rows read | 5 million/day | 25 billion/month included, then metered |
+| D1 rows written | 100,000/day | 50 million/month included, then metered |
+| Queue operations | 10,000/day | 1 million/month included, then metered |
+| Queue message retention | 24 hours | 4 days by default, configurable to 14 days |
+
+Sources: [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 limits](https://developers.cloudflare.com/d1/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), and [Queues pricing](https://developers.cloudflare.com/queues/platform/pricing/).
+
+The latest opt-in local benchmark used **1,000 projects and 1,000,000 events**. It measured a 902.8 MiB database, 946.2 database bytes and 14.7 D1 rows written per event. Those values produce these single-database estimates:
+
+| Flarebox capacity | Workers Free | Workers Paid |
+| --- | ---: | ---: |
+| Projects | 1,000 verified; no application cap | 1,000 verified; no application cap |
+| Stored events | ~528,449 at 500 MB | ~10,568,995 at 10 GB |
+| New events within the D1 write allowance | ~6,802/day | ~3,401,360/month included |
+| Events within the measured Queue allowance | ~1,666/day | ~166,666/month included |
+
+Project lists are paginated at 100; project count is ultimately bounded by the shared D1 database rather than an application limit. The Queue estimate uses the measured fingerprint-collapsed fan-out of one delivery job per event: one ingestion message plus one delivery message, normally three Queue operations each. More subscribers, retries, or unfingerprinted events reduce it; events that create no delivery job increase it. D1 write estimates exclude delivery and retention writes.
+
+The same local run measured event-list/search p95 latency of 8–36 ms, ingestion acceptance at 970.9 requests/s with 31 ms p95, Queue consumption at 361 events/s with eight consumers and 364 ms p95 lag, and retention at 6,958.9 events/s. These are synthetic local regression results, not Cloudflare production throughput guarantees. The repository currently requests 1,000 ms of Worker CPU, so the 10 ms Free tier is not a validated production target. See [backend scale controls](docs/backend-scale.md) for the benchmark and operating assumptions.
+
 ## Architecture
 
-```text
-Apps, CI, cron jobs                      MCP clients / agents
-        │                                        │
-        │ POST /api/v1/events                    │ POST /mcp
-        │ project bearer key                     │ read-only auth
-        ▼                                        ▼
-┌─────────────────────────────────────────────────────────┐
-│ Cloudflare Worker                                       │
-│                                                         │
-│ Fetch boundary                                          │
-│ Effect HttpApi + schemas + middleware                   │
-│ Effect services + Layers + ManagedRuntime               │
-│ Admin API + PWA API + official MCP TypeScript SDK       │
-└───────────────────┬───────────────────────┬─────────────┘
-                    │ IngestEvent
-                    ▼
-            ┌─────────────────┐
-            │ Cloudflare Queue│── DeliverPush ──┐
-            └────────┬────────┘                 │
-                     ▼                          ▼
-             ┌──────────────┐          Browser push services
-             │ Cloudflare D1│          FCM / Mozilla / Apple
-             │ events/jobs  │                   │
-             └──────┬───────┘                   ▼
-                    ▼                  Installed PWA notification
-               PWA inbox
-```
+[![Flarebox architecture diagram](docs/architecture.png)](https://foglamp.dev/scan/flarebox-nllgug)
+
+[View the interactive architecture diagram](https://foglamp.dev/scan/flarebox-nllgug).
 
 Cloudflare Queue is the durable acceptance boundary. The HTTP endpoint returns `202 Accepted` only after a schema-versioned `IngestEvent` command is accepted. Its consumer idempotently creates the event and jobs, then publishes `DeliverPush` commands before acknowledging. Queue redelivery resumes partial fan-out without a repair Cron. D1 owns delivery claims, attempt limits, dead jobs, and successful delivery records; Queue owns retry timing. See [event ingestion](docs/event-ingestion.md) and [Web Push delivery lifecycle](docs/delivery.md).
 
@@ -160,7 +172,7 @@ Every browser installation gets its own Web Push subscription and one-time, inst
 ## Send an event
 
 ```bash
-curl https://ops.example.com/api/v1/events \
+curl https://flarebox.example.com/api/v1/events \
   -H "Authorization: Bearer ops_proj_REPLACE_ME" \
   -H "Content-Type: application/json" \
   -d '{
@@ -205,15 +217,15 @@ The raw HTTP body is limited to **256 KiB**, and the normalized event is limited
 
 ### Sentry SDKs — drop-in DSN
 
-Ops Context accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Hex-encode the project API key and prefix it with `ops_sentry_` so it fits Sentry's DSN public-key syntax:
+Flarebox accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Hex-encode the project API key and prefix it with `ops_sentry_` so it fits Sentry's DSN public-key syntax:
 
 ```text
-SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@ops.example.com/1
+SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@flarebox.example.com/1
 ```
 
-The Worker decodes the value before `@` and authenticates the original Ops Context project key. The trailing project id is required by Sentry's DSN format but ignored. The Worker accepts `POST /api/{id}/envelope/`, including gzip- and deflate-compressed envelopes.
+The Worker decodes the value before `@` and authenticates the original Flarebox project key. The trailing project id is required by Sentry's DSN format but ignored. The Worker accepts `POST /api/{id}/envelope/`, including gzip- and deflate-compressed envelopes.
 
-> **Keep this DSN server-side.** Unlike a normal Sentry DSN, it contains a write-capable Ops Context project key. Do not embed it in browser, mobile, or other untrusted client code.
+> **Keep this DSN server-side.** Unlike a normal Sentry DSN, it contains a write-capable Flarebox project key. Do not embed it in browser, mobile, or other untrusted client code.
 
 Exception events use `Type: value` titles, compact stack/context bodies, Sentry level mapping, `source: "sentry"`, and grouping fingerprints. Message events group on their unformatted templates. Curated context is stored in `data` and passes through the same redaction, silence, D1, durable push-job, and Queue pipeline as `/api/v1/events`. Transactions, sessions, attachments, and other non-error items are accepted and ignored.
 
@@ -223,8 +235,8 @@ See [docs/sentry.md](docs/sentry.md) for authentication, mapping, limits, and a 
 
 ```bash
 ops_event() {
-  curl -fsS "$OPS_CONTEXT_URL/api/v1/events" \
-    -H "Authorization: Bearer $OPS_CONTEXT_API_KEY" \
+  curl -fsS "$FLAREBOX_URL/api/v1/events" \
+    -H "Authorization: Bearer $FLAREBOX_API_KEY" \
     -H "Content-Type: application/json" \
     -d "$(jq -n \
       --arg title "$1" \
@@ -339,7 +351,7 @@ The Worker boundary is a standard Cloudflare module handler. Inside that boundar
 - Live implementations are assembled through `Layer` composition in `worker/src/layers.ts`.
 - `ManagedRuntime` builds the application graph once per Worker isolate and reuses it for Fetch, Queue, scheduled retention, MCP, and Sentry envelope executions.
 - A narrow `Database` service uses native D1 results to preserve atomic batches and capture per-query row and duration metadata.
-- Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials. PBKDF2 remains isolated behind the password-hasher service, and Web Push cryptography remains behind the `WebPush` service.
+- Effect’s `Crypto.Crypto` capability generates and hashes high-entropy credentials, while Web Push cryptography remains behind the `WebPush` service.
 - The official MCP TypeScript SDK is wrapped by an Effect service rather than leaking protocol/runtime concerns into domain logic.
 
 Domain and application services expose typed Effect programs. Cloudflare bindings and Web APIs are supplied only through infrastructure Layers.

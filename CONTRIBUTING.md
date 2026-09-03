@@ -1,6 +1,6 @@
 # Contributing
 
-Ops Context is early-stage. Small, focused pull requests with tests are preferred.
+Flarebox is early-stage. Small, focused pull requests with tests are preferred.
 
 ## Setup
 

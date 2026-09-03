@@ -1,12 +1,12 @@
 # Changelog
 
-All notable changes to Ops Context are recorded here.
+All notable changes to Flarebox are recorded here.
 
 ## [Unreleased]
 
 ### Added
 
-- A D1 Sessions repository-adapter prototype with sequential-consistency, bookmark-continuation, grouped-pagination, and primary-versus-session load coverage, plus measured adoption and rollback guidance. Production reads remain primary-only pending representative regional p95 evidence.
+- A measured D1 Sessions/read-replication evaluation with adoption and rollback guidance. Production reads remain primary-only pending representative regional p95 evidence.
 - A measured FTS5 event-search index with Unicode token and explicit-prefix search, redacted structured-value projection, atomic trigger maintenance, and an idempotent rebuild path.
 - A measured `event_groups` read model for default grouped inbox pages, with atomic insert/delete maintenance, retention-safe recomputation, project isolation, migration backfill, and an authenticated idempotent repair operation.
 - Grouped-inbox D1 measurements and integration coverage comparing the read model to the exact dynamic query. On the 10,000-event fixture, rows read fell from 51,502 to 154 and median local latency from 8 ms to below 1 ms.
@@ -26,13 +26,14 @@ All notable changes to Ops Context are recorded here.
 - Administrator status now reports the number of terminal `dead_jobs`.
 - D1 migration `0004_push_retry_state` for the new delivery state machine and indexes.
 
-- Sentry SDK ingestion through `POST /api/{id}/envelope/`. Server-side Sentry clients can use an Ops Context project API key as the DSN public key; exception and message events reuse the existing redaction, silence, grouping, D1, durable push-job, and Queue delivery pipeline. Gzip and deflate envelopes, Sentry fingerprints, curated event context, and non-error item ignoring are supported.
+- Sentry SDK ingestion through `POST /api/{id}/envelope/`. Server-side Sentry clients can use a Flarebox project API key as the DSN public key; exception and message events reuse the existing redaction, silence, grouping, D1, durable push-job, and Queue delivery pipeline. Gzip and deflate envelopes, Sentry fingerprints, curated event context, and non-error item ignoring are supported.
 
 ### Changed
 
+- Renamed the project to Flarebox and replaced the application and PWA icons with the Burst mark.
 - Default grouped pages now scan materialized groups rather than all fingerprinted occurrences. Level, source, fingerprint, search, time, and silence filters continue to use the exact dynamic query.
 - Project-scoped event listing now uses an ordered `(project_id, created_at DESC, id DESC)` index in place of the redundant project-only index. Grouped reads use the existing fingerprint index while preserving distinct empty-fingerprint events.
-- Removed the five-minute D1 delivery-repair Cron and narrowed scheduled work/logging to once-daily retention. Deployments with retention disabled can omit Cron entirely.
+- Removed the five-minute D1 delivery-repair Cron and narrowed scheduled work to bounded retention every 15 minutes. Deployments with retention disabled can omit Cron entirely.
 - Event fields are rejected instead of silently truncated, and invalid `occurred_at` values no longer fall back to the server timestamp. The same contract is enforced by the HTTP boundary and application service.
 
 - Push retry scheduling is bounded by `OPS_PUSH_MAX_ATTEMPTS` (default `6`). Queue delayed retry is the sole retry scheduler; delivery-state updates and attempt history are finalized atomically through D1 batches.

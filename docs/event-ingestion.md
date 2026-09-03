@@ -2,7 +2,7 @@
 
 `POST /api/v1/events` accepts a JSON object authenticated with a project bearer key. The contract is defined once with Effect Schema and is reused by the HTTP API and the application service, including Sentry-mapped events.
 
-Ops Context rejects invalid values; it does not silently truncate identifiers, fingerprints, timestamps, or message text.
+Flarebox rejects invalid values; it does not silently truncate identifiers, fingerprints, timestamps, or message text.
 
 ## Queue-first acceptance
 
