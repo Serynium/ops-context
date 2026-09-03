@@ -267,7 +267,7 @@ export class OpsApi extends HttpApi.make("flarebox")
   .add(AdminApiGroup)
   .annotateMerge(OpenApi.annotations({
     title: "Flarebox API",
-    version: "0.3.0",
+    version: "0.4.0",
     description: "Operational events, fingerprint groups, actions, browser push, silences, MCP, and Cloudflare Access administration."
   }))
 {}

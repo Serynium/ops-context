@@ -32,7 +32,7 @@ export const systemStatus = Effect.fn("System.status")(function*(origin: string)
   const settings = yield* getSettings
 
   return {
-    version: "0.3.0",
+    version: "0.4.0",
     server: "flarebox/effect-v4/cloudflare-workers",
     database: "Cloudflare D1 / Effect SQL",
     base_url: config.baseUrl ?? origin,

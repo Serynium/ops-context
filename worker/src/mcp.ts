@@ -203,7 +203,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
           {
             name: "flarebox",
             title: "Flarebox",
-            version: "0.3.0"
+            version: "0.4.0"
           },
           {
             instructions:

@@ -4,6 +4,8 @@ All notable changes to Flarebox are recorded here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-03
+
 ### Added
 
 - A measured D1 Sessions/read-replication evaluation with adoption and rollback guidance. Production reads remain primary-only pending representative regional p95 evidence.

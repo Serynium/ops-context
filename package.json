@@ -1,6 +1,6 @@
 {
   "name": "flarebox",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "A tiny self-hosted notification inbox for developers, powered by Cloudflare and Web Push.",
