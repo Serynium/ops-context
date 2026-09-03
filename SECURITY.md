@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability involving authentication bypass, credential exposure, Web Push encryption, D1 data access, or event redaction. [Report it privately through GitHub Security Advisories](https://github.com/Serynium/ops-context/security/advisories/new) and include reproduction steps, affected routes, expected impact, and any proposed mitigation.
+Do not open a public issue for a suspected vulnerability involving authentication bypass, credential exposure, Web Push encryption, D1 data access, or event redaction. [Report it privately through GitHub Security Advisories](https://github.com/Serynium/Flarebox/security/advisories/new) and include reproduction steps, affected routes, expected impact, and any proposed mitigation.
 
 ## Authentication boundaries
 

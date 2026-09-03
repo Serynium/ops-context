@@ -5,8 +5,8 @@
 <h1 align="center">Flarebox</h1>
 
 <p align="center">
-  <img src="https://github.com/Serynium/ops-context/actions/workflows/ci.yml/badge.svg" alt="CI">
-  <img src="https://img.shields.io/github/license/Serynium/ops-context" alt="License">
+  <img src="https://github.com/Serynium/Flarebox/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <img src="https://img.shields.io/github/license/Serynium/Flarebox" alt="License">
 </p>
 
 A tiny, self-hosted notification inbox for developers. Something happened in one of your apps; Flarebox tells you on every enrolled browser.
