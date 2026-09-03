@@ -373,7 +373,8 @@ describe.sequential("installation-scoped push renewal credentials", () => {
         actionsJson: "[]",
         occurredAt: now,
         createdAt: now,
-        silenceId: null
+        silenceId: null,
+        notificationCutoff: null
       }, [{ id, generation: 0 }])
     }).pipe(Effect.provide(database)))
     const staleFanout = await env.DB.prepare(

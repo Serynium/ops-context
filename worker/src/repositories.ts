@@ -1,25 +1,12 @@
-import { Context, Effect, Layer, Option, Schema } from "effect"
-import { SqlSchema } from "effect/unstable/sql"
+import { Context, Effect, Layer, Schema } from "effect"
 import { repositoryUnavailable, type RepositoryUnavailable } from "./errors.js"
-import { rebuildEventGroupsSql } from "./event-groups.js"
-import { Database, type D1Connection } from "./services.js"
-import type { DeliverPushCommand } from "./queue-contract.js"
+import {
+  rebuildEventGroupsByLevelSql,
+  rebuildEventGroupsSql
+} from "./event-groups.js"
+import { Database } from "./services.js"
 import type { SilenceField } from "./silences.js"
-import type {
-  DeliveryRow,
-  EventRow,
-  Level,
-  ProjectRow,
-  PushSubscriptionRow,
-  SilenceRow
-} from "./types.js"
-
-type PushJobMessage = Pick<DeliverPushCommand, "eventId" | "subscriptionId">
-
-const repositoryFailure = (operation: "read" | "write" | "batch" | "decode"): RepositoryUnavailable =>
-  repositoryUnavailable(`repository ${operation} failed`)
-
-type Params = ReadonlyArray<unknown>
+import type { Level } from "./types.js"
 
 const nullableString = Schema.NullOr(Schema.String)
 const LevelSchema = Schema.Literals(["info", "success", "warning", "error", "critical"])
@@ -122,91 +109,11 @@ export const DeliveryRowSchema = Schema.Struct({
   attempted_at: Schema.String
 })
 
-export const PushJobRowSchema = Schema.Struct({
-  event_id: Schema.String,
-  subscription_id: Schema.String,
-  state: Schema.Literals(["pending", "queued", "sending", "retrying", "sent", "dead"]),
-  attempts: Schema.Number,
-  available_at: Schema.String,
-  queued_at: nullableString,
-  lease_until: nullableString,
-  dead_at: nullableString,
-  last_error: Schema.String,
-  updated_at: Schema.String
-})
-
-export type PushJobRow = typeof PushJobRowSchema.Type
-
-class D1Executor extends Context.Service<D1Executor, {
-  readonly all: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
-  readonly first: <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string) => Effect.Effect<A | null, RepositoryUnavailable>
-  readonly run: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
-  readonly runCounted: (statement: string, params: Params, queryName: string) => Effect.Effect<number, RepositoryUnavailable>
-  readonly batch: (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => Effect.Effect<void, RepositoryUnavailable>
-}>()("ops-context/internal/D1Executor") {
-  static readonly layer = Layer.effect(
-    D1Executor,
-    Effect.gen(function*() {
-      const database = yield* Database
-      const execute = (
-        statement: string,
-        params: Params,
-        queryName?: string
-      ): Effect.Effect<ReadonlyArray<Record<string, unknown>>, RepositoryUnavailable> =>
-        database.all<Record<string, unknown>>(queryName ?? "repository.query", statement, params)
-      const mapFailure = (operation: "read" | "batch") =>
-        Effect.mapError((_cause: unknown) => repositoryFailure(operation))
-
-      const all = <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string): Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable> =>
-        SqlSchema.findAll({
-          Request: Schema.Void,
-          Result: schema,
-          execute: () => execute(statement, params, queryName)
-        })(undefined).pipe(mapFailure("read")) as unknown as Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
-
-      const first = <A>(schema: Schema.Schema<A>, statement: string, params: Params, queryName: string): Effect.Effect<A | null, RepositoryUnavailable> =>
-        SqlSchema.findOneOption({
-          Request: Schema.Void,
-          Result: schema,
-          execute: () => execute(statement, params, queryName)
-        })(undefined).pipe(
-          Effect.map(Option.getOrNull),
-          mapFailure("read")
-        ) as Effect.Effect<A | null, RepositoryUnavailable>
-
-      const run = (statement: string, params: Params, queryName: string) =>
-        database.run(queryName, statement, params).pipe(
-          Effect.map((result) => (result.meta as { readonly changes?: number }).changes ?? 0),
-          Effect.mapError(() => repositoryFailure("write"))
-        )
-
-      const runCounted = (statement: string, params: Params, queryName: string) =>
-        database.batchResults(queryName, [
-          { name: queryName, sql: statement, params },
-          { name: `${queryName}.count`, sql: "SELECT changes() AS count" }
-        ]).pipe(
-          Effect.flatMap((results) => {
-            const count = (results[1]?.results?.[0] as { readonly count?: unknown } | undefined)?.count
-            return typeof count === "number"
-              ? Effect.succeed(count)
-              : Effect.fail(repositoryFailure("decode"))
-          }),
-          Effect.mapError(() => repositoryFailure("write"))
-        )
-
-      const batch = (statements: ReadonlyArray<{ readonly sql: string; readonly params?: Params }>, queryName: string) => {
-        if (statements.length === 0) return Effect.void
-        return database.batch(queryName, statements.map(({ sql, params }) => ({
-          name: queryName,
-          sql,
-          ...(params ? { params } : {})
-        }))).pipe(mapFailure("batch"))
-      }
-
-      return D1Executor.of({ all, first, run, runCounted, batch })
-    })
-  )
-}
+export type ProjectRow = typeof ProjectRowSchema.Type
+export type EventRow = typeof EventRowSchema.Type
+export type PushSubscriptionRow = typeof PushSubscriptionRowSchema.Type
+export type SilenceRow = typeof SilenceRowSchema.Type
+export type DeliveryRow = typeof DeliveryRowSchema.Type
 
 export interface ProjectInsert {
   readonly id: string
@@ -217,24 +124,39 @@ export interface ProjectInsert {
   readonly createdAt: string
 }
 
+export interface ProjectListCriteria {
+  readonly cursor?: { readonly name: string; readonly id: string }
+  readonly limit: number
+}
+
 export class ProjectsRepository extends Context.Service<ProjectsRepository, {
-  readonly list: Effect.Effect<ReadonlyArray<ProjectRow>, RepositoryUnavailable>
+  readonly list: (criteria: ProjectListCriteria) => Effect.Effect<ReadonlyArray<ProjectRow>, RepositoryUnavailable>
   readonly findById: (id: string) => Effect.Effect<ProjectRow | null, RepositoryUnavailable>
   readonly findFirst: Effect.Effect<ProjectRow | null, RepositoryUnavailable>
   readonly findByApiKeyHash: (hash: string) => Effect.Effect<ProjectRow | null, RepositoryUnavailable>
   readonly slugExists: (slug: string) => Effect.Effect<boolean, RepositoryUnavailable>
   readonly insert: (project: ProjectInsert) => Effect.Effect<void, RepositoryUnavailable>
   readonly update: (id: string, values: { readonly name: string; readonly icon: string; readonly notify: number; readonly minLevel: Level; readonly updatedAt: string }) => Effect.Effect<void, RepositoryUnavailable>
-  readonly count: Effect.Effect<number, RepositoryUnavailable>
   readonly delete: (id: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly rotateApiKey: (id: string, hash: string, updatedAt: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/ProjectsRepository") {
   static readonly layer = Layer.effect(ProjectsRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
-    const Count = Schema.Struct({ count: Schema.Number })
+    const db = yield* Database
     const Id = Schema.Struct({ id: Schema.String })
     return ProjectsRepository.of({
-      list: db.all(ProjectRowSchema, "SELECT * FROM projects ORDER BY name COLLATE NOCASE", [], "projects.list"),
+      list: (criteria) => db.all(
+        ProjectRowSchema,
+        `SELECT * FROM projects
+         ${criteria.cursor
+           ? "WHERE name COLLATE NOCASE > ? COLLATE NOCASE OR (name = ? COLLATE NOCASE AND id > ?)"
+           : ""}
+         ORDER BY name COLLATE NOCASE, id
+         LIMIT ?`,
+        criteria.cursor
+          ? [criteria.cursor.name, criteria.cursor.name, criteria.cursor.id, criteria.limit]
+          : [criteria.limit],
+        "projects.list"
+      ),
       findById: (id) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE id = ?", [id], "projects.get_by_id"),
       findFirst: db.first(ProjectRowSchema, "SELECT * FROM projects ORDER BY created_at LIMIT 1", [], "projects.get_first"),
       findByApiKeyHash: (hash) => db.first(ProjectRowSchema, "SELECT * FROM projects WHERE api_key_hash = ?", [hash], "projects.get_by_api_key_hash"),
@@ -242,7 +164,7 @@ export class ProjectsRepository extends Context.Service<ProjectsRepository, {
       insert: (project) => db.run(
         `INSERT INTO projects
          (id, name, slug, icon, api_key_hash, notify, min_level, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'info', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 1, 'warning', ?, ?)`,
         [project.id, project.name, project.slug, project.icon, project.apiKeyHash, project.createdAt, project.createdAt],
         "projects.create"
       ).pipe(Effect.asVoid),
@@ -251,7 +173,6 @@ export class ProjectsRepository extends Context.Service<ProjectsRepository, {
         [values.name, values.icon, values.notify, values.minLevel, values.updatedAt, id],
         "projects.update"
       ).pipe(Effect.asVoid),
-      count: db.first(Count, "SELECT COUNT(*) AS count FROM projects", [], "projects.count").pipe(Effect.map((row) => row?.count ?? 0)),
       delete: (id) => db.run("DELETE FROM projects WHERE id = ?", [id], "projects.delete").pipe(Effect.asVoid),
       rotateApiKey: (id, hash, updatedAt) => db.run(
         "UPDATE projects SET api_key_hash = ?, updated_at = ? WHERE id = ?", [hash, updatedAt, id],
@@ -290,7 +211,34 @@ export interface EventInsert {
   readonly occurredAt: string
   readonly createdAt: string
   readonly silenceId: string | null
+  readonly notificationCutoff: string | null
 }
+
+export const pruneEventsBeforeSql = `DELETE FROM events
+WHERE id IN (
+  SELECT id FROM events
+  WHERE created_at_ms < ?
+  ORDER BY created_at_ms ASC, id ASC
+  LIMIT ?
+)`
+
+export const pruneTerminalPushJobsBeforeSql = `DELETE FROM push_jobs
+WHERE rowid IN (
+  SELECT rowid FROM push_jobs INDEXED BY push_jobs_terminal_updated
+  WHERE state IN ('sent', 'dead') AND updated_at < ?
+  ORDER BY updated_at, event_id, subscription_id
+  LIMIT ?
+)`
+
+export const pruneSuccessfulDeliveriesBeforeEventSql = `DELETE FROM deliveries
+WHERE id IN (
+  SELECT d.id
+  FROM events e INDEXED BY events_created_at
+  JOIN deliveries d INDEXED BY deliveries_event_id ON d.event_id = e.id
+  WHERE e.created_at_ms < ? AND d.status = 'sent'
+  ORDER BY e.created_at_ms, e.id
+  LIMIT ?
+)`
 
 export interface SubscriptionFanoutTarget {
   readonly id: string
@@ -303,13 +251,12 @@ const eventColumns = `
   e.source, e.type, e.level, e.title, e.body, e.fingerprint,
   e.payload_json, e.actions_json, e.occurred_at, e.created_at, e.silence_id`
 const eventSelect = `SELECT ${eventColumns} FROM events e JOIN projects p ON p.id = e.project_id`
+const epochMs = (value: string): number => Date.parse(value)
 
 export class EventsRepository extends Context.Service<EventsRepository, {
   readonly findById: (id: string) => Effect.Effect<EventRow | null, RepositoryUnavailable>
   readonly findIdByExternalId: (projectId: string, externalId: string) => Effect.Effect<string | null, RepositoryUnavailable>
   readonly list: (criteria: EventListCriteria) => Effect.Effect<ReadonlyArray<EventRow>, RepositoryUnavailable>
-  readonly insertWithPushJobs: (event: EventInsert, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>) => Effect.Effect<void, RepositoryUnavailable>
-  readonly markPushJobsQueued: (eventId: string, queuedAt: string, onlyPending: boolean) => Effect.Effect<void, RepositoryUnavailable>
   readonly initializeIngestion: (event: EventInsert, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>) => Effect.Effect<void, RepositoryUnavailable>
   readonly insertAlias: (aliasId: string, eventId: string, createdAt: string) => Effect.Effect<void, RepositoryUnavailable>
   readonly listPendingSubscriptionIds: (eventId: string) => Effect.Effect<ReadonlyArray<string>, RepositoryUnavailable>
@@ -322,11 +269,12 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
     readonly failedAt: string
   }) => Effect.Effect<void, RepositoryUnavailable>
   readonly unsilenceWithPushJobs: (eventId: string, subscriptions: ReadonlyArray<SubscriptionFanoutTarget>, now: string) => Effect.Effect<void, RepositoryUnavailable>
+  readonly pruneTerminalPushJobsBefore: (cutoff: string, limit: number) => Effect.Effect<number, RepositoryUnavailable>
   readonly pruneBefore: (cutoff: string, limit: number) => Effect.Effect<number, RepositoryUnavailable>
   readonly rebuildGroups: Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/EventsRepository") {
   static readonly layer = Layer.effect(EventsRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
+    const db = yield* Database
     const Id = Schema.Struct({ id: Schema.String })
     const list = (criteria: EventListCriteria) => {
       const conditions: Array<string> = []
@@ -344,11 +292,10 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
       }
       if (criteria.silenced === true) conditions.push("e.silence_id IS NOT NULL")
       if (criteria.silenced === false) conditions.push("e.silence_id IS NULL")
-      if (criteria.since) { conditions.push("e.created_at >= ?"); params.push(criteria.since) }
-      if (criteria.until) { conditions.push("e.created_at <= ?"); params.push(criteria.until) }
+      if (criteria.since) { conditions.push("e.created_at_ms >= ?"); params.push(epochMs(criteria.since)) }
+      if (criteria.until) { conditions.push("e.created_at_ms <= ?"); params.push(epochMs(criteria.until)) }
       if (criteria.grouped) {
-        const supportsReadModel = criteria.level === undefined &&
-          criteria.source === undefined &&
+        const supportsReadModel = criteria.source === undefined &&
           criteria.fingerprint === undefined &&
           criteria.searchQuery === undefined &&
           criteria.since === undefined &&
@@ -359,9 +306,20 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
           const queryParams: Array<unknown> = []
           const groupConditions: Array<string> = []
           const eventConditions = ["e.fingerprint = ''"]
-          const emptyFingerprintIndex = criteria.project
-            ? "events_project_empty_fingerprint_created"
-            : "events_empty_fingerprint_created"
+          const groupedByLevel = criteria.level !== undefined
+          const groupTable = groupedByLevel ? "event_groups_by_level" : "event_groups"
+          const emptyFingerprintIndex = groupedByLevel
+            ? criteria.project
+              ? "events_level_project_empty_fingerprint_created"
+              : "events_level_empty_fingerprint_created"
+            : criteria.project
+              ? "events_project_empty_fingerprint_created"
+              : "events_empty_fingerprint_created"
+
+          if (criteria.level) {
+            groupConditions.push("g.level = ?")
+            queryParams.push(criteria.level)
+          }
 
           if (criteria.project) {
             groupConditions.push("g.project_id = ?")
@@ -369,25 +327,29 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
           }
           if (criteria.cursor) {
             groupConditions.push(
-              "(g.last_seen < ? OR (g.last_seen = ? AND g.latest_event_id < ?))"
+              "(g.last_seen_ms < ? OR (g.last_seen_ms = ? AND g.latest_event_id < ?))"
             )
             queryParams.push(
-              criteria.cursor.createdAt,
-              criteria.cursor.createdAt,
+              epochMs(criteria.cursor.createdAt),
+              epochMs(criteria.cursor.createdAt),
               criteria.cursor.id
             )
           }
           queryParams.push(criteria.limit)
 
+          if (criteria.level) {
+            eventConditions.push("e.level = ?")
+            queryParams.push(criteria.level)
+          }
           if (criteria.project) {
             eventConditions.push("e.project_id = ?")
             queryParams.push(criteria.project)
           }
           if (criteria.cursor) {
-            eventConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))")
+            eventConditions.push("(e.created_at_ms < ? OR (e.created_at_ms = ? AND e.id < ?))")
             queryParams.push(
-              criteria.cursor.createdAt,
-              criteria.cursor.createdAt,
+              epochMs(criteria.cursor.createdAt),
+              epochMs(criteria.cursor.createdAt),
               criteria.cursor.id
             )
           }
@@ -398,11 +360,11 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
               g.occurrence_count AS group_count,
               g.first_seen AS group_first_seen,
               g.last_seen AS group_last_seen
-            FROM event_groups g
+            FROM ${groupTable} g
             JOIN events e ON e.id = g.latest_event_id
             JOIN projects p ON p.id = g.project_id
             ${groupConditions.length > 0 ? `WHERE ${groupConditions.join(" AND ")}` : ""}
-            ORDER BY g.last_seen DESC, g.latest_event_id DESC
+            ORDER BY g.last_seen_ms DESC, g.latest_event_id DESC
             LIMIT ?
           ), ungrouped_representatives AS (
             SELECT ${eventColumns},
@@ -412,7 +374,7 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
             FROM events e INDEXED BY ${emptyFingerprintIndex}
             JOIN projects p ON p.id = e.project_id
             WHERE ${eventConditions.join(" AND ")}
-            ORDER BY e.created_at DESC, e.id DESC
+            ORDER BY e.created_at_ms DESC, e.id DESC
             LIMIT ?
           ), representatives AS (
             SELECT * FROM grouped_representatives
@@ -421,7 +383,9 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
           )
           SELECT * FROM representatives
           ORDER BY created_at DESC, id DESC
-          LIMIT ?`, queryParams, "events.list_grouped_fast")
+          LIMIT ?`, queryParams, groupedByLevel
+            ? "events.list_grouped_level_fast"
+            : "events.list_grouped_fast")
         }
 
         const fingerprintedConditions = [...conditions, "e.fingerprint <> ''"]
@@ -431,32 +395,40 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
         if (criteria.cursor) queryParams.push(criteria.cursor.createdAt, criteria.cursor.createdAt, criteria.cursor.id)
         queryParams.push(criteria.limit)
         return db.all(EventRowSchema, `WITH fingerprinted AS (
-          SELECT ${eventColumns},
+          SELECT e.id, e.project_id, e.fingerprint, e.created_at,
             COUNT(*) OVER (PARTITION BY e.project_id, e.fingerprint) AS group_count,
             MIN(e.created_at) OVER (PARTITION BY e.project_id, e.fingerprint) AS group_first_seen,
             MAX(e.created_at) OVER (PARTITION BY e.project_id, e.fingerprint) AS group_last_seen,
             ROW_NUMBER() OVER (PARTITION BY e.project_id, e.fingerprint ORDER BY e.created_at DESC, e.id DESC) AS group_rank
-          FROM events e JOIN projects p ON p.id = e.project_id ${searchJoin}
+          FROM events e ${searchJoin}
           WHERE ${fingerprintedConditions.join(" AND ")}
-        ), representatives AS (
-          SELECT * FROM fingerprinted WHERE group_rank = 1
+        ), representative_ids AS (
+          SELECT id, created_at, group_count, group_first_seen, group_last_seen
+          FROM fingerprinted WHERE group_rank = 1
           UNION ALL
-          SELECT ${eventColumns}, 1 AS group_count,
-            e.created_at AS group_first_seen, e.created_at AS group_last_seen, 1 AS group_rank
-          FROM events e JOIN projects p ON p.id = e.project_id ${searchJoin}
+          SELECT e.id, e.created_at, 1 AS group_count,
+            e.created_at AS group_first_seen, e.created_at AS group_last_seen
+          FROM events e ${searchJoin}
           WHERE ${ungroupedConditions.join(" AND ")}
-        ) SELECT * FROM representatives WHERE 1 = 1 ${outerCursor}
-          ORDER BY created_at DESC, id DESC LIMIT ?`, queryParams, "events.list_grouped")
+        ), page AS (
+          SELECT * FROM representative_ids WHERE 1 = 1 ${outerCursor}
+          ORDER BY created_at DESC, id DESC LIMIT ?
+        ) SELECT ${eventColumns}, page.group_count,
+            page.group_first_seen, page.group_last_seen
+          FROM page
+          JOIN events e ON e.id = page.id
+          JOIN projects p ON p.id = e.project_id
+          ORDER BY page.created_at DESC, page.id DESC`, queryParams, "events.list_grouped")
       }
 
       if (criteria.cursor) {
-        conditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id < ?))")
-        params.push(criteria.cursor.createdAt, criteria.cursor.createdAt, criteria.cursor.id)
+        conditions.push("(e.created_at_ms < ? OR (e.created_at_ms = ? AND e.id < ?))")
+        params.push(epochMs(criteria.cursor.createdAt), epochMs(criteria.cursor.createdAt), criteria.cursor.id)
       }
       params.push(criteria.limit)
       return db.all(EventRowSchema, `${eventSelect} ${searchJoin}
         ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
-        ORDER BY e.created_at DESC, e.id DESC LIMIT ?`, params, "events.list")
+        ORDER BY e.created_at_ms DESC, e.id DESC LIMIT ?`, params, "events.list")
     }
 
     return EventsRepository.of({
@@ -468,34 +440,6 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
         "events.get_by_external_id"
       ).pipe(Effect.map((row) => row?.id ?? null)),
       list,
-      insertWithPushJobs: (event, subscriptions) => db.batch([
-        {
-          sql: `INSERT INTO events
-            (id, external_id, project_id, source, type, level, title, body, fingerprint,
-             payload_json, actions_json, occurred_at, created_at, silence_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params: [event.id, event.externalId, event.projectId, event.source, event.type, event.level,
-            event.title, event.body, event.fingerprint, event.payloadJson, event.actionsJson,
-            event.occurredAt, event.createdAt, event.silenceId]
-        },
-        ...subscriptions.map((subscription) => ({
-          sql: `INSERT INTO push_jobs
-            (event_id, subscription_id, subscription_generation, state, attempts,
-             available_at, queued_at, lease_until, last_error, updated_at)
-            SELECT ?, ?, ?, 'pending', 0, ?, NULL, NULL, '', ?
-            WHERE EXISTS (
-              SELECT 1 FROM push_subscriptions
-              WHERE id = ? AND enrollment_generation = ?
-                AND enabled = 1 AND deleted_at IS NULL
-            )`,
-          params: [event.id, subscription.id, subscription.generation, event.createdAt,
-            event.createdAt, subscription.id, subscription.generation]
-        }))
-      ], "events.create_with_push_jobs"),
-      markPushJobsQueued: (eventId, queuedAt, onlyPending) => db.run(
-        `UPDATE push_jobs SET state = 'queued', queued_at = ?, updated_at = ? WHERE event_id = ?${onlyPending ? " AND state = 'pending'" : ""}`,
-        [queuedAt, queuedAt, eventId], "push_jobs.mark_queued"
-      ).pipe(Effect.asVoid),
       initializeIngestion: (event, subscriptions) => db.batch([
         {
           sql: `INSERT OR IGNORE INTO events
@@ -506,6 +450,18 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
             event.title, event.body, event.fingerprint, event.payloadJson, event.actionsJson,
             event.occurredAt, event.createdAt, event.silenceId]
         },
+        ...(event.notificationCutoff === null ? [] : [{
+          sql: `UPDATE event_groups
+                SET last_notified_at = ?, last_notified_event_id = ?
+                WHERE project_id = ? AND fingerprint = ?
+                  AND (last_notified_at IS NULL OR last_notified_at < ?)
+                  AND EXISTS (
+                    SELECT 1 FROM events
+                    WHERE id = ? AND fanout_completed_at IS NULL
+                  )`,
+          params: [event.createdAt, event.id, event.projectId, event.fingerprint,
+            event.notificationCutoff, event.id]
+        }]),
         ...subscriptions.map((subscription) => ({
           sql: `INSERT OR IGNORE INTO push_jobs
             (event_id, subscription_id, subscription_generation, state, attempts,
@@ -516,9 +472,18 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
                 SELECT 1 FROM push_subscriptions
                 WHERE id = ? AND enrollment_generation = ?
                   AND enabled = 1 AND deleted_at IS NULL
+              )
+              AND (
+                ? IS NULL OR ? = '' OR EXISTS (
+                  SELECT 1 FROM event_groups
+                  WHERE project_id = ? AND fingerprint = ?
+                    AND last_notified_event_id = ?
+                )
               )`,
           params: [event.id, subscription.id, subscription.generation, event.createdAt,
-            event.createdAt, event.id, subscription.id, subscription.generation]
+            event.createdAt, event.id, subscription.id, subscription.generation,
+            event.notificationCutoff, event.fingerprint, event.projectId,
+            event.fingerprint, event.id]
         })),
         {
           sql: "UPDATE events SET fanout_completed_at = ? WHERE id = ? AND fanout_completed_at IS NULL",
@@ -530,15 +495,15 @@ readonly markFanoutPublished: (eventId: string, publishedAt: string) => Effect.E
         [aliasId, eventId, createdAt], "event_aliases.insert"
       ).pipe(Effect.asVoid),
       listPendingSubscriptionIds: (eventId) => db.all(
-  Schema.Struct({ subscription_id: Schema.String }),
-  `SELECT j.subscription_id
-   FROM push_jobs j
-   JOIN events e ON e.id = j.event_id
-   WHERE j.event_id = ? AND j.state = 'pending'
-     AND e.fanout_published_at IS NULL
-   ORDER BY j.subscription_id`,
-  [eventId], "push_jobs.list_pending_for_publication"
-).pipe(Effect.map((rows) => rows.map((row) => row.subscription_id))),
+        Schema.Struct({ subscription_id: Schema.String }),
+        `SELECT j.subscription_id
+         FROM push_jobs j
+         JOIN events e ON e.id = j.event_id
+         WHERE j.event_id = ? AND j.state = 'pending'
+           AND e.fanout_published_at IS NULL
+         ORDER BY j.subscription_id`,
+        [eventId], "push_jobs.list_pending_for_publication"
+      ).pipe(Effect.map((rows) => rows.map((row) => row.subscription_id))),
 markFanoutPublished: (eventId, publishedAt) => db.run(
   `UPDATE events SET fanout_published_at = ?
    WHERE id = ? AND fanout_published_at IS NULL`,
@@ -580,20 +545,21 @@ markFanoutPublished: (eventId, publishedAt) => db.run(
             subscription.id, subscription.generation]
         }))
       ], "events.unsilence_with_push_jobs"),
+      pruneTerminalPushJobsBefore: (cutoff, limit) => db.runCounted(
+        pruneTerminalPushJobsBeforeSql,
+        [cutoff, limit],
+        "push_jobs.prune_terminal"
+      ),
       pruneBefore: (cutoff, limit) => db.runCounted(
-  `DELETE FROM events
-   WHERE id IN (
-     SELECT id FROM events
-     WHERE created_at < ?
-     ORDER BY created_at ASC, id ASC
-     LIMIT ?
-   )`,
-  [cutoff, limit],
-  "events.prune"
-),
+        pruneEventsBeforeSql,
+        [epochMs(cutoff), limit],
+        "events.prune"
+      ),
       rebuildGroups: db.batch([
         { sql: "DELETE FROM event_groups" },
-        { sql: rebuildEventGroupsSql }
+        { sql: rebuildEventGroupsSql },
+        { sql: "DELETE FROM event_groups_by_level" },
+        { sql: rebuildEventGroupsByLevelSql }
       ], "event_groups.rebuild").pipe(
         Effect.andThen(db.first(
           Schema.Struct({ count: Schema.Number }),
@@ -643,7 +609,7 @@ export class SubscriptionsRepository extends Context.Service<SubscriptionsReposi
   readonly remove: (id: string, removedAt: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/SubscriptionsRepository") {
   static readonly layer = Layer.effect(SubscriptionsRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
+    const db = yield* Database
     return SubscriptionsRepository.of({
       list: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC", [], "subscriptions.list"),
       listEnabled: db.all(PushSubscriptionRowSchema, "SELECT * FROM push_subscriptions WHERE enabled = 1 ORDER BY created_at", [], "subscriptions.list_enabled"),
@@ -724,7 +690,7 @@ export class SilencesRepository extends Context.Service<SilencesRepository, {
   readonly countSilencedEvents: Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/SilencesRepository") {
   static readonly layer = Layer.effect(SilencesRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
+    const db = yield* Database
     const Id = Schema.Struct({ id: Schema.String })
     const Count = Schema.Struct({ count: Schema.Number })
     const select = `SELECT s.id, s.project_id, p.name AS project_name, s.field, s.value, s.note, s.created_at
@@ -775,7 +741,7 @@ const decodeStoredRedactKeys = (
   try {
     const decoded: unknown = JSON.parse(raw)
     return Schema.decodeUnknownEffect(Schema.Array(Schema.String))(decoded).pipe(
-      Effect.mapError(() => repositoryFailure("decode"))
+      Effect.mapError(() => repositoryUnavailable("repository decode failed"))
     )
   } catch {
     return Effect.succeed(raw.split(",").map((key) => key.trim()).filter(Boolean))
@@ -787,7 +753,7 @@ export class SettingsRepository extends Context.Service<SettingsRepository, {
   readonly set: (key: "retention_days" | "redact_keys" | "setup_completed" | "mcp_enabled", value: string, updatedAt: string) => Effect.Effect<void, RepositoryUnavailable>
 }>()("ops-context/SettingsRepository") {
   static readonly layer = Layer.effect(SettingsRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
+    const db = yield* Database
     const Row = Schema.Struct({ key: Schema.String, value: Schema.String })
     const get = db.all(Row, `SELECT key, value FROM settings
       WHERE key IN ('retention_days', 'redact_keys', 'setup_completed', 'mcp_enabled')`, [], "settings.load").pipe(
@@ -814,109 +780,21 @@ export class SettingsRepository extends Context.Service<SettingsRepository, {
 export class DeliveriesRepository extends Context.Service<DeliveriesRepository, {
   readonly listForEvent: (eventId: string) => Effect.Effect<ReadonlyArray<DeliveryRow>, RepositoryUnavailable>
   readonly latest: Effect.Effect<DeliveryRow | null, RepositoryUnavailable>
+  readonly pruneSuccessfulBeforeEvent: (cutoff: string, limit: number) => Effect.Effect<number, RepositoryUnavailable>
 }>()("ops-context/DeliveriesRepository") {
   static readonly layer = Layer.effect(DeliveriesRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
-    const select = `SELECT d.id, d.event_id, d.subscription_id,
+    const db = yield* Database
+    const select = `SELECT CAST(d.id AS TEXT) AS id, d.event_id, d.subscription_id,
       COALESCE(s.name, '') AS subscription_name, d.status, d.response_status, d.error, d.attempted_at
       FROM deliveries d LEFT JOIN push_subscriptions s ON s.id = d.subscription_id`
     return DeliveriesRepository.of({
-      listForEvent: (eventId) => db.all(DeliveryRowSchema, `${select} WHERE d.event_id = ? ORDER BY d.attempted_at DESC`, [eventId], "deliveries.list_for_event"),
-      latest: db.first(DeliveryRowSchema, `${select} ORDER BY d.attempted_at DESC LIMIT 1`, [], "deliveries.latest")
-    })
-  }))
-}
-
-export interface PushContext {
-  readonly job: PushJobRow
-  readonly event: EventRow
-  readonly subscription: PushSubscriptionRow
-}
-
-interface DeliveryFinalization {
-  readonly deliveryId: string
-  readonly message: PushJobMessage
-  readonly responseStatus: number | null
-  readonly error: string
-  readonly now: string
-}
-
-const deliveryInsert = (v: DeliveryFinalization, status: "sent" | "failed") => ({
-  sql: `INSERT INTO deliveries
-    (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  params: [v.deliveryId, v.message.eventId, v.message.subscriptionId, status,
-    v.responseStatus, v.error.slice(0, 4_000), v.now, v.now]
-})
-
-export class PushJobsRepository extends Context.Service<PushJobsRepository, {
-  readonly find: (message: PushJobMessage) => Effect.Effect<PushJobRow | null, RepositoryUnavailable>
-  readonly claim: (message: PushJobMessage, now: string, leaseUntil: string) => Effect.Effect<boolean, RepositoryUnavailable>
-  readonly loadContext: (message: PushJobMessage) => Effect.Effect<PushContext | null, RepositoryUnavailable>
-  readonly finalizeSuccess: (values: DeliveryFinalization) => Effect.Effect<void, RepositoryUnavailable>
-  readonly finalizeDead: (values: DeliveryFinalization & { readonly disableSubscription: boolean }) => Effect.Effect<void, RepositoryUnavailable>
-  readonly scheduleRetry: (values: DeliveryFinalization & { readonly availableAt: string }) => Effect.Effect<void, RepositoryUnavailable>
-  readonly listRecoverable: (now: string, staleQueueTime: string) => Effect.Effect<ReadonlyArray<PushJobMessage>, RepositoryUnavailable>
-  readonly markRecoveredQueued: (messages: ReadonlyArray<PushJobMessage>, queuedAt: string) => Effect.Effect<void, RepositoryUnavailable>
-}>()("ops-context/PushJobsRepository") {
-  static readonly layer = Layer.effect(PushJobsRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
-    const Recoverable = Schema.Struct({ event_id: Schema.String, subscription_id: Schema.String })
-    const find = (message: PushJobMessage) => db.first(PushJobRowSchema,
-      "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = ?",
-      [message.eventId, message.subscriptionId], "push_jobs.get")
-    return PushJobsRepository.of({
-      find,
-      claim: (message, now, leaseUntil) => db.run(`UPDATE push_jobs
-        SET state = 'sending', attempts = attempts + 1, lease_until = ?, updated_at = ?
-        WHERE event_id = ? AND subscription_id = ?
-          AND (state IN ('pending', 'queued', 'retrying') OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?)))
-          AND available_at <= ?`, [leaseUntil, now, message.eventId, message.subscriptionId, now, now],
-        "push_jobs.claim"
-      ).pipe(Effect.map((count) => count > 0)),
-      loadContext: (message) => Effect.gen(function*() {
-        const job = yield* find(message)
-        if (!job) return null
-        const event = yield* db.first(EventRowSchema, `${eventSelect} WHERE e.id = ?`, [message.eventId], "push_jobs.get_event")
-        const subscription = yield* db.first(PushSubscriptionRowSchema,
-          "SELECT * FROM push_subscriptions WHERE id = ?", [message.subscriptionId], "push_jobs.get_subscription")
-        return event && subscription ? { job, event, subscription } : null
-      }),
-      finalizeSuccess: (v) => db.batch([
-        { sql: `UPDATE push_jobs SET state = 'sent', lease_until = NULL, dead_at = NULL,
-          last_error = '', updated_at = ? WHERE event_id = ? AND subscription_id = ?`,
-          params: [v.now, v.message.eventId, v.message.subscriptionId] },
-        deliveryInsert(v, "sent")
-      ], "push_jobs.finalize_success"),
-      finalizeDead: (v) => db.batch([
-        { sql: `UPDATE push_jobs SET state = 'dead', lease_until = NULL, dead_at = ?,
-          last_error = ?, updated_at = ? WHERE event_id = ? AND subscription_id = ?`,
-          params: [v.now, v.error.slice(0, 4_000), v.now, v.message.eventId, v.message.subscriptionId] },
-        deliveryInsert(v, "failed"),
-        ...(v.disableSubscription ? [{
-          sql: "UPDATE push_subscriptions SET enabled = 0, updated_at = ? WHERE id = ?",
-          params: [v.now, v.message.subscriptionId]
-        }] : [])
-      ], "push_jobs.finalize_dead"),
-      scheduleRetry: (v) => db.batch([
-        { sql: `UPDATE push_jobs SET state = 'retrying', available_at = ?, queued_at = ?,
-          lease_until = NULL, dead_at = NULL, last_error = ?, updated_at = ?
-          WHERE event_id = ? AND subscription_id = ?`,
-          params: [v.availableAt, v.now, v.error.slice(0, 4_000), v.now, v.message.eventId, v.message.subscriptionId] },
-        deliveryInsert(v, "failed")
-      ], "push_jobs.finalize_retry"),
-      listRecoverable: (now, staleQueueTime) => db.all(Recoverable, `SELECT event_id, subscription_id
-        FROM push_jobs WHERE (state = 'pending' AND available_at <= ?)
-          OR (state = 'queued' AND available_at <= ? AND (queued_at IS NULL OR queued_at < ?))
-          OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?))
-        ORDER BY available_at LIMIT 100`, [now, now, staleQueueTime, now], "push_jobs.list_recoverable"
-      ).pipe(Effect.map((rows) => rows.map((row) => ({ eventId: row.event_id, subscriptionId: row.subscription_id })))),
-      markRecoveredQueued: (messages, queuedAt) => db.batch(messages.map((message) => ({
-        sql: `UPDATE push_jobs SET state = 'queued', queued_at = ?, lease_until = NULL,
-          dead_at = NULL, updated_at = ? WHERE event_id = ? AND subscription_id = ?
-          AND state IN ('pending', 'queued', 'sending', 'retrying')`,
-        params: [queuedAt, queuedAt, message.eventId, message.subscriptionId]
-      })), "push_jobs.mark_recovered_queued")
+      listForEvent: (eventId) => db.all(DeliveryRowSchema, `${select} WHERE d.event_id = ? ORDER BY d.attempted_at_ms DESC`, [eventId], "deliveries.list_for_event"),
+      latest: db.first(DeliveryRowSchema, `${select} ORDER BY d.id DESC LIMIT 1`, [], "deliveries.latest"),
+      pruneSuccessfulBeforeEvent: (cutoff, limit) => db.runCounted(
+        pruneSuccessfulDeliveriesBeforeEventSql,
+        [epochMs(cutoff), limit],
+        "deliveries.prune_successful"
+      )
     })
   }))
 }
@@ -935,7 +813,7 @@ export class SystemRepository extends Context.Service<SystemRepository, {
   readonly counts: Effect.Effect<SystemCounts, RepositoryUnavailable>
 }>()("ops-context/SystemRepository") {
   static readonly layer = Layer.effect(SystemRepository, Effect.gen(function*() {
-    const db = yield* D1Executor
+    const db = yield* Database
     const Health = Schema.Struct({ ok: Schema.Number })
     const Counts = Schema.Struct({
       projects: Schema.Number, events: Schema.Number, subscriptions: Schema.Number,
@@ -962,11 +840,8 @@ const RepositoryLayers = Layer.mergeAll(
   SilencesRepository.layer,
   SettingsRepository.layer,
   DeliveriesRepository.layer,
-  PushJobsRepository.layer,
   SystemRepository.layer
 )
 
-export const D1RepositoriesLive = (db: D1Connection) => {
-  const database = Database.layer(db)
-  return RepositoryLayers.pipe(Layer.provide(D1Executor.layer), Layer.provide(database))
-}
+export const D1RepositoriesLive = (db: D1Database) =>
+  RepositoryLayers.pipe(Layer.provide(Database.layer(db)))

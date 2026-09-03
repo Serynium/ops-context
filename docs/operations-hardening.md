@@ -49,15 +49,21 @@ publication succeeds, so an interrupted fan-out remains recoverable without a
 Cron repair path.
 
 Ordinary retry ownership belongs only to Cloudflare Queue. D1 records attempts,
-leases, retry availability, and terminal `sent` or `dead` state. The application
+leases, retry availability, and terminal `dead` state; successful attempts are
+recorded in `deliveries` and their push jobs are deleted. The application
 attempt ceiling is capped at six, matching the first delivery plus five Queue
 retries in `wrangler.jsonc`.
 
 ## Queue payload billing
 
-Cloudflare bills Queue payloads in 64,000-byte chunks. Ops Context emits a
-`queue.command.large` warning when an `IngestEvent` command crosses that
-boundary. The hard safety ceiling remains 127,900 bytes.
+Cloudflare bills Queue payloads in 64,000-byte chunks. Ops Context caps the
+complete encoded `IngestEvent` command at 63,800 bytes and the normalized event
+at 60,000 bytes, keeping ordinary ingestion inside one billing chunk.
+
+New projects default to warning-or-higher notifications. For eligible events
+with the same nonempty fingerprint, one atomic five-minute reservation suppresses
+duplicate notification jobs while retaining every event. Operators can still
+lower a project's `min_level` explicitly.
 
 For capacity planning, let:
 
@@ -96,7 +102,7 @@ Before the hardening change:
 + S push-job inserts
 + S per-destination mark_queued updates
 + S claim updates
-+ S terminal-state updates
++ S finalization writes
 + S delivery inserts
 
 = E(2 + 5S)
@@ -110,7 +116,7 @@ After the hardening change:
 + 1 event-level fanout_published_at update
 + S push-job inserts
 + S claim updates
-+ S terminal-state updates
++ S finalization writes
 + S delivery inserts
 
 = E(3 + 4S)
@@ -128,6 +134,18 @@ write; at one destination the lower bound is unchanged; above one destination
 it saves one D1 write for every destination after the first. Duplicate Queue
 messages can add claim attempts or terminal checks, but conditional updates keep
 the durable result idempotent.
+
+A successful finalization now deletes its job in the same batch that inserts the
+delivery outcome. This does not change the first-pass formula above—`DELETE` and
+`UPDATE` each write one row—but removes the later retention delete and the
+seven-day successful-job storage window.
+
+Delivery identifiers are rowid-backed integer primary keys. The repository
+casts them to strings at the API boundary, preserving the public response while
+avoiding a separate text-primary-key index. Latest-delivery reads use descending
+rowid order, so the global attempted-time index is also unnecessary. The local
+scale fixture measured two D1 `rows_written` and about 123 database bytes per
+delivery, down from four writes and 299 bytes.
 
 The database adapter always annotates tracing spans with D1 metadata. Routine
 successful query logs are sampled, while failures, slow queries, high-read
@@ -158,27 +176,32 @@ identifiers are still available in Workers Logs.
 
 ## Retention measurement and bounds
 
-Retention deletes at most 500 events per D1 statement and at most 20 batches per
-daily invocation. A result with `continuationRequired: true` means the next
-scheduled run must continue draining the backlog.
+Retention deletes at most 500 rows per D1 statement and at most 20 batches each
+for events, terminal push jobs, and successful deliveries per 15-minute invocation. Successful jobs are
+deleted in their delivery transaction; dead and legacy sent push jobs are
+eligible after seven days. Successful deliveries for events older than seven
+days are eligible; failed history follows event retention. Active jobs are never selected.
+A result with `continuationRequired: true` means the next scheduled run must
+continue draining at least one backlog.
 
 Use existing D1 telemetry to measure production retention cost after deployment:
 
-1. Filter Workers Logs for `event = "d1.query"` and
-   `db.query.name = "events.prune"`.
+1. Filter Workers Logs for `event = "d1.query"` and `db.query.name` equal to
+   `events.prune`, `push_jobs.prune_terminal`, or `deliveries.prune_successful`.
 2. Record `db.duration_ms`, `db.rows_read`, and `db.rows_written` across several
    scheduled runs, including a run with an established retention backlog.
 3. Investigate any invocation at or above 100 ms, 1,000 rows read, 100 rows
    written, or the configured read-amplification threshold. These records are
    emitted at full fidelity rather than sampled.
-4. Check the `retention completed` result for `batches`, `prunedEvents`, and
-   `continuationRequired`; repeated continuation indicates the daily budget is
-   not draining the backlog fast enough.
+4. Check the `retention.completed` event for `batches`, `pushJobBatches`,
+   `deliveryBatches`, `prunedEvents`, `prunedPushJobs`, `prunedDeliveries`, and
+   `continuationRequired`; repeated
+   continuation warnings indicate the daily budget is not draining a backlog.
 
 The bounded, ordered delete introduced here limits each statement even when
 cascade and read-model triggers are expensive. If production telemetry still
 exceeds the thresholds, reduce `RETENTION_BATCH_SIZE` or replace row-triggered
-group repair with a measured set-oriented repair before increasing the daily
+group repair with a measured set-oriented repair before increasing the per-run
 batch budget.
 
 ## No-Cron deployment
@@ -204,7 +227,7 @@ Git.
 
 After applying migrations and deploying:
 
-1. An Access-authenticated user can call `/api/v1/access/me` and a private API.
+1. An Access-authenticated user can call `/api/v1/status` and another private API.
 2. The same requests fail without Access and with an invalid issuer, audience,
    signature, expiry, hostname, or route surface.
 3. An Access service token can call `/mcp` but cannot mutate the app API.

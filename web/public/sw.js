@@ -109,7 +109,7 @@ const reportRenewalFailure = async () => {
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",
     tag: "ops-context-push-renewal-failed",
-    data: { url: "/?view=push", actionUrls: {} }
+    data: { url: "/devices", actionUrls: {} }
   })
 }
 

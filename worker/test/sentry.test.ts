@@ -76,6 +76,18 @@ describe("Sentry envelope ingestion", () => {
     expect(sentryKey(query)).toBe("ops_proj_query")
   })
 
+  it("decodes SDK-safe DSN keys", () => {
+    const key = "ops_proj_test-key"
+    const encoded = Array.from(encoder.encode(key), (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("")
+    const request = new Request(
+      `https://ops.example.com/api/1/envelope/?sentry_key=ops_sentry_${encoded}`
+    )
+
+    expect(sentryKey(request)).toBe(key)
+  })
+
   it("parses byte-counted envelope items without breaking Unicode payloads", () => {
     const body = envelope("abc", { event_id: "abc", message: "déjà vu" })
     const items = splitSentryEnvelope(body)
@@ -193,7 +205,7 @@ describe("Sentry envelope ingestion", () => {
       tags: { huge: "x".repeat(300 * 1_024) }
     })))
     expect(mapped?.input.title).toBe("boom")
-    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(120_000)
+    expect(encoder.encode(JSON.stringify(mapped?.input.data)).byteLength).toBeLessThan(60_000)
   })
 
   it("decompresses gzip request bodies", async () => {

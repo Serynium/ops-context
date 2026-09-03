@@ -35,9 +35,10 @@ by the documented token, phrase, and explicit-prefix semantics.
 
 ## Indexed data and redaction
 
-The index contains title, body, source, fingerprint, and a normalized projection
-of structured payload values. It does not index serialized JSON, JSON keys, or
-the `[REDACTED]` marker. Event payloads pass through the normal recursive
+The contentless index tokenizes title, body, source, fingerprint, and a normalized
+projection of structured payload values without storing a second copy of that
+text. It does not index serialized JSON, JSON keys, or the `[REDACTED]` marker.
+Event payloads pass through the normal recursive
 redaction policy before the `events` insert and its search-index trigger execute,
 so sensitive structured values never enter FTS5.
 
@@ -95,7 +96,8 @@ leading-wildcard predicates with the joined `event_search MATCH` query, and use
 
 ## Maintenance and rebuild
 
-Migration `0008_event_search_fts.sql` backfills existing events and installs
+Migration `0008_event_search_fts.sql` introduces the index; migration
+`0016_contentless_event_search.sql` rebuilds it in contentless mode and installs
 insert, update, and delete triggers. Because triggers execute in the mutating
 statement's transaction, event creation, retention deletion, and project cascade
 deletion cannot commit with a stale index.

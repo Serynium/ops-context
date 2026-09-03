@@ -146,7 +146,7 @@ export const processPushMessage = (
           tag: context.event.id,
           ...(notificationActions.length > 0 ? { actions: notificationActions } : {}),
           data: {
-            url: `/?event=${encodeURIComponent(context.event.id)}`,
+            url: `/events/${encodeURIComponent(context.event.id)}`,
             eventId: context.event.id,
             projectId: context.event.project_id,
             level: context.event.level,

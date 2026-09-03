@@ -21,8 +21,6 @@ The status response reports:
 }
 ```
 
-The compatibility field `mcp_token_set` mirrors `mcp_access_configured` during the transition from the former application bearer token.
-
 ## Authentication
 
 MCP is protected only by Cloudflare Access.

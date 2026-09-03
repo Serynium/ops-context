@@ -123,7 +123,7 @@ beforeAll(async () => {
 describe("Cloudflare Access identity boundary", () => {
   it("accepts a verified user on the configured application host", async () => {
     const request = await attachCloudflareAccess(
-      new Request("https://ops.example.com/api/v1/access/me"),
+      new Request("https://ops.example.com/api/v1/status"),
       env,
       context("app-audience", {
         id: "user-123",
@@ -148,7 +148,7 @@ describe("Cloudflare Access identity boundary", () => {
       name: "Static Router User"
     })
     const request = await attachCloudflareAccess(
-      new Request("https://ops.example.com/api/v1/access/me", {
+      new Request("https://ops.example.com/api/v1/status", {
         headers: { "cf-access-jwt-assertion": token }
       }),
       env,
@@ -248,7 +248,7 @@ describe("Cloudflare Access identity boundary", () => {
 
   it("rejects a request without a verified Access context", async () => {
     const request = await attachCloudflareAccess(
-      new Request("https://ops.example.com/api/v1/access/me"),
+      new Request("https://ops.example.com/api/v1/status"),
       env,
       emptyContext
     )
@@ -258,9 +258,33 @@ describe("Cloudflare Access identity boundary", () => {
     })
   })
 
+  it("allows the explicit development bypass only on loopback", async () => {
+    const localEnv = { ...env, OPS_LOCAL_ACCESS_BYPASS: "1" }
+    const local = await attachCloudflareAccess(
+      new Request("http://localhost:8787/api/v1/status"),
+      localEnv,
+      emptyContext
+    )
+    await expect(authenticate(local, "app")).resolves.toMatchObject({
+      subject: "local-development",
+      email: "local@localhost",
+      kind: "user",
+      surface: "app"
+    })
+
+    const deployed = await attachCloudflareAccess(
+      new Request("https://ops.example.com/api/v1/status"),
+      localEnv,
+      emptyContext
+    )
+    await expect(authenticate(deployed, "app")).rejects.toMatchObject({
+      _tag: "UnauthorizedError"
+    })
+  })
+
   it("strips spoofed internal identity headers", async () => {
     const request = await attachCloudflareAccess(
-      new Request("https://ops.example.com/api/v1/access/me", {
+      new Request("https://ops.example.com/api/v1/status", {
         headers: {
           "x-ops-access-verified": "1",
           "x-ops-access-subject": "attacker",

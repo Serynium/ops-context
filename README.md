@@ -24,7 +24,7 @@ Ops Context is the Cloudflare + Effect interpretation of the same idea behind Bo
 - Queue-first event acceptance, durable push jobs, leases, bounded Queue-owned retries, terminal dead-letter outcomes, and expired-subscription disabling.
 - Silence rules by fingerprint, title, or source, including project-specific and global rules.
 - Optional read-only MCP Streamable HTTP endpoint using the official `@modelcontextprotocol/server` TypeScript SDK.
-- Cloudflare Access administrator identity, same-origin checks, retention settings, and optional daily retention.
+- Cloudflare Access administrator identity, same-origin checks, retention settings, and optional 15-minute bounded retention.
 - Static PWA assets served through Workers Static Assets.
 
 The repository is production-oriented but remains pre-1.0. See [ROADMAP.md](ROADMAP.md) for remaining hardening work and [CHANGELOG.md](CHANGELOG.md) for release details.
@@ -59,7 +59,7 @@ Apps, CI, cron jobs                      MCP clients / agents
                PWA inbox
 ```
 
-Cloudflare Queue is the durable acceptance boundary. The HTTP endpoint returns `202 Accepted` only after a schema-versioned `IngestEvent` command is accepted. Its consumer idempotently creates the event and jobs, then publishes `DeliverPush` commands before acknowledging. Queue redelivery resumes partial fan-out without a repair Cron. D1 owns delivery claims, attempt limits, and terminal `sent`/`dead` state; Queue owns retry timing. See [event ingestion](docs/event-ingestion.md) and [Web Push delivery lifecycle](docs/delivery.md).
+Cloudflare Queue is the durable acceptance boundary. The HTTP endpoint returns `202 Accepted` only after a schema-versioned `IngestEvent` command is accepted. Its consumer idempotently creates the event and jobs, then publishes `DeliverPush` commands before acknowledging. Queue redelivery resumes partial fan-out without a repair Cron. D1 owns delivery claims, attempt limits, dead jobs, and successful delivery records; Queue owns retry timing. See [event ingestion](docs/event-ingestion.md) and [Web Push delivery lifecycle](docs/delivery.md).
 
 MCP, HTTP, Queue consumption, and scheduled maintenance intentionally remain one
 modular Worker deployment until production isolation or scaling evidence justifies the
@@ -201,17 +201,17 @@ Levels are `info`, `success`, `warning`, `error`, and `critical`.
 
 Actions are optional. An event may contain at most three actions; labels are limited to 40 characters, URLs must be absolute, and unsafe local/script schemes are refused.
 
-The raw HTTP body is limited to **256 KiB**, and the normalized event is limited to **120,000 encoded bytes** so its versioned command remains below Cloudflare Queue's 128,000-byte message ceiling. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
+The raw HTTP body is limited to **256 KiB**, and the normalized event is limited to **60,000 encoded bytes** so its versioned command stays within one Cloudflare Queue billing chunk. Titles, bodies, identifiers, timestamps, actions, and structured context are validated by a shared Effect Schema contract; invalid values are rejected rather than truncated. See [the event ingestion contract](docs/event-ingestion.md) for every field and structural limit.
 
 ### Sentry SDKs — drop-in DSN
 
-Ops Context accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Set the SDK DSN to the Ops Context origin and use a project API key as the DSN public key:
+Ops Context accepts the Sentry envelope protocol, so an existing server-side Sentry SDK can report here without changing application code. Hex-encode the project API key and prefix it with `ops_sentry_` so it fits Sentry's DSN public-key syntax:
 
 ```text
-SENTRY_DSN=https://ops_proj_REPLACE_ME@ops.example.com/1
+SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@ops.example.com/1
 ```
 
-The value before `@` is an Ops Context project key. The trailing project id is required by Sentry's DSN format but ignored; the key selects the project. The Worker accepts `POST /api/{id}/envelope/`, including gzip- and deflate-compressed envelopes.
+The Worker decodes the value before `@` and authenticates the original Ops Context project key. The trailing project id is required by Sentry's DSN format but ignored. The Worker accepts `POST /api/{id}/envelope/`, including gzip- and deflate-compressed envelopes.
 
 > **Keep this DSN server-side.** Unlike a normal Sentry DSN, it contains a write-capable Ops Context project key. Do not embed it in browser, mobile, or other untrusted client code.
 

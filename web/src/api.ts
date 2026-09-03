@@ -26,6 +26,11 @@ export interface ProjectCreated extends Project {
   readonly api_key: string
 }
 
+interface ProjectPage {
+  readonly projects: ReadonlyArray<Project>
+  readonly next_cursor?: string
+}
+
 export interface EventItem {
   readonly id: string
   readonly external_id?: string
@@ -70,6 +75,17 @@ export interface PushDevice {
   readonly updated_at: string
 }
 
+export interface Delivery {
+  readonly id: string
+  readonly event_id: string
+  readonly subscription_id: string
+  readonly subscription_name: string
+  readonly status: "sent" | "failed" | "skipped"
+  readonly response_status: number | null
+  readonly error: string
+  readonly attempted_at: string
+}
+
 export interface PushCredentialResult {
   readonly subscription: PushDevice
   readonly renewal_credential: string
@@ -94,18 +110,7 @@ interface SettingsWire {
   readonly mcp_access_configured: boolean
 }
 
-export interface Settings extends SettingsWire {
-  /** @deprecated Temporary view compatibility; mirrors mcp_access_configured. */
-  readonly mcp_token_set: boolean
-}
-
-export interface AccessIdentity {
-  readonly subject: string
-  readonly kind: "user" | "service-token"
-  readonly audience: string
-  readonly email?: string
-  readonly name?: string
-}
+export type Settings = SettingsWire
 
 export interface Status {
   readonly version: string
@@ -120,7 +125,7 @@ export interface Status {
   readonly enabled_subscriptions: number
   readonly dead_jobs: number
   readonly failed_ingests: number
-  readonly last_push: unknown
+  readonly last_push: Delivery | null
   readonly retention_days: number
   readonly setup_completed: boolean
   readonly admin_auth: boolean
@@ -131,15 +136,10 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
   ) {
     super(message)
   }
-}
-
-let onUnauthorized: (() => void) | undefined
-export const setUnauthorizedHandler = (handler: () => void): void => {
-  onUnauthorized = handler
 }
 
 const request = async <A>(method: string, path: string, body?: unknown): Promise<A> => {
@@ -147,7 +147,7 @@ const request = async <A>(method: string, path: string, body?: unknown): Promise
   const init: RequestInit = {
     method,
     credentials: "same-origin",
-    headers
+    headers,
   }
   if (body !== undefined) {
     headers.set("content-type", "application/json")
@@ -167,11 +167,11 @@ const request = async <A>(method: string, path: string, body?: unknown): Promise
 
   if (!response.ok) {
     const value = parsed as { error?: string; message?: string } | null
-    if (response.status === 401) onUnauthorized?.()
+    if (response.status === 401) window.location.reload()
     throw new ApiError(
       response.status,
       value?.error ?? "request_failed",
-      value?.message ?? `Request failed with HTTP ${response.status}`
+      value?.message ?? `Request failed with HTTP ${response.status}`,
     )
   }
   return parsed as A
@@ -183,61 +183,49 @@ const eventsRequest = (params: Record<string, string | undefined> = {}): Promise
   return request<EventPage>("GET", `/api/v1/events${search.size ? `?${search}` : ""}`)
 }
 
-const accessState = async (): Promise<{ auth_required: true; authenticated: true }> => {
-  await request<AccessIdentity>("GET", "/api/v1/access/me")
-  return { auth_required: true, authenticated: true }
-}
-
-const settings = async (): Promise<Settings> => {
-  const value = await request<SettingsWire>("GET", "/api/v1/settings")
-  return { ...value, mcp_token_set: value.mcp_access_configured }
-}
-
 export const api = {
-  accessIdentity: () => request<AccessIdentity>("GET", "/api/v1/access/me"),
-
-  // Compatibility for the current PWA entry module. These methods no longer
-  // perform application password authentication; they delegate to Access or
-  // navigate to the standard Access logout endpoint.
-  me: accessState,
-  login: (_username: string, _password: string) => accessState(),
-  logout: (): Promise<void> => {
-    window.location.assign("/cdn-cgi/access/logout")
-    return new Promise<void>(() => undefined)
-  },
-
   events: eventsRequest,
   event: (id: string) => request<EventItem>("GET", `/api/v1/events/${encodeURIComponent(id)}`),
+  eventDeliveries: (id: string) =>
+    request<{ deliveries: ReadonlyArray<Delivery> }>("GET", `/api/v1/events/${encodeURIComponent(id)}/deliveries`),
   eventGroup: (projectId: string, fingerprint: string, params: Record<string, string | undefined> = {}) =>
     eventsRequest({
       ...params,
       project: projectId,
       fingerprint,
       grouped: "false",
-      limit: params.limit ?? "100"
+      limit: params.limit ?? "100",
     }),
-  unsilence: (id: string) => request<{ event: EventItem }>("POST", `/api/v1/events/${encodeURIComponent(id)}/unsilence`, {}),
+  unsilence: (id: string) =>
+    request<{ event: EventItem }>("POST", `/api/v1/events/${encodeURIComponent(id)}/unsilence`, {}),
 
-  projects: () => request<{ projects: ReadonlyArray<Project> }>("GET", "/api/v1/projects"),
+  projects: async (): Promise<{ projects: ReadonlyArray<Project> }> => {
+    const projects: Project[] = [];
+    let cursor: string | undefined;
+    do {
+      const query = new URLSearchParams({ limit: "100" });
+      if (cursor) query.set("before", cursor);
+      const page = await request<ProjectPage>("GET", `/api/v1/projects?${query}`);
+      projects.push(...page.projects);
+      cursor = page.next_cursor;
+    } while (cursor);
+    return { projects };
+  },
   createProject: (input: { name: string; icon?: string }) => request<ProjectCreated>("POST", "/api/v1/projects", input),
   updateProject: (id: string, patch: Partial<Pick<Project, "name" | "icon" | "notify" | "min_level">>) =>
     request<Project>("PATCH", `/api/v1/projects/${encodeURIComponent(id)}`, patch),
   deleteProject: (id: string) => request<void>("DELETE", `/api/v1/projects/${encodeURIComponent(id)}`, {}),
-  rotateProjectKey: (id: string) => request<ProjectCreated>("POST", `/api/v1/projects/${encodeURIComponent(id)}/rotate-key`, {}),
+  rotateProjectKey: (id: string) =>
+    request<ProjectCreated>("POST", `/api/v1/projects/${encodeURIComponent(id)}/rotate-key`, {}),
 
   publicKey: () => request<{ public_key: string }>("GET", "/api/v1/push/public-key"),
   pushDevices: () => request<{ subscriptions: ReadonlyArray<PushDevice> }>("GET", "/api/v1/push/subscriptions"),
-  registerPush: (
-    name: string,
-    enrollmentKey: string,
-    subscription: PushSubscriptionJSON,
-    reactivate: boolean
-  ) =>
+  registerPush: (name: string, enrollmentKey: string, subscription: PushSubscriptionJSON, reactivate: boolean) =>
     request<PushCredentialResult>("POST", "/api/v1/push/subscriptions", {
       name,
       enrollment_key: enrollmentKey,
       reactivate,
-      subscription
+      subscription,
     }),
   updatePush: (id: string, patch: { name?: string; enabled?: boolean }) =>
     request<PushDevice>("PATCH", `/api/v1/push/subscriptions/${encodeURIComponent(id)}`, patch),
@@ -248,8 +236,9 @@ export const api = {
     request<Silence>("POST", "/api/v1/silences", input),
   deleteSilence: (id: string) => request<void>("DELETE", `/api/v1/silences/${encodeURIComponent(id)}`, {}),
 
-  settings,
+  settings: () => request<Settings>("GET", "/api/v1/settings"),
   updateSettings: (patch: Partial<SettingsWire>) => request<SettingsWire>("PATCH", "/api/v1/settings", patch),
   status: () => request<Status>("GET", "/api/v1/status"),
-  test: (project_id?: string) => request<{ event: EventAccepted }>("POST", "/api/v1/test", project_id ? { project_id } : {})
+  test: (project_id?: string) =>
+    request<{ event: EventAccepted }>("POST", "/api/v1/test", project_id ? { project_id } : {}),
 }

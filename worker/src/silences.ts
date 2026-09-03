@@ -10,9 +10,8 @@ import {
   type SilenceNotFound
 } from "./errors.js"
 import { newId, nowIso } from "./ids.js"
-import { ProjectsRepository, SilencesRepository } from "./repositories.js"
+import { ProjectsRepository, SilencesRepository, type SilenceRow } from "./repositories.js"
 import { CredentialCrypto } from "./services.js"
-import type { SilenceRow } from "./types.js"
 
 export type SilenceField = "fingerprint" | "title" | "source"
 

@@ -21,9 +21,7 @@ MCP cursor pages and grouped-event reads require monotonic reads within a logica
 session.
 
 Repository ports from issue #9 and stable query telemetry from issue #17 now exist.
-The prototype therefore accepts either a `D1Database` or a request-scoped
-`D1DatabaseSession` only at the internal adapter construction boundary. Application
-and domain repository interfaces remain unchanged.
+The production adapter accepts the authoritative `D1Database` binding only.
 
 ## Adoption threshold
 
@@ -57,9 +55,7 @@ and called it from a Worker executing in Sofia (`SOF`). Each mode used 30 indexe
 Rows read remained 50. Unconstrained Sessions improved median wall time by 80%, but
 p95 improved by only 5% because some first queries still reached the primary. The
 consistency probe successfully read its own write in the original session and from a
-new session initialized with the returned bookmark. The Workers integration load
-comparison also executes both paths against the same local D1 engine and asserts
-identical results.
+new session initialized with the returned bookmark.
 
 This is a deliberately adverse synthetic geometry, not production PWA/MCP evidence.
 It demonstrates possible upside and validates the adapter/consistency design, but it
@@ -71,8 +67,8 @@ Retain primary-only reads. Do not enable D1 read replication or propagate bookma
 in the production HTTP surface yet. The current binding remains the repository
 connection for PWA, MCP, ingestion, Queue, and scheduled programs.
 
-Keep the narrow prototype and tests. A future change can construct request-scoped
-repository layers from `env.DB.withSession(...)` without changing domain use cases:
+Reintroduce a request-scoped Sessions adapter and its focused integration test only
+when the production thresholds above justify a canary:
 
 - read-only PWA/MCP requests start unconstrained or from a validated client bookmark;
 - administrator mutation flows use `first-primary`, perform writes through that same
@@ -104,8 +100,7 @@ binding reads already stay on the primary. No schema or data rollback is require
 ## Consequences
 
 - Production consistency and operational complexity remain unchanged.
-- The adapter seam and tests demonstrate Sessions without leaking Cloudflare types
-  into repository ports or domain use cases.
+- No inactive Sessions adapter or benchmark is carried in the production repository.
 - The synthetic median benefit is preserved as a reason to re-evaluate, while clear
   production and tail-latency gates prevent premature adoption.
 

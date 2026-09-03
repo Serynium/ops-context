@@ -5,6 +5,7 @@
   "compatibility_date": "2026-08-29",
   "minify": true,
   "upload_source_maps": true,
+  "limits": { "cpu_ms": 1000 },
 
   "assets": {
     "directory": "./web/dist",
@@ -36,7 +37,7 @@
         "max_batch_timeout": 5,
         "max_retries": 5,
         "dead_letter_queue": "ops-context-push-dlq",
-        "max_concurrency": 4
+        "max_concurrency": 8
       },
       {
         "queue": "ops-context-push-dlq",
@@ -49,7 +50,7 @@
   },
 
   "triggers": {
-    "crons": ["0 3 * * *"]
+    "crons": ["*/15 * * * *"]
   },
 
   "vars": {

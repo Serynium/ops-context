@@ -350,6 +350,41 @@ describe("Cloudflare Worker runtime", () => {
     expect(sameOrigin.status).toBe(201)
   })
 
+  it("serves authenticated status from a short private cache", async () => {
+    await (caches as CacheStorage & { readonly default: Cache }).default.delete(new Request(new URL(
+      "/__ops-context-cache/status",
+      env.OPS_BASE_URL || "https://ops-context.invalid"
+    )))
+    const request = () => new Request("https://ops.example.com/api/v1/status", {
+      headers: {
+        "x-forwarded-host": "ops.example.com",
+        "x-forwarded-proto": "https"
+      }
+    })
+    const first = await fetchWorker(request(), accessContext())
+    const second = await fetchWorker(request(), accessContext())
+
+    expect(first.headers.get("x-ops-status-cache")).toBe("miss")
+    expect(second.headers.get("x-ops-status-cache")).toBe("hit")
+    expect(second.headers.get("cache-control")).toBe("no-store")
+  })
+
+  it("serves authenticated event reads from a short private cache", async () => {
+    const url = `https://ops.example.com/api/v1/events?source=cache-${crypto.randomUUID()}`
+    const request = () => new Request(url, {
+      headers: {
+        "x-forwarded-host": "ops.example.com",
+        "x-forwarded-proto": "https"
+      }
+    })
+    const first = await fetchWorker(request(), accessContext())
+    const second = await fetchWorker(request(), accessContext())
+
+    expect(first.headers.get("x-ops-events-cache")).toBe("miss")
+    expect(second.headers.get("x-ops-events-cache")).toBe("hit")
+    expect(second.headers.get("cache-control")).toBe("no-store")
+  })
+
   it("repairs grouped-event drift through the protected same-origin operation", async () => {
     const now = "2026-01-01T00:00:00.000Z"
     await env.DB.batch([

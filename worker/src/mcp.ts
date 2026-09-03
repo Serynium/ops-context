@@ -2,10 +2,9 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server"
 import { Cause, Context, Effect, Exit, Layer } from "effect"
 import { AdministratorIdentity } from "./access.js"
 import type { ApiFailure } from "./api-models.js"
-import { Events, Projects, Settings } from "./application.js"
 import { D1StructuredLoggerLive } from "./database-observability.js"
 import { isApplicationError, type ApplicationError } from "./errors.js"
-import type { EventPage, ListEventsInput } from "./events.js"
+import { getEvent, listEvents, type EventPage, type ListEventsInput } from "./events.js"
 import {
   GetEventArguments,
   GetEventGroupArguments,
@@ -14,6 +13,14 @@ import {
   SearchEventsArguments,
   type EventFilterArguments
 } from "./mcp-schemas.js"
+import { listAllProjects } from "./projects.js"
+import {
+  EventsRepository,
+  ProjectsRepository,
+  SettingsRepository
+} from "./repositories.js"
+import { AppConfig } from "./services.js"
+import { getSettings } from "./settings.js"
 import type { EventView } from "./types.js"
 
 const readOnlyAnnotations = {
@@ -84,7 +91,7 @@ const eventPageOutput = (page: EventPage) => ({
 })
 
 const contentResult = <A extends object>(value: A) => ({
-  content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+  content: [{ type: "text" as const, text: JSON.stringify(value) }],
   structuredContent: value as Record<string, unknown>
 })
 
@@ -113,7 +120,6 @@ export const toMcpToolFailure = (failure: ApplicationError): McpToolFailure => {
     case "InvalidProjectCredential":
       return { code: "not_found", message: failure.message }
     case "DuplicateExternalId":
-    case "ProjectDeletionConflict":
     case "SubscriptionEndpointConflict":
       return { code: "conflict", message: failure.message }
     case "RepositoryUnavailable":
@@ -173,15 +179,22 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
   static readonly layer = Layer.effect(
     McpEndpoint,
     Effect.gen(function*() {
-      const projects = yield* Projects
-      const events = yield* Events
-      const settings = yield* Settings
+      const projects = yield* ProjectsRepository
+      const events = yield* EventsRepository
+      const settings = yield* SettingsRepository
+      const config = yield* AppConfig
       const identity = yield* AdministratorIdentity
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(ProjectsRepository, projects),
+        Effect.provideService(EventsRepository, events),
+        Effect.provideService(SettingsRepository, settings),
+        Effect.provideService(AppConfig, config)
+      )
 
       const resolveProject = async (value: string | undefined) => {
         const selector = trimmed(value)
         if (!selector) return undefined
-        const available = await runMcpEffect(projects.list)
+        const available = await runMcpEffect(provide(listAllProjects))
         return available.find((project) => project.id === selector || project.slug === selector)
       }
 
@@ -208,7 +221,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             inputSchema: ListProjectsArguments,
             annotations: readOnlyAnnotations
           },
-          async () => contentResult({ projects: await runMcpEffect(projects.list) })
+          async () => contentResult({ projects: await runMcpEffect(provide(listAllProjects)) })
         )
 
         server.registerTool(
@@ -223,7 +236,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             const selector = trimmed(args.project)
             const project = await resolveProject(selector)
             if (selector && !project) throw new Error(`Unknown project: ${selector}`)
-            const page = await runMcpEffect(events.list(toListInput(args, project?.id)))
+            const page = await runMcpEffect(provide(listEvents(toListInput(args, project?.id))))
             return contentResult(eventPageOutput(page))
           }
         )
@@ -232,7 +245,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
           "search_events",
           {
             title: "Search events",
-            description: "Case-insensitive search across titles, bodies, sources, fingerprints, and structured context.",
+            description: "Case-insensitive search across titles, bodies, sources, fingerprints, and structured context. Supply a project or a since timestamp within the last 30 days.",
             inputSchema: SearchEventsArguments,
             annotations: readOnlyAnnotations
           },
@@ -241,7 +254,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             const project = await resolveProject(selector)
             if (selector && !project) throw new Error(`Unknown project: ${selector}`)
             const query = requiredText(args.query, "query")
-            const page = await runMcpEffect(events.list(toListInput(args, project?.id, query)))
+            const page = await runMcpEffect(provide(listEvents(toListInput(args, project?.id, query))))
             return contentResult(eventPageOutput(page))
           }
         )
@@ -254,7 +267,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             inputSchema: GetEventArguments,
             annotations: readOnlyAnnotations
           },
-          async ({ id }) => contentResult(await runMcpEffect(events.get(requiredText(id, "id"))))
+          async ({ id }) => contentResult(await runMcpEffect(provide(getEvent(requiredText(id, "id")))))
         )
 
         server.registerTool(
@@ -279,17 +292,17 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
               ...(since ? { since } : {}),
               ...(until ? { until } : {})
             }
-            const grouped = await runMcpEffect(events.list({ ...window, grouped: "true", limit: "1" }))
+            const grouped = await runMcpEffect(provide(listEvents({ ...window, grouped: "true", limit: "1" })))
             const latest = grouped.events[0]
             if (!latest) {
               throw new Error(`No events with fingerprint ${fingerprint} in project ${selector}`)
             }
-            const occurrences = await runMcpEffect(events.list({
+            const occurrences = await runMcpEffect(provide(listEvents({
               ...window,
               grouped: "false",
               ...(before ? { before } : {}),
               limit: String(args.limit ?? 25)
-            }))
+            })))
             const group = latest.group ?? {
               count: occurrences.events.length,
               first_seen: latest.created_at,
@@ -333,7 +346,7 @@ export class McpEndpoint extends Context.Service<McpEndpoint, {
             })
           }
 
-          const currentSettings = yield* settings.get
+          const currentSettings = yield* provide(getSettings)
           if (!currentSettings.mcp_enabled) {
             return secureResponse(Response.json(
               { error: "not_found", message: "MCP is disabled" },

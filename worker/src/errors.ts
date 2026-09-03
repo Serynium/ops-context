@@ -27,7 +27,6 @@ export interface SubscriptionNotFound extends TaggedFailure<"SubscriptionNotFoun
 export interface SilenceNotFound extends TaggedFailure<"SilenceNotFound"> {}
 export interface InvalidProjectCredential extends TaggedFailure<"InvalidProjectCredential"> {}
 export interface DuplicateExternalId extends TaggedFailure<"DuplicateExternalId"> {}
-export interface ProjectDeletionConflict extends TaggedFailure<"ProjectDeletionConflict"> {}
 export interface PushNotConfigured extends TaggedFailure<"PushNotConfigured"> {}
 export interface RepositoryUnavailable extends TaggedFailure<"RepositoryUnavailable"> {
   readonly cause?: unknown
@@ -50,7 +49,7 @@ export type DomainError = InvalidEvent | InvalidProject | InvalidSubscription |
   SubscriptionRevoked | SubscriptionEndpointConflict |
   InvalidSilence | InvalidSettings | InvalidEventQuery | ProjectNotFound |
   EventNotFound | SubscriptionNotFound | SilenceNotFound |
-  InvalidProjectCredential | DuplicateExternalId | ProjectDeletionConflict | PushNotConfigured
+  InvalidProjectCredential | DuplicateExternalId | PushNotConfigured
 
 export type ApplicationError = DomainError | InfrastructureError
 
@@ -77,7 +76,6 @@ export const subscriptionNotFound = (message = "push subscription not found"): S
 export const silenceNotFound = (message = "silence rule not found"): SilenceNotFound => ({ _tag: "SilenceNotFound", message })
 export const invalidProjectCredential = (message = "invalid project API key"): InvalidProjectCredential => ({ _tag: "InvalidProjectCredential", message })
 export const duplicateExternalId = (message: string): DuplicateExternalId => ({ _tag: "DuplicateExternalId", message })
-export const projectDeletionConflict = (message: string): ProjectDeletionConflict => ({ _tag: "ProjectDeletionConflict", message })
 export const pushNotConfigured = (message = "Web Push is not configured"): PushNotConfigured => ({ _tag: "PushNotConfigured", message })
 export const repositoryUnavailable = (message: string, cause?: unknown): RepositoryUnavailable => ({ _tag: "RepositoryUnavailable", message, cause })
 export const queueUnavailable = (message: string, cause?: unknown): QueueUnavailable => ({ _tag: "QueueUnavailable", message, cause })
@@ -90,7 +88,7 @@ const applicationErrorTags = new Set<ApplicationError["_tag"]>([
   "SubscriptionDisabled", "SubscriptionEnrollmentSuperseded", "InvalidRenewalCredential",
   "SubscriptionRevoked", "SubscriptionEndpointConflict",
   "SubscriptionNotFound", "SilenceNotFound", "InvalidProjectCredential",
-  "DuplicateExternalId", "ProjectDeletionConflict", "PushNotConfigured",
+  "DuplicateExternalId", "PushNotConfigured",
   "RepositoryUnavailable", "QueueUnavailable", "CryptographyUnavailable",
   "DeliveryTemporarilyUnavailable"
 ])

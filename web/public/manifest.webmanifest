@@ -17,7 +17,7 @@
   ],
   "shortcuts": [
     { "name": "Inbox", "short_name": "Inbox", "url": "/" },
-    { "name": "Projects", "short_name": "Projects", "url": "/?view=projects" },
-    { "name": "Push devices", "short_name": "Push", "url": "/?view=push" }
+    { "name": "Projects", "short_name": "Projects", "url": "/projects" },
+    { "name": "Devices", "short_name": "Devices", "url": "/devices" }
   ]
 }

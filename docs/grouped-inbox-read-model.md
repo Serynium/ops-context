@@ -6,10 +6,11 @@ each event insert or delete. The table stores only non-empty fingerprints.
 Empty fingerprints continue to appear as independent inbox rows.
 
 The fast path is used when the only optional query inputs are `project`,
-`before`, and `limit`. Filters whose exact semantics depend on individual
-occurrences—`level`, `source`, `fingerprint`, `search`, `since`, `until`, and
-`silenced`—transparently use the window-function query instead. Both paths use
-the same `(created_at, id)` ordering and cursor contract.
+`level`, `before`, and `limit`. Level-only grouping uses
+`event_groups_by_level`; filters whose exact semantics depend on other
+individual occurrence fields—`source`, `fingerprint`, `search`, `since`,
+`until`, and `silenced`—transparently use the window-function query instead.
+All paths use the same `(created_at, id)` ordering and cursor contract.
 
 ## Enablement threshold and measurement
 
@@ -40,13 +41,23 @@ the stable telemetry in [D1 query observability](d1-observability.md).
 The benchmark and query-plan guard are in
 `worker/test/event-groups.integration.test.ts`.
 
+Migration `0011_grouped_level_read_model.sql` applies the same design to the
+five fixed event levels. On the opt-in local scale fixture with 1,000 projects,
+1,000,000 events, 100 requests, and concurrency 25, the exact level-grouped
+query improved from 7,217 ms to 38 ms p95. Fixture insertion increased from
+52.3 seconds to 62.1 seconds because each event maintains the additional
+aggregate. These are local regression measurements, not production capacity
+claims. Compare `events.list_grouped` with
+`events.list_grouped_level_fast` after deployment.
+
 ## Inserts, retention, and project isolation
 
-Migration `0007_event_groups_read_model.sql` backfills existing events and
-installs these invariants:
+Migrations `0007_event_groups_read_model.sql` and
+`0011_grouped_level_read_model.sql` backfill existing events and install these
+invariants:
 
-- `(project_id, fingerprint)` is the primary key, so groups cannot cross
-  projects.
+- `(project_id, fingerprint)` and `(level, project_id, fingerprint)` keys keep
+  global and level-specific groups isolated.
 - The insert trigger atomically increments the count and updates first/latest
   timestamps and the `(created_at, id)` representative.
 - The delete trigger decrements ordinary deletions and recomputes boundary
@@ -67,9 +78,10 @@ await fetch("/api/v1/maintenance/event-groups/rebuild", { method: "POST" })
 ```
 
 The response is `{ "groups": number }`. The operation requires administrator
-authentication and same-origin protection. It clears and rebuilds the table in
-one atomic D1 batch, so a failure rolls back the complete repair. Repeating the
-operation produces the same read model from the authoritative `events` table.
+authentication and same-origin protection. It clears and rebuilds both tables
+in one atomic D1 batch, so a failure rolls back the complete repair. Repeating
+the operation produces the same read models from the authoritative `events`
+table.
 
 Run repair after restoring or manually modifying event data. Ordinary event
 creation and retention do not require it because triggers maintain the model.

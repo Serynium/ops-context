@@ -4,6 +4,8 @@
 # OPS_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
 # OPS_ACCESS_APP_AUD=<application audience>
 # OPS_ACCESS_MCP_AUD=<MCP application audience>
+# Local Wrangler only. This is ignored unless the request hostname is loopback.
+OPS_LOCAL_ACCESS_BYPASS=1
 VAPID_PUBLIC_KEY=REPLACE_WITH_PUBLIC_KEY
 VAPID_PRIVATE_JWK={"kty":"EC","crv":"P-256","x":"...","y":"...","d":"..."}
 VAPID_SUBJECT=mailto:you@example.com

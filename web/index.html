@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b1020" />
+    <meta name="theme-color" content="#fdfdfe" />
     <meta name="description" content="A tiny operational event inbox with Web Push notifications." />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon-192.png" />
@@ -11,49 +11,7 @@
     <title>Ops Context</title>
   </head>
   <body>
-    <div id="root">
-      <header class="topbar">
-        <a class="brand" href="/" aria-label="Ops Context home">
-          <span class="brand-mark">OC</span>
-          <span>
-            <strong>Ops Context</strong>
-            <small>Operational events, without the noise</small>
-          </span>
-        </a>
-        <div class="topbar-actions">
-          <button id="install-button" class="button secondary hidden" type="button">Install</button>
-          <button id="push-button" class="button secondary" type="button">Enable push</button>
-          <button id="logout-button" class="button ghost" type="button">Sign out</button>
-        </div>
-      </header>
-
-      <nav class="nav" aria-label="Primary navigation">
-        <button data-view="inbox" class="active">Inbox</button>
-        <button data-view="projects">Projects</button>
-        <button data-view="push">Push devices</button>
-        <button data-view="silences">Silences</button>
-        <button data-view="settings">Settings</button>
-      </nav>
-
-      <main id="app" tabindex="-1">
-        <section class="panel loading-panel"><div class="spinner"></div><p>Loading Ops Context…</p></section>
-      </main>
-    </div>
-
-    <dialog id="key-dialog" class="dialog key-dialog" aria-labelledby="key-title">
-      <form method="dialog">
-        <h2 id="key-title">Copy this API key now</h2>
-        <p>It is stored only as a hash and cannot be shown again.</p>
-        <pre id="key-value"></pre>
-        <div class="dialog-actions">
-          <button id="copy-key" class="button primary" type="button">Copy key</button>
-          <button class="button secondary" value="close">Done</button>
-        </div>
-      </form>
-    </dialog>
-
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="/src/access-shim.ts"></script>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

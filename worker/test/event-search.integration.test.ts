@@ -57,14 +57,14 @@ const run = <A>(effect: Effect.Effect<A, unknown, EventsRepository>): Promise<A>
 
 const searchIds = async (
   search: string,
-  input: Omit<Parameters<typeof listEvents>[0], "search"> = {}
+  input: Omit<Parameters<typeof listEvents>[0], "search"> = { project: "prj_a" }
 ): Promise<ReadonlyArray<string>> => {
   const page = await run(listEvents({ ...input, search }))
   return page.events.map((event) => event.id)
 }
 
 const rebuild = async (): Promise<void> => {
-  await env.DB.prepare("DELETE FROM event_search").run()
+  await env.DB.prepare("INSERT INTO event_search(event_search) VALUES('delete-all')").run()
   await env.DB.prepare(
     `INSERT INTO event_search(rowid, title, body, source, fingerprint, payload)
      SELECT
@@ -142,6 +142,18 @@ describe("FTS5 event search", () => {
       _tag: "InvalidEventQuery",
       message: "search must not contain NUL characters"
     })
+  })
+
+  it("bounds global search to an explicit recent window", async () => {
+    await expect(run(listEvents({ search: "timeout" }))).rejects.toMatchObject({
+      _tag: "InvalidEventQuery",
+      message: "global search requires a since filter within the last 30 days"
+    })
+    await expect(run(listEvents({ search: "timeout", since: "2020-01-01T00:00:00Z" })))
+      .rejects.toMatchObject({
+        _tag: "InvalidEventQuery",
+        message: "global search is limited to the last 30 days"
+      })
   })
 
   it("indexes normalized redacted payload values without indexing raw JSON syntax", async () => {
@@ -227,7 +239,7 @@ describe("FTS5 event search", () => {
     expect(await searchIds("retention")).toEqual([])
 
     await env.DB.prepare("DELETE FROM projects WHERE id = ?").bind("prj_b").run()
-    expect(await searchIds("cascade")).toEqual([])
+    expect(await searchIds("cascade", { project: "prj_b" })).toEqual([])
     const indexed = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM event_search"
     ).first<{ readonly count: number }>()

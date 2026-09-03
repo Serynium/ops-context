@@ -4,11 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { D1StructuredLoggerLive } from "../src/database-observability.js"
 import { processIngestEvent } from "../src/events.js"
 import { QUEUE_COMMAND_VERSION } from "../src/queue-contract.js"
-import { D1RepositoriesLive } from "../src/repositories.js"
+import { D1RepositoriesLive, type ProjectRow } from "../src/repositories.js"
 import { AppConfig, PushQueue } from "../src/services.js"
 import { getSettings } from "../src/settings.js"
 import { matchSilence, type SilenceField } from "../src/silences.js"
-import type { ProjectRow } from "../src/types.js"
 
 const repositories = Layer.merge(D1RepositoriesLive(env.DB), D1StructuredLoggerLive)
 const infrastructure = Layer.merge(repositories, AppConfig.layer(env))

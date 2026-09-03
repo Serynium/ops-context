@@ -144,6 +144,11 @@ const getJob = async (eventId = message.eventId): Promise<PushJobRow> => {
   return row
 }
 
+const findJob = async (eventId = message.eventId): Promise<PushJobRow | null> =>
+  env.DB.prepare(
+    "SELECT * FROM push_jobs WHERE event_id = ? AND subscription_id = 'sub_test'"
+  ).bind(eventId).first<PushJobRow>()
+
 const deliveryCount = async (eventId = message.eventId): Promise<number> => {
   const row = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM deliveries WHERE event_id = ?"
@@ -203,7 +208,7 @@ describe("bounded push delivery lifecycle", () => {
 
     expect(first._tag).toBe("Delivered")
     expect(duplicate._tag).toBe("AlreadyProcessed")
-    expect((await getJob()).state).toBe("sent")
+    expect(await findJob()).toBeNull()
     expect(await deliveryCount()).toBe(1)
   })
 
@@ -236,7 +241,8 @@ describe("bounded push delivery lifecycle", () => {
     )
 
     expect(outcome._tag).toBe("Delivered")
-    expect((await getJob()).attempts).toBe(2)
+    expect(await findJob()).toBeNull()
+    expect(await deliveryCount()).toBe(1)
   })
 
   it("terminalizes a job from a prior enrollment generation without sending", async () => {
@@ -294,8 +300,7 @@ describe("bounded push delivery lifecycle", () => {
       }).pipe(Effect.provide(repositoryLayer))
     )
 
-    expect((await getJob()).state).toBe("sent")
-    expect((await getJob()).attempts).toBe(2)
+    expect(await findJob()).toBeNull()
     expect(await deliveryCount()).toBe(1)
   })
 
@@ -346,7 +351,7 @@ describe("bounded push delivery lifecycle", () => {
 
     expect(second._tag, await stateSnapshot()).toBe("Delivered")
     expect(duplicate._tag, await stateSnapshot()).toBe("AlreadyProcessed")
-    expect((await getJob()).state, await stateSnapshot()).toBe("sent")
+    expect(await findJob(), await stateSnapshot()).toBeNull()
     expect(deliveries.results.map((row) => row.status), await stateSnapshot()).toEqual([
       "failed",
       "sent"

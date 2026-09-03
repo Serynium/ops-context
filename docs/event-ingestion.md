@@ -20,7 +20,7 @@ Queue delivery is at least once. The consumer uses the event id, the unique `(pr
 
 The acceptance path uses a best-effort D1 lookup to preserve random IDs assigned to external-ID events by older releases. If that compatibility read is unavailable, Queue acceptance continues with the deterministic ID. Should the consumer later find a legacy row under a different ID, it records the accepted ID in `event_aliases`; event reads, delivery history, and unsilence operations resolve that alias instead of leaving the accepted URL permanently absent.
 
-During rollout, the decoder also accepts the previous untagged `{ eventId, subscriptionId }` delivery shape and normalizes it to version 1. If an `IngestEvent` reaches the dead-letter Queue, the consumer first attempts to finish it. A persistent failure is recorded in `ingestion_failures`, any still-pending jobs become terminal `dead`, and the administrator status count exposes `failed_ingests`. If D1 itself is unavailable, the DLQ message is retried because no terminal record can yet be made safely.
+Queue commands must use the tagged version 1 schema. If an `IngestEvent` reaches the dead-letter Queue, the consumer first attempts to finish it. A persistent failure is recorded in `ingestion_failures`, any still-pending jobs become terminal `dead`, and the administrator status count exposes `failed_ingests`. If D1 itself is unavailable, the DLQ message is retried because no terminal record can yet be made safely.
 
 ## D1 lookup budget
 
@@ -34,7 +34,7 @@ Both consolidated queries emit a structured `d1_query` log containing the stable
 
 The raw HTTP request body must be at most **262,144 bytes (256 KiB)**. The Worker checks the declared `Content-Length` when present. It also reads request streams incrementally and cancels both stream branches as soon as the measured body crosses the limit, so chunked requests cannot bypass the ceiling or force the isolate to buffer the complete body.
 
-After JSON decoding and normalization, the encoded event must be at most **120,000 bytes**. This leaves room for the versioned command envelope and Cloudflare's internal metadata under the Queue platform's 128,000-byte per-message limit. Inputs over this application limit fail validation before Queue publication, so retrying an intrinsically oversized event cannot produce a misleading transient `503`.
+After JSON decoding and normalization, the encoded event must be at most **60,000 bytes** and the complete command at most **63,800 bytes**. This keeps ingestion inside one 64,000-byte Queue billing chunk. Inputs over this application limit fail validation before Queue publication, so retrying an intrinsically oversized event cannot produce a misleading transient `503`.
 
 An oversized body returns:
 

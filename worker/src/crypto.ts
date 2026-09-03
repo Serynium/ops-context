@@ -1,7 +1,3 @@
-import { Effect } from "effect"
-import { CredentialCrypto } from "./services.js"
-import type { CryptographyUnavailable } from "./errors.js"
-
 export const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 
@@ -17,9 +13,3 @@ export const base64UrlDecode = (value: string): Uint8Array => {
   const binary = atob(padded)
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
-
-export const sha256Hex = (value: string): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
-  Effect.flatMap(CredentialCrypto, (service) => service.sha256Hex(value))
-
-export const randomToken = (bytes = 32): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
-  Effect.flatMap(CredentialCrypto, (service) => service.randomToken(bytes))

@@ -2,43 +2,106 @@ import { Effect, ManagedRuntime } from "effect"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import {
   attachCloudflareAccess,
+  hasVerifiedAppAccess,
   type ExecutionContextWithAccess
 } from "./access.js"
-import { EventIngestion, PushDelivery, Retention } from "./application.js"
 import { EVENT_REQUEST_MAX_BYTES } from "./event-contract.js"
+import { processIngestDeadLetter, processIngestEvent } from "./events.js"
 import { makeLayers } from "./layers.js"
 import { McpEndpoint } from "./mcp.js"
+import { processDeadLetterMessage, processPushMessage } from "./push.js"
 import { decodeQueueCommand, type QueueCommand } from "./queue-contract.js"
+import { runRetention } from "./retention.js"
 import { isSentryEnvelopePath, SentryEndpoint } from "./sentry.js"
 import type { Env } from "./types.js"
 
-interface WebHandler {
-  readonly handler: (request: Request) => Promise<Response>
-  readonly dispose: () => Promise<void>
+const makeRuntime = (env: Env) => {
+  const layers = makeLayers(env)
+  const programs = ManagedRuntime.make(layers.programs)
+  return {
+    db: env.DB,
+    queue: env.PUSH_QUEUE,
+    http: HttpRouter.toWebHandler(layers.http),
+    programs
+  }
 }
 
-interface IsolateRuntime {
-  readonly db: D1Database
-  readonly queue: Queue<QueueCommand>
-  readonly http: WebHandler
-  readonly programs: ManagedRuntime.ManagedRuntime<
-    PushDelivery | EventIngestion | Retention | McpEndpoint | SentryEndpoint,
-    never
-  >
-}
-
+type IsolateRuntime = ReturnType<typeof makeRuntime>
 let cached: IsolateRuntime | undefined
+const STATUS_CACHE_TTL_SECONDS = 15
+const EVENT_CACHE_TTL_SECONDS = 5
+let eventCacheNamespace: string | undefined
+let eventCacheGeneration = 0
+const eventReads = new Map<string, Promise<Response>>()
+const privateCache = (): Cache =>
+  (caches as CacheStorage & { readonly default: Cache }).default
+
+const statusCacheKey = (env: Env): Request =>
+  new Request(new URL("/__ops-context-cache/status", env.OPS_BASE_URL || "https://ops-context.invalid"))
+
+const statusResponse = (response: Response, cache: "hit" | "miss"): Response => {
+  const result = new Response(response.clone().body, response)
+  result.headers.set("cache-control", "no-store")
+  result.headers.set("x-ops-status-cache", cache)
+  return result
+}
+
+const invalidateStatusCache = (env: Env): Promise<boolean> =>
+  privateCache().delete(statusCacheKey(env))
+
+const eventCacheKey = (request: Request, env: Env): Request => {
+  eventCacheNamespace ??= crypto.randomUUID()
+  const source = new URL(request.url)
+  const key = new URL("/__ops-context-cache/events", env.OPS_BASE_URL || "https://ops-context.invalid")
+  key.search = source.search
+  key.searchParams.set("generation", `${eventCacheNamespace}:${eventCacheGeneration}`)
+  return new Request(key)
+}
+
+const eventResponse = (response: Response, cache: "hit" | "miss" | "coalesced"): Response => {
+  const result = new Response(response.clone().body, response)
+  result.headers.set("cache-control", "no-store")
+  result.headers.set("x-ops-events-cache", cache)
+  return result
+}
+
+const cachedEventResponse = async (
+  request: Request,
+  env: Env,
+  load: () => Promise<Response>
+): Promise<Response> => {
+  const key = eventCacheKey(request, env)
+  const hit = await privateCache().match(key)
+  if (hit) return eventResponse(hit, "hit")
+
+  const pending = eventReads.get(key.url)
+  if (pending) return eventResponse(await pending, "coalesced")
+
+  const read = load().then(async (response) => {
+    if (response.ok) {
+      const stored = response.clone()
+      stored.headers.set("cache-control", `max-age=${EVENT_CACHE_TTL_SECONDS}`)
+      await privateCache().put(key, stored)
+    }
+    return response
+  })
+  eventReads.set(key.url, read)
+  try {
+    return eventResponse(await read, "miss")
+  } finally {
+    eventReads.delete(key.url)
+  }
+}
+
+const invalidateReadCaches = (env: Env): Promise<boolean> => {
+  eventCacheGeneration += 1
+  return invalidateStatusCache(env)
+}
 
 const runtimeFor = (env: Env): IsolateRuntime => {
   if (cached?.db === env.DB && cached.queue === env.PUSH_QUEUE) return cached
 
-  const layers = makeLayers(env)
-  const next: IsolateRuntime = {
-    db: env.DB,
-    queue: env.PUSH_QUEUE,
-    http: HttpRouter.toWebHandler(layers.http),
-    programs: ManagedRuntime.make(layers.programs)
-  }
+  const next = makeRuntime(env)
   cached = next
   return next
 }
@@ -181,10 +244,37 @@ export default {
     }
     if (pathname === "/health" || pathname.startsWith("/api/")) {
       try {
+        const cacheStatus = authenticatedRequest.method === "GET" &&
+          pathname === "/api/v1/status" &&
+          hasVerifiedAppAccess(authenticatedRequest)
+        if (cacheStatus) {
+          const hit = await privateCache().match(statusCacheKey(env))
+          if (hit) return statusResponse(hit, "hit")
+        }
         if (await eventRequestExceedsLimit(authenticatedRequest, pathname)) {
           return eventPayloadLimitResponse()
         }
-        return await runtimeFor(env).http.handler(authenticatedRequest)
+        const runtime = runtimeFor(env)
+        const load = async () => runtime.http.handler(
+          authenticatedRequest,
+          await runtime.programs.context()
+        )
+        const cacheEvents = authenticatedRequest.method === "GET" &&
+          pathname === "/api/v1/events" &&
+          hasVerifiedAppAccess(authenticatedRequest)
+        const response = cacheEvents
+          ? await cachedEventResponse(authenticatedRequest, env, load)
+          : await load()
+        if (cacheStatus && response.ok) {
+          const stored = new Response(response.clone().body, response)
+          stored.headers.set("cache-control", `max-age=${STATUS_CACHE_TTL_SECONDS}`)
+          await privateCache().put(statusCacheKey(env), stored)
+          return statusResponse(response, "miss")
+        }
+        if (authenticatedRequest.method !== "GET" && response.ok) {
+          await invalidateReadCaches(env)
+        }
+        return response
       } catch (cause) {
         console.error("unhandled API defect", cause)
         return internalResponse()
@@ -203,11 +293,7 @@ export default {
         const command = await runtime.runPromise(decodeQueueCommand(message.body))
         if (command._tag === "IngestEvent") {
           if (deadLetterBatch) {
-            const outcome = await runtime.runPromise(
-              Effect.flatMap(EventIngestion, (ingestion) =>
-                ingestion.deadLetter(command)
-              )
-            )
+            const outcome = await runtime.runPromise(processIngestDeadLetter(command))
             const telemetry = {
               event: outcome._tag === "Terminalized"
                 ? "queue.dlq.terminalized"
@@ -223,19 +309,13 @@ export default {
             continue
           }
 
-          await runtime.runPromise(
-            Effect.flatMap(EventIngestion, (ingestion) =>
-              ingestion.process(command)
-            )
-          )
+          await runtime.runPromise(processIngestEvent(command))
           message.ack()
           continue
         }
 
         const outcome = await runtime.runPromise(
-          Effect.flatMap(PushDelivery, (delivery) =>
-            deadLetterBatch ? delivery.deadLetter(command) : delivery.process(command)
-          )
+          deadLetterBatch ? processDeadLetterMessage(command) : processPushMessage(command)
         )
         if (!deadLetterBatch && outcome._tag === "Retry") {
           message.retry({ delaySeconds: outcome.delaySeconds })
@@ -268,13 +348,19 @@ export default {
         message.retry({ delaySeconds: deadLetterBatch ? 60 : 30 })
       }
     }
+    await invalidateReadCaches(env)
   },
 
   scheduled(_controller, env, context): void {
     const runtime = runtimeFor(env).programs
     context.waitUntil(
-      runtime.runPromise(Effect.flatMap(Retention, (_) => _.run))
-        .then((result) => console.log("retention completed", result))
+      runtime.runPromise(runRetention)
+        .then((result) => {
+          const telemetry = { event: "retention.completed", ...result }
+          if (result.continuationRequired) console.warn(telemetry)
+          else console.log(telemetry)
+          return invalidateReadCaches(env)
+        })
         .catch((cause) => console.error("retention failed", cause))
     )
   }

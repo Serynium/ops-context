@@ -1,6 +1,7 @@
-import * as BrowserCrypto from "@effect/platform-browser/BrowserCrypto"
 import { buildPushHTTPRequest, type PushMessage, type PushSubscription } from "@pushforge/builder"
-import { Context, Crypto, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
+import { SqlSchema } from "effect/unstable/sql"
+import { base64UrlEncode, bytesToHex } from "./crypto.js"
 import {
   classifyD1SuccessTelemetry,
   d1FailureTelemetry,
@@ -22,48 +23,42 @@ import type { QueueCommand } from "./queue-contract.js"
 import type { Env } from "./types.js"
 
 export interface SqlStatement {
-  readonly name: string
+  readonly name?: string
   readonly sql: string
   readonly params?: ReadonlyArray<unknown>
 }
 
-/**
- * The D1 operations used by repository adapters. Both the authoritative database
- * binding and a request-scoped D1 session implement this shape.
- */
-export interface D1Connection {
-  readonly prepare: D1Database["prepare"]
-  readonly batch: D1Database["batch"]
-}
-
 export interface DatabaseService {
-  readonly first: <A extends object>(
-    name: string,
+  readonly all: <A>(
+    schema: Schema.Schema<A>,
     sql: string,
-    params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<A | null, RepositoryUnavailable>
-  readonly all: <A extends object>(
-    name: string,
-    sql: string,
-    params?: ReadonlyArray<unknown>
+    params: ReadonlyArray<unknown>,
+    name: string
   ) => Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
-  readonly run: (
-    name: string,
+  readonly first: <A>(
+    schema: Schema.Schema<A>,
     sql: string,
-    params?: ReadonlyArray<unknown>
-  ) => Effect.Effect<D1Result<unknown>, RepositoryUnavailable>
+    params: ReadonlyArray<unknown>,
+    name: string
+  ) => Effect.Effect<A | null, RepositoryUnavailable>
+  readonly run: (
+    sql: string,
+    params: ReadonlyArray<unknown>,
+    name: string
+  ) => Effect.Effect<number, RepositoryUnavailable>
+  readonly runCounted: (
+    sql: string,
+    params: ReadonlyArray<unknown>,
+    name: string
+  ) => Effect.Effect<number, RepositoryUnavailable>
   readonly batch: (
-    name: string,
-    statements: ReadonlyArray<SqlStatement>
+    statements: ReadonlyArray<SqlStatement>,
+    name: string
   ) => Effect.Effect<void, RepositoryUnavailable>
-  readonly batchResults: (
-    name: string,
-    statements: ReadonlyArray<SqlStatement>
-  ) => Effect.Effect<ReadonlyArray<D1Result<unknown>>, RepositoryUnavailable>
 }
 
 export class Database extends Context.Service<Database, DatabaseService>()("ops-context/Database") {
-  static readonly layer = (db: D1Connection): Layer.Layer<Database> => {
+  static readonly layer = (db: D1Database): Layer.Layer<Database> => {
     const requireD1Success = <A extends D1Result<unknown>>(result: A): A => {
       if (result.success !== true) throw new Error("D1 operation returned an unsuccessful result")
       return result
@@ -110,7 +105,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         })
       )
 
-    const all: DatabaseService["all"] = <A extends object>(
+    const query = <A extends object>(
       name: string,
       statement: string,
       params: ReadonlyArray<unknown> = []
@@ -122,14 +117,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         (result) => [d1SuccessTelemetry(name, "query", result)]
       ).pipe(Effect.map((result) => (result.results ?? []) as ReadonlyArray<A>))
 
-    const first: DatabaseService["first"] = <A extends object>(
-      name: string,
-      statement: string,
-      params: ReadonlyArray<unknown> = []
-    ) =>
-      all<A>(name, statement, params).pipe(Effect.map((rows) => rows[0] ?? null))
-
-    const run: DatabaseService["run"] = (name, statement, params = []) =>
+    const execute = (name: string, statement: string, params: ReadonlyArray<unknown> = []) =>
       observe(
         name,
         "write",
@@ -137,7 +125,7 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         (result) => [d1SuccessTelemetry(name, "write", result)]
       )
 
-    const batchResults: DatabaseService["batchResults"] = (name, statements) => {
+    const batchResults = (name: string, statements: ReadonlyArray<SqlStatement>) => {
       if (statements.length === 0) return Effect.succeed([])
       return observe(
         name,
@@ -153,10 +141,63 @@ export class Database extends Context.Service<Database, DatabaseService>()("ops-
         )
       )
     }
-    const batch: DatabaseService["batch"] = (name, statements) =>
-      batchResults(name, statements).pipe(Effect.asVoid)
+    const mapRepositoryFailure = (operation: "read" | "write" | "batch" | "decode") =>
+      Effect.mapError((_cause: unknown) => repositoryUnavailable(`repository ${operation} failed`))
+    const queryRecords = (statement: string, params: ReadonlyArray<unknown>, name: string) =>
+      query<Record<string, unknown>>(name, statement, params)
+    const all: DatabaseService["all"] = <A>(
+      schema: Schema.Schema<A>,
+      statement: string,
+      params: ReadonlyArray<unknown>,
+      name: string
+    ) => SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: schema,
+      execute: () => queryRecords(statement, params, name)
+    })(undefined).pipe(mapRepositoryFailure("read")) as unknown as Effect.Effect<ReadonlyArray<A>, RepositoryUnavailable>
+    const first: DatabaseService["first"] = <A>(
+      schema: Schema.Schema<A>,
+      statement: string,
+      params: ReadonlyArray<unknown>,
+      name: string
+    ) => SqlSchema.findOneOption({
+      Request: Schema.Void,
+      Result: schema,
+      execute: () => queryRecords(statement, params, name)
+    })(undefined).pipe(
+      Effect.map(Option.getOrNull),
+      mapRepositoryFailure("read")
+    ) as Effect.Effect<A | null, RepositoryUnavailable>
+    const run: DatabaseService["run"] = (statement, params, name) =>
+      execute(name, statement, params).pipe(
+        Effect.map((result) => (result.meta as { readonly changes?: number }).changes ?? 0),
+        mapRepositoryFailure("write")
+      )
+    const runCounted: DatabaseService["runCounted"] = (statement, params, name) =>
+      batchResults(name, [
+        { name, sql: statement, params },
+        { name: `${name}.count`, sql: "SELECT changes() AS count" }
+      ]).pipe(
+        Effect.flatMap((results) => {
+          const count = (results[1]?.results?.[0] as { readonly count?: unknown } | undefined)?.count
+          return typeof count === "number"
+            ? Effect.succeed(count)
+            : Effect.fail(repositoryUnavailable("repository decode failed"))
+        }),
+        mapRepositoryFailure("write")
+      )
+    const batch: DatabaseService["batch"] = (statements, name) =>
+      batchResults(name, statements)
+        .pipe(Effect.asVoid)
+        .pipe(mapRepositoryFailure("batch"))
 
-    return Layer.succeed(Database)(Database.of({ first, all, run, batch, batchResults }))
+    return Layer.succeed(Database)(Database.of({
+      all,
+      first,
+      run,
+      runCounted,
+      batch
+    }))
   }
 }
 
@@ -248,15 +289,6 @@ export class PushQueue extends Context.Service<PushQueue, QueueService>()("ops-c
     })
 }
 
-const bytesToHex = (bytes: Uint8Array): string =>
-  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
-
-const base64UrlEncode = (bytes: Uint8Array): string => {
-  let binary = ""
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "")
-}
-
 export interface CredentialCryptoService {
   readonly randomToken: (bytes?: number) => Effect.Effect<string, CryptographyUnavailable>
   readonly sha256Hex: (value: string) => Effect.Effect<string, CryptographyUnavailable>
@@ -266,39 +298,27 @@ export interface CredentialCryptoService {
 export class CredentialCrypto extends Context.Service<CredentialCrypto, CredentialCryptoService>()(
   "ops-context/CredentialCrypto"
 ) {
-  static readonly layerNoDeps = Layer.effect(
-    CredentialCrypto,
-    Effect.gen(function*() {
-      const crypto = yield* Crypto.Crypto
-      const encoder = new TextEncoder()
-      const mapCryptoError = Effect.mapError((cause: unknown) => cryptographyUnavailable("cryptographic operation failed", cause))
-
-      const randomToken: CredentialCryptoService["randomToken"] = (bytes = 32) =>
-        crypto.randomBytes(bytes).pipe(
-          Effect.map(base64UrlEncode),
-          mapCryptoError
-        )
-
-      const sha256Hex: CredentialCryptoService["sha256Hex"] = (value) =>
-        crypto.digest("SHA-256", encoder.encode(value)).pipe(
-          Effect.map(bytesToHex),
-          mapCryptoError
-        )
-
-      const newId: CredentialCryptoService["newId"] = (prefix) =>
-        crypto.randomUUIDv7.pipe(
-          Effect.map((id) => `${prefix}_${id.replaceAll("-", "")}`),
-          mapCryptoError
-        )
-
-      return CredentialCrypto.of({ randomToken, sha256Hex, newId })
+  static readonly layer = Layer.succeed(CredentialCrypto)({
+    randomToken: (bytes = 32) => Effect.try({
+      try: () => base64UrlEncode(crypto.getRandomValues(new Uint8Array(bytes))),
+      catch: (cause) => cryptographyUnavailable("cryptographic operation failed", cause)
+    }),
+    sha256Hex: (value) => Effect.tryPromise({
+      try: () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+      catch: (cause) => cryptographyUnavailable("cryptographic operation failed", cause)
+    }).pipe(Effect.map((value) => bytesToHex(new Uint8Array(value)))),
+    newId: (prefix) => Effect.try({
+      try: () => `${prefix}_${base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)))}`,
+      catch: (cause) => cryptographyUnavailable("cryptographic operation failed", cause)
     })
-  )
-
-  static readonly layer: Layer.Layer<CredentialCrypto> = this.layerNoDeps.pipe(
-    Layer.provide(BrowserCrypto.layer)
-  )
+  })
 }
+
+export const sha256Hex = (value: string): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  Effect.flatMap(CredentialCrypto, (service) => service.sha256Hex(value))
+
+export const randomToken = (bytes = 32): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
+  Effect.flatMap(CredentialCrypto, (service) => service.randomToken(bytes))
 
 export interface WebPushService {
   readonly send: (

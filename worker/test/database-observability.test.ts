@@ -1,4 +1,4 @@
-import { Effect, Logger } from "effect"
+import { Effect, Logger, Schema } from "effect"
 import { describe, expect, it, vi } from "vitest"
 import {
   D1StructuredLoggerLive,
@@ -33,8 +33,8 @@ const unsuccessfulOperationCases: ReadonlyArray<readonly [
   string,
   (database: DatabaseService) => Effect.Effect<unknown, RepositoryUnavailable>
 ]> = [
-  ["read", (database) => database.all("events.list", "SELECT * FROM events")],
-  ["write", (database) => database.run("events.create", "INSERT INTO events DEFAULT VALUES")]
+  ["read", (database) => database.all(Schema.Unknown, "SELECT * FROM events", [], "events.list")],
+  ["write", (database) => database.run("INSERT INTO events DEFAULT VALUES", [], "events.create")]
 ]
 
 describe("D1 query observability", () => {
@@ -102,10 +102,11 @@ it("records remote serving location without inventing local values", () => {
 
     await Effect.runPromise(
       Effect.flatMap(Database, (database) =>
-        database.all<{ readonly id: string }>(
-          "events.get_by_external_id",
+        database.all(
+          Schema.Struct({ id: Schema.String }),
           "SELECT id FROM events WHERE external_id = ?",
-          ["secret-external-id"]
+          ["secret-external-id"],
+          "events.get_by_external_id"
         )
       ).pipe(
         Effect.provide(Database.layer(db)),
@@ -135,7 +136,7 @@ it("records remote serving location without inventing local values", () => {
 
     await Effect.runPromise(
       Effect.flatMap(Database, (database) =>
-        database.all("events.list", "SELECT * FROM events")
+        database.all(Schema.Unknown, "SELECT * FROM events", [], "events.list")
       ).pipe(
         Effect.provide(Database.layer(db)),
         Effect.provide(D1StructuredLoggerLive)
@@ -165,7 +166,7 @@ it("records remote serving location without inventing local values", () => {
 
     await Effect.runPromise(
       Effect.flatMap(Database, (database) =>
-        database.all("events.list", "SELECT * FROM events", ["secret-external-id"])
+        database.all(Schema.Unknown, "SELECT * FROM events", ["secret-external-id"], "events.list")
       ).pipe(
         Effect.catch(() => Effect.void),
         Effect.provide(Database.layer(db)),
@@ -221,10 +222,10 @@ it("records remote serving location without inventing local values", () => {
     } as unknown as D1Database
 
     const exit = await Effect.runPromiseExit(
-      Effect.flatMap(Database, (database) => database.batch("events.create_batch", [
+      Effect.flatMap(Database, (database) => database.batch([
         { name: "events.insert", sql: "INSERT INTO events DEFAULT VALUES" },
         { name: "subscriptions.touch", sql: "UPDATE subscriptions SET updated_at = 1" }
-      ])).pipe(
+      ], "events.create_batch")).pipe(
         Effect.provide(Database.layer(db)),
         Effect.provide(Logger.layer([logger]))
       )

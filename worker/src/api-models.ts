@@ -113,14 +113,6 @@ export const Settings = Schema.Struct({
   mcp_access_configured: Schema.Boolean
 })
 
-export const AccessIdentity = Schema.Struct({
-  subject: Schema.String,
-  kind: Schema.Literals(["user", "service-token"]),
-  audience: Schema.String,
-  email: Schema.optional(Schema.String),
-  name: Schema.optional(Schema.String)
-})
-
 export const Health = Schema.Struct({ status: Schema.String })
 export const EventGroupsRebuilt = Schema.Struct({ groups: Schema.Int })
 export const PushPublicKey = Schema.Struct({ public_key: Schema.String })
@@ -135,8 +127,10 @@ export const EventPage = Schema.Struct({
 })
 export const Deliveries = Schema.Struct({ deliveries: Schema.Array(Delivery) })
 export const Unsilenced = Schema.Struct({ event: Event, deliveries: Schema.Array(Delivery) })
-export const Projects = Schema.Struct({ projects: Schema.Array(Project) })
-export const ProjectIcons = Schema.Struct({ icons: Schema.Array(Schema.String) })
+export const Projects = Schema.Struct({
+  projects: Schema.Array(Project),
+  next_cursor: Schema.optional(Schema.String)
+})
 export const PushSubscriptions = Schema.Struct({ subscriptions: Schema.Array(PushSubscription) })
 export const Silences = Schema.Struct({
   silences: Schema.Array(Silence),
@@ -189,6 +183,13 @@ export const EventListQuery = Schema.Struct({
   grouped: Schema.optional(Schema.String),
   silenced: Schema.optional(Schema.String),
   before: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.String)
+})
+
+export const ProjectListQuery = Schema.Struct({
+  before: Schema.optional(Schema.String.check(
+    Schema.isMaxLength(512, { message: "before cursor is too long" })
+  )),
   limit: Schema.optional(Schema.String)
 })
 
@@ -376,7 +377,6 @@ export const toApiFailure = (failure: ApplicationError): ApiFailure => {
     case "InvalidProjectCredential":
       return new NotFoundError({ error: "not_found", message: failure.message })
     case "DuplicateExternalId":
-    case "ProjectDeletionConflict":
       return new ConflictError({ error: "conflict", message: failure.message })
     case "DeliveryTemporarilyUnavailable":
     case "PushNotConfigured":

@@ -2,7 +2,11 @@ import { env } from "cloudflare:workers"
 import { Effect } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { listEvents } from "../src/events.js"
-import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
+import {
+  D1RepositoriesLive,
+  EventsRepository,
+  pruneSuccessfulDeliveriesBeforeEventSql
+} from "../src/repositories.js"
 
 interface QueryPlanRow {
   readonly detail: string
@@ -62,12 +66,29 @@ describe("measured D1 index tuning", () => {
     ).all<{ readonly name: string }>()
     const names = indexes.results.map((row) => row.name)
     expect(names).toContain("events_project_created")
+    expect(names).toContain("event_groups_by_level_latest")
+    expect(names).toContain("event_groups_by_level_project_latest")
+    expect(names).toContain("events_level_empty_fingerprint_created")
+    expect(names).toContain("projects_name_id")
+    expect(names).toContain("push_jobs_terminal_updated")
+    expect(names).not.toContain("deliveries_attempted_at")
     expect(names).not.toContain("events_project_id")
+    expect(names).not.toContain("events_occurred_at")
+
+    const projects = await plansFor(
+      `SELECT id FROM projects
+       WHERE name COLLATE NOCASE > ? COLLATE NOCASE
+       ORDER BY name COLLATE NOCASE, id
+       LIMIT 101`,
+      "Project A"
+    )
+    expect(projects).toContain("projects_name_id")
+    expect(projects).not.toContain("TEMP B-TREE")
 
     const eventList = await plansFor(
       `SELECT id FROM events
        WHERE project_id = ?
-       ORDER BY created_at DESC, id DESC
+       ORDER BY created_at_ms DESC, id DESC
        LIMIT 51`,
       "prj_a"
     )
@@ -82,6 +103,16 @@ describe("measured D1 index tuning", () => {
     )
     expect(grouped).toContain("events_project_fingerprint_created")
     expect(grouped).not.toContain("TEMP B-TREE")
+
+    const groupedLevel = await plansFor(
+      `SELECT latest_event_id FROM event_groups_by_level
+       WHERE level = ?
+       ORDER BY last_seen_ms DESC, latest_event_id DESC
+       LIMIT 51`,
+      "error"
+    )
+    expect(groupedLevel).toContain("event_groups_by_level_latest")
+    expect(groupedLevel).not.toContain("TEMP B-TREE")
 
     const recovery = await plansFor(
       `SELECT event_id, subscription_id FROM push_jobs
@@ -99,8 +130,26 @@ describe("measured D1 index tuning", () => {
     expect(recovery).toContain("push_jobs_lease")
     expect(recovery).not.toContain("SCAN push_jobs")
 
+    const terminalCleanup = await plansFor(
+      `SELECT rowid FROM push_jobs INDEXED BY push_jobs_terminal_updated
+       WHERE state IN ('sent', 'dead') AND updated_at < ?
+       ORDER BY updated_at, event_id, subscription_id
+       LIMIT 500`,
+      "2026-01-01"
+    )
+    expect(terminalCleanup).toContain("push_jobs_terminal_updated")
+    expect(terminalCleanup).not.toContain("TEMP B-TREE")
+
+    const deliveryCleanup = await plansFor(
+      pruneSuccessfulDeliveriesBeforeEventSql,
+      Date.parse("2026-01-01"),
+      500
+    )
+    expect(deliveryCleanup).toContain("events_created_at")
+    expect(deliveryCleanup).toContain("deliveries_event_id")
+
     expect(await plansFor(
-      "SELECT * FROM deliveries WHERE event_id = ? ORDER BY attempted_at DESC",
+      "SELECT * FROM deliveries WHERE event_id = ? ORDER BY attempted_at_ms DESC",
       "evt_01"
     )).toContain("deliveries_event_id")
     expect(await plansFor(

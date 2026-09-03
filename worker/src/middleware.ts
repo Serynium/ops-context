@@ -3,8 +3,9 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
 import { AdministratorIdentity, type AccessPrincipal } from "./access.js"
 import { CommonErrors, toApiFailure } from "./api-models.js"
-import { Projects } from "./application.js"
-import type { ProjectRow } from "./types.js"
+import { authenticateProject } from "./projects.js"
+import { ProjectsRepository, type ProjectRow } from "./repositories.js"
+import { CredentialCrypto } from "./services.js"
 
 export class CurrentAdmin extends Context.Service<CurrentAdmin, AccessPrincipal>()(
   "ops-context/CurrentAdmin"
@@ -66,10 +67,13 @@ export const SameOriginLive = Layer.effect(
 export const ProjectAuthorizationLive = Layer.effect(
   ProjectAuthorization,
   Effect.gen(function*() {
-    const projects = yield* Projects
+    const projects = yield* ProjectsRepository
+    const crypto = yield* CredentialCrypto
     return ProjectAuthorization.of({
       bearer: (httpEffect, { credential }) =>
-        projects.authenticate(Redacted.value(credential)).pipe(
+        authenticateProject(Redacted.value(credential)).pipe(
+          Effect.provideService(ProjectsRepository, projects),
+          Effect.provideService(CredentialCrypto, crypto),
           Effect.mapError(toApiFailure),
           Effect.flatMap((project) =>
             Effect.provideService(httpEffect, CurrentProject, project)

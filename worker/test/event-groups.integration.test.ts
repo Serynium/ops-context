@@ -1,10 +1,8 @@
 import { env } from "cloudflare:workers"
 import { Effect } from "effect"
 import { beforeEach, describe, expect, it } from "vitest"
-import { rebuildEventGroups } from "../src/event-groups.js"
 import { listEvents } from "../src/events.js"
 import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
-import { Database } from "../src/services.js"
 
 interface GroupRow {
   readonly project_id: string
@@ -48,15 +46,13 @@ const insertEvent = async (
   ).bind(id, projectId, level, id, fingerprint, createdAt, createdAt).run()
 }
 
-const run = <A>(effect: Effect.Effect<A, unknown, Database | EventsRepository>) =>
-  Effect.runPromise(effect.pipe(
-    Effect.provide(D1RepositoriesLive(env.DB)),
-    Effect.provide(Database.layer(env.DB))
-  ))
+const run = <A>(effect: Effect.Effect<A, unknown, EventsRepository>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(D1RepositoriesLive(env.DB))))
 
 const groups = async (): Promise<ReadonlyArray<GroupRow>> => {
   const result = await env.DB.prepare(
-    "SELECT * FROM event_groups ORDER BY project_id, fingerprint"
+    `SELECT project_id, fingerprint, latest_event_id, occurrence_count, first_seen, last_seen
+     FROM event_groups ORDER BY project_id, fingerprint`
   ).all<GroupRow>()
   return result.results
 }
@@ -168,16 +164,25 @@ describe("grouped-event read model", () => {
     await env.DB.prepare(
       "UPDATE event_groups SET occurrence_count = 99, latest_event_id = 'evt_old'"
     ).run()
+    await env.DB.prepare(
+      "UPDATE event_groups_by_level SET occurrence_count = 99, latest_event_id = 'evt_old'"
+    ).run()
 
-    await run(rebuildEventGroups)
+    await run(Effect.flatMap(EventsRepository, (events) => events.rebuildGroups))
     const once = await groups()
-    await run(rebuildEventGroups)
+    await run(Effect.flatMap(EventsRepository, (events) => events.rebuildGroups))
     expect(await groups()).toEqual(once)
     expect(once[0]).toMatchObject({
       latest_event_id: "evt_new",
       occurrence_count: 2,
       first_seen: "2026-01-01T00:00:00.000Z",
       last_seen: "2026-01-02T00:00:00.000Z"
+    })
+    await expect(env.DB.prepare(
+      "SELECT occurrence_count, latest_event_id FROM event_groups_by_level"
+    ).first()).resolves.toMatchObject({
+      occurrence_count: 2,
+      latest_event_id: "evt_new"
     })
   })
 

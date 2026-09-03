@@ -5,7 +5,7 @@
 -- Wrangler submits the file as an atomic D1 batch, so explicit transaction
 -- statements are intentionally omitted.
 
-DELETE FROM event_search;
+INSERT INTO event_search(event_search) VALUES('delete-all');
 
 INSERT INTO event_search(rowid, title, body, source, fingerprint, payload)
 SELECT

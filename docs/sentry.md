@@ -4,13 +4,16 @@ Ops Context accepts error events from server-side Sentry SDKs through Sentry's e
 
 ## Configure the DSN
 
-Use the Ops Context origin as the DSN host and an Ops Context project API key as the DSN public key:
+Use the Ops Context origin as the DSN host. Sentry SDKs restrict DSN public keys
+to word characters, so hex-encode the complete project API key and prefix it
+with `ops_sentry_`:
 
 ```text
-SENTRY_DSN=https://ops_proj_REPLACE_ME@ops.example.com/1
+SENTRY_DSN=https://ops_sentry_HEX_ENCODED_PROJECT_KEY@ops.example.com/1
 ```
 
-The trailing project id is required by the Sentry DSN format but is ignored. The project API key selects the Ops Context project.
+The Worker decodes the DSN key before normal project-key authentication. The
+trailing project id is required by the Sentry DSN format but is ignored.
 
 > Keep this DSN server-side. A normal Sentry DSN public key is designed to be public, but this DSN contains a write-capable Ops Context project API key. Do not embed it in browser bundles, mobile applications, or other untrusted clients.
 

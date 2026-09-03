@@ -13,7 +13,7 @@ import {
   type QueueUnavailable,
   type RepositoryUnavailable
 } from "./errors.js"
-import { base64UrlDecode, base64UrlEncode, sha256Hex } from "./crypto.js"
+import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import { clamp, newId, nowIso } from "./ids.js"
 import { atLeast, isLevel } from "./levels.js"
 import { redactValue } from "./redact.js"
@@ -24,32 +24,29 @@ import {
   SettingsRepository,
   SilencesRepository,
   SubscriptionsRepository,
-  type EventListCriteria
+  type DeliveryRow,
+  type EventListCriteria,
+  type EventRow,
+  type ProjectRow
 } from "./repositories.js"
-import { AppConfig, CredentialCrypto, PushQueue } from "./services.js"
+import { AppConfig, CredentialCrypto, PushQueue, sha256Hex } from "./services.js"
 import { getSettings } from "./settings.js"
 import { matchSilence } from "./silences.js"
 import { listEnabledSubscriptionRows } from "./subscriptions.js"
 import {
   encodedQueueCommandBytes,
-queueBillingChunks,
-QUEUE_BILLING_CHUNK_BYTES,
-QUEUE_COMMAND_MAX_BYTES,
+  QUEUE_COMMAND_MAX_BYTES,
 QUEUE_COMMAND_VERSION,
   type IngestEventCommand
 } from "./queue-contract.js"
-import type {
-  DeliveryRow,
-  EventAction,
-  EventRow,
-  EventView,
-  Level,
-  ProjectRow
-} from "./types.js"
+import type { EventAction, EventView, Level } from "./types.js"
+
+export const NOTIFICATION_DEDUP_WINDOW_MS = 5 * 60_000
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u
+const GLOBAL_SEARCH_MAX_DAYS = 30
 
 export type { CreateEventInput } from "./event-contract.js"
 
@@ -139,7 +136,10 @@ const idempotentEventId = (
   externalId: string
 ): Effect.Effect<string, CryptographyUnavailable, CredentialCrypto> =>
   sha256Hex(`${projectId}\u0000${externalId}`).pipe(
-    Effect.map((digest) => `evt_${digest.slice(0, 32)}`)
+    Effect.map((digest) => `evt_${base64UrlEncode(Uint8Array.from(
+      { length: 16 },
+      (_, index) => Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16)
+    ))}`)
   )
 
 export const enqueueEventForProject = (
@@ -182,26 +182,14 @@ export const enqueueEventForProject = (
       event: queuedEvent
     }
     const commandBytes = encodedQueueCommandBytes(command)
-const billingChunks = queueBillingChunks(commandBytes)
-yield* Effect.annotateCurrentSpan({
-  "queue.command": command._tag,
-  "queue.command.bytes": commandBytes,
-  "queue.command.billing_chunks": billingChunks
-})
-if (commandBytes > QUEUE_BILLING_CHUNK_BYTES) {
-  yield* Effect.logWarning({
-    event: "queue.command.large",
-    command: command._tag,
-    event_id: eventId,
-    bytes: commandBytes,
-    billing_chunks: billingChunks,
-    billing_chunk_bytes: QUEUE_BILLING_CHUNK_BYTES
-  })
-}
-if (commandBytes > QUEUE_COMMAND_MAX_BYTES) {
-  return yield* Effect.fail(invalidEvent("event is too large for durable Queue acceptance"))
-}
-yield* queue.send(command)
+    yield* Effect.annotateCurrentSpan({
+      "queue.command": command._tag,
+      "queue.command.bytes": commandBytes
+    })
+    if (commandBytes > QUEUE_COMMAND_MAX_BYTES) {
+      return yield* Effect.fail(invalidEvent("event is too large for one Queue billing chunk"))
+    }
+    yield* queue.send(command)
     return { id: eventId, accepted_at: acceptedAt, status: "queued" }
   })
 
@@ -212,18 +200,16 @@ const publishPendingPushJobs = (
     const events = yield* EventsRepository
     const queue = yield* PushQueue
     const pending = yield* events.listPendingSubscriptionIds(eventId)
-    for (const subscriptionId of pending) {
-  yield* queue.send({
-    _tag: "DeliverPush",
-    version: QUEUE_COMMAND_VERSION,
-    eventId,
-    subscriptionId
-  })
-}
-// One event-level marker replaces one D1 update per destination. If the
-// consumer crashes before this write, replay may republish messages; the
-// delivery claim makes those duplicates harmless.
-yield* events.markFanoutPublished(eventId, nowIso())
+    yield* queue.sendMany(pending.map((subscriptionId) => ({
+      _tag: "DeliverPush",
+      version: QUEUE_COMMAND_VERSION,
+      eventId,
+      subscriptionId
+    })))
+    // One event-level marker replaces one D1 update per destination. If the
+    // consumer crashes before this write, replay may republish messages; the
+    // delivery claim makes those duplicates harmless.
+    yield* events.markFanoutPublished(eventId, nowIso())
   })
 
 export const processIngestEvent = (
@@ -246,9 +232,13 @@ export const processIngestEvent = (
       ["title", normalized.title],
       ["source", normalized.source ?? ""]
     ])
-    const shouldNotify = project.notify === 1 &&
+    const eligibleForNotification = project.notify === 1 &&
       atLeast(normalized.level ?? "info", project.min_level) && !silenceId
-    const subscriptions = shouldNotify ? yield* listEnabledSubscriptionRows : []
+    const fingerprint = normalized.fingerprint ?? ""
+    const notificationCutoff = new Date(
+      new Date(command.acceptedAt).getTime() - NOTIFICATION_DEDUP_WINDOW_MS
+    ).toISOString()
+    const subscriptions = eligibleForNotification ? yield* listEnabledSubscriptionRows : []
     yield* events.initializeIngestion({
       id: command.eventId,
       externalId: normalized.external_id ?? null,
@@ -263,7 +253,8 @@ export const processIngestEvent = (
       actionsJson: JSON.stringify(normalized.actions ?? []),
       occurredAt: normalized.occurred_at ?? command.acceptedAt,
       createdAt: command.acceptedAt,
-      silenceId
+      silenceId,
+      notificationCutoff: eligibleForNotification && fingerprint ? notificationCutoff : null
     }, subscriptions.map((subscription) => ({
       id: subscription.id,
       generation: subscription.enrollment_generation
@@ -440,6 +431,15 @@ export const listEvents = (
         searchQuery = compileEventSearchQuery(searchInput)
       } catch (cause) {
         return yield* Effect.fail(cause as InvalidEventQuery)
+      }
+    }
+    if (searchQuery && !input.project) {
+      if (!since) {
+        return yield* Effect.fail(invalidEventQuery("global search requires a since filter within the last 30 days"))
+      }
+      const earliest = Date.now() - GLOBAL_SEARCH_MAX_DAYS * 86_400_000
+      if (new Date(since).getTime() < earliest) {
+        return yield* Effect.fail(invalidEventQuery("global search is limited to the last 30 days"))
       }
     }
     const criteria: EventListCriteria = {

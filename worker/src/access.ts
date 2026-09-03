@@ -22,6 +22,7 @@ const ACCESS_KIND = "x-ops-access-kind"
 const ACCESS_SUBJECT = "x-ops-access-subject"
 const ACCESS_EMAIL = "x-ops-access-email"
 const ACCESS_NAME = "x-ops-access-name"
+const ACCESS_LOCAL = "x-ops-access-local"
 const ACCESS_ASSERTION = "cf-access-jwt-assertion"
 
 const internalHeaders = [
@@ -31,11 +32,16 @@ const internalHeaders = [
   ACCESS_KIND,
   ACCESS_SUBJECT,
   ACCESS_EMAIL,
-  ACCESS_NAME
+  ACCESS_NAME,
+  ACCESS_LOCAL
 ] as const
 
 export type AccessSurface = "app" | "mcp"
 export type AccessPrincipalKind = "user" | "service-token"
+
+export const hasVerifiedAppAccess = (request: Request): boolean =>
+  request.headers.get(ACCESS_VERIFIED) === "1" &&
+  request.headers.get(ACCESS_SURFACE) === "app"
 
 export interface AccessPrincipal {
   readonly subject: string
@@ -76,6 +82,9 @@ export type AccessJwtVerifier = (
 
 const normalizedHost = (value: string | undefined): string =>
   (value ?? "").trim().toLowerCase()
+
+const isLoopbackHostname = (hostname: string): boolean =>
+  hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
 
 const hostFromBaseUrl = (value: string | undefined): string => {
   if (!value) return ""
@@ -251,6 +260,20 @@ export const attachCloudflareAccess = async (
   const assertion = headers.get(ACCESS_ASSERTION)?.trim()
   headers.delete(ACCESS_ASSERTION)
 
+  const url = new URL(request.url)
+  if (
+    env.OPS_LOCAL_ACCESS_BYPASS === "1" &&
+    isLoopbackHostname(url.hostname) &&
+    url.pathname.startsWith("/api/")
+  ) {
+    headers.set(ACCESS_LOCAL, "1")
+    return attachVerifiedIdentity(request, headers, "app", "local-development", {
+      id: "local-development",
+      email: "local@localhost",
+      name: "Local developer"
+    })
+  }
+
   const surface = surfaceFor(request, env)
   const expectedAudience = audienceFor(surface ?? "app", env)?.trim()
   if (!surface || !expectedAudience) {
@@ -348,6 +371,7 @@ export class AdministratorIdentity extends Context.Service<
           const subject = headers.get(ACCESS_SUBJECT)?.trim()
           const email = headers.get(ACCESS_EMAIL)?.trim()
           const name = headers.get(ACCESS_NAME)?.trim()
+          const local = headers.get(ACCESS_LOCAL) === "1" && requiredSurface === "app"
 
           if (headers.authorization?.startsWith("Bearer ")) {
             return yield* new ForbiddenError({
@@ -369,13 +393,16 @@ export class AdministratorIdentity extends Context.Service<
             : config.accessMcpAudience
 
           if (
-            !expectedHost ||
-            headers.host !== expectedHost ||
             surface !== requiredSurface ||
-            !expectedAudience ||
-            audience !== expectedAudience ||
+            !audience ||
             !subject ||
-            (kind !== "user" && kind !== "service-token")
+            (kind !== "user" && kind !== "service-token") ||
+            (!local && (
+              !expectedHost ||
+              headers.host !== expectedHost ||
+              !expectedAudience ||
+              audience !== expectedAudience
+            ))
           ) {
             return yield* new ForbiddenError({
               error: "forbidden",
@@ -405,6 +432,13 @@ export class AdministratorIdentity extends Context.Service<
         function*(request: HttpServerRequest) {
           const origin = request.headers.origin
           if (!origin) return
+          if (request.headers[ACCESS_LOCAL] === "1") {
+            try {
+              if (isLoopbackHostname(new URL(origin).hostname)) return
+            } catch {
+              // Invalid origins fail through the production check below.
+            }
+          }
           if (!config.appOrigin || origin !== config.appOrigin) {
             return yield* new ForbiddenError({
               error: "forbidden",

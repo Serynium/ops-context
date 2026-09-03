@@ -15,6 +15,7 @@
     "test": "pnpm test:unit && pnpm test:integration",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "pnpm build:web && vitest run --config vitest.config.ts",
+    "test:scale": "OPS_SCALE_TEST=1 vitest run --config vitest.config.ts --reporter=verbose --silent=passed-only",
     "test:watch": "vitest --config vitest.unit.config.ts",
     "test:integration:watch": "pnpm build:web && vitest --config vitest.config.ts",
     "check": "pnpm check:migrations && pnpm typecheck && pnpm test && pnpm build:worker && pnpm build:worker:no-cron",
@@ -26,15 +27,19 @@
     "deploy:no-cron": "pnpm build:web && wrangler deploy --config wrangler.no-cron.jsonc"
   },
   "dependencies": {
-    "@effect/platform-browser": "4.0.0-rc.112",
     "@modelcontextprotocol/server": "2.0.0",
     "@pushforge/builder": "2.0.5",
+    "@stylexjs/stylex": "^0.19.0",
     "effect": "4.0.0-rc.112",
-    "jose": "6.2.5"
+    "jose": "6.2.5",
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
     "@cloudflare/workers-types": "5.20260827.1",
+    "@stylexjs/unplugin": "^0.19.0",
+    "@types/react": "^19.2.18",
+    "react-grab": "^0.2.0",
     "typescript": "5.9.3",
     "vite": "8.2.2",
     "vitest": "4.1.10",

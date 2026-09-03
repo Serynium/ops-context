@@ -11,22 +11,19 @@ import {
 import { queueUnavailable, repositoryUnavailable } from "../src/errors.js"
 import {
   encodedQueueCommandBytes,
-queueBillingChunks,
-QUEUE_BILLING_CHUNK_BYTES,
-QUEUE_COMMAND_MAX_BYTES,
-QUEUE_COMMAND_VERSION,
+  QUEUE_COMMAND_MAX_BYTES,
+  QUEUE_COMMAND_VERSION,
   decodeQueueCommand,
   type IngestEventCommand,
   type QueueCommand
 } from "../src/queue-contract.js"
-import { D1RepositoriesLive, EventsRepository } from "../src/repositories.js"
+import { D1RepositoriesLive, EventsRepository, type ProjectRow } from "../src/repositories.js"
 import {
   AppConfig,
   CredentialCrypto,
   PushQueue,
   type ConfigService
 } from "../src/services.js"
-import type { ProjectRow } from "../src/types.js"
 
 const config: ConfigService = {
   baseUrl: "https://ops.example.com",
@@ -212,19 +209,6 @@ describe("Queue-first event ingestion", () => {
     expect(published.every((entry) => entry._tag === "DeliverPush")).toBe(true)
   })
 
-  it("decodes delivery commands produced by the pre-versioned rollout", async () => {
-    const decoded = await Effect.runPromise(decodeQueueCommand({
-      eventId: "evt_legacy",
-      subscriptionId: "sub_legacy"
-    }))
-    expect(decoded).toEqual({
-      _tag: "DeliverPush",
-      version: QUEUE_COMMAND_VERSION,
-      eventId: "evt_legacy",
-      subscriptionId: "sub_legacy"
-    })
-  })
-
   it("rejects tagged delivery commands with an unsupported version", async () => {
     const result = await Effect.runPromise(decodeQueueCommand({
       _tag: "DeliverPush",
@@ -277,6 +261,27 @@ const fanout = await env.DB.prepare(
 expect(fanout?.fanout_published_at).not.toBeNull()
   })
 
+  it("collapses repeated fingerprint notifications within five minutes", async () => {
+    const published: QueueCommand[] = []
+    const layer = ingestionLayer((message) => Effect.sync(() => published.push(message)).pipe(Effect.asVoid))
+    const first = {
+      ...command("evt_noise_1"),
+      event: { ...command().event, external_id: "noise-1", fingerprint: "same-incident" }
+    }
+    const second = {
+      ...command("evt_noise_2"),
+      acceptedAt: "2026-08-31T00:01:00.000Z",
+      event: { ...command().event, external_id: "noise-2", fingerprint: "same-incident" }
+    }
+
+    await Effect.runPromise(processIngestEvent(first).pipe(Effect.provide(layer)))
+    await Effect.runPromise(processIngestEvent(second).pipe(Effect.provide(layer)))
+
+    expect(published).toHaveLength(3)
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM events").first<{ count: number }>())?.count)
+      .toBe(2)
+  })
+
   it("keeps external_id stable across producer retries and contains no reusable credentials", async () => {
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
@@ -303,6 +308,7 @@ expect(fanout?.fanout_published_at).not.toBeNull()
     const second = await Effect.runPromise(enqueueEventForProject(project, input).pipe(Effect.provide(layer)))
 
     expect(first.id).toBe(second.id)
+    expect(first.id).toMatch(/^evt_[A-Za-z0-9_-]{22}$/u)
     expect(accepted).toHaveLength(2)
     const encoded = JSON.stringify(accepted)
     expect(encoded).not.toContain("api_key")
@@ -313,7 +319,7 @@ expect(fanout?.fanout_published_at).not.toBeNull()
     expect(encoded).not.toContain(project.api_key_hash)
   })
 
-  it("keeps the complete ingestion command below the Queue message ceiling", async () => {
+  it("keeps the complete ingestion command inside one Queue billing chunk", async () => {
     const accepted: QueueCommand[] = []
     const layer = Layer.mergeAll(
       D1RepositoriesLive(env.DB),
@@ -327,14 +333,11 @@ expect(fanout?.fanout_published_at).not.toBeNull()
 
     await Effect.runPromise(enqueueEventForProject(project, {
       title: "Largest durable event",
-      data: { context: "x".repeat(119_000) }
+      data: { context: "x".repeat(59_000) }
     }).pipe(Effect.provide(layer)))
 
     expect(accepted).toHaveLength(1)
-const bytes = encodedQueueCommandBytes(accepted[0]!)
-expect(bytes).toBeGreaterThan(QUEUE_BILLING_CHUNK_BYTES)
-expect(bytes).toBeLessThanOrEqual(QUEUE_COMMAND_MAX_BYTES)
-expect(queueBillingChunks(bytes)).toBe(2)
+    expect(encodedQueueCommandBytes(accepted[0]!)).toBeLessThanOrEqual(QUEUE_COMMAND_MAX_BYTES)
   })
 
   it("records an operator-visible terminal outcome when ingestion reaches the DLQ", async () => {

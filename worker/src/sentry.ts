@@ -1,6 +1,8 @@
 import { Context, Effect, Layer } from "effect"
-import { Events, Projects } from "./application.js"
-import type { CreateEventInput } from "./events.js"
+import { enqueueEventForProject, type CreateEventInput } from "./events.js"
+import { authenticateProject } from "./projects.js"
+import { EventsRepository, ProjectsRepository, SettingsRepository } from "./repositories.js"
+import { AppConfig, CredentialCrypto, PushQueue } from "./services.js"
 import type { Level } from "./types.js"
 
 const encoder = new TextEncoder()
@@ -10,8 +12,9 @@ export const SENTRY_MAX_COMPRESSED_BYTES = 2 << 20
 export const SENTRY_MAX_DECOMPRESSED_BYTES = 16 << 20
 const SENTRY_MAX_TAGS = 50
 const SENTRY_MAX_TAG_BYTES = 1_024
-const SENTRY_MAX_DATA_BYTES = 100_000
+const SENTRY_MAX_DATA_BYTES = 50_000
 const SENTRY_MAX_CONTEXT_BYTES = 8_000
+const SENTRY_DSN_KEY_PREFIX = "ops_sentry_"
 
 export const isSentryEnvelopePath = (pathname: string): boolean =>
   /^\/api\/[^/]+\/envelope\/$/u.test(pathname)
@@ -108,12 +111,24 @@ const secureJson = (body: unknown, status = 200, extraHeaders?: HeadersInit): Re
   return Response.json(body, { status, headers })
 }
 
+const decodeSentryDsnKey = (value: string): string => {
+  if (!value.startsWith(SENTRY_DSN_KEY_PREFIX)) return value
+  const hex = value.slice(SENTRY_DSN_KEY_PREFIX.length)
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-f]+$/iu.test(hex)) return ""
+  return decoder.decode(Uint8Array.from(
+    { length: hex.length / 2 },
+    (_, index) => Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+  ))
+}
+
 export const sentryKey = (request: Request): string => {
   const authorization = request.headers.get("x-sentry-auth") ?? ""
   for (const token of authorization.split(/[\s,]+/u)) {
-    if (token.startsWith("sentry_key=")) return token.slice("sentry_key=".length)
+    if (token.startsWith("sentry_key=")) {
+      return decodeSentryDsnKey(token.slice("sentry_key=".length))
+    }
   }
-  return new URL(request.url).searchParams.get("sentry_key") ?? ""
+  return decodeSentryDsnKey(new URL(request.url).searchParams.get("sentry_key") ?? "")
 }
 
 const readStreamWithLimit = async (
@@ -529,8 +544,20 @@ export class SentryEndpoint extends Context.Service<SentryEndpoint, {
   static readonly layer = Layer.effect(
     SentryEndpoint,
     Effect.gen(function*() {
-      const projects = yield* Projects
-      const events = yield* Events
+      const projects = yield* ProjectsRepository
+      const events = yield* EventsRepository
+      const settings = yield* SettingsRepository
+      const queue = yield* PushQueue
+      const crypto = yield* CredentialCrypto
+      const config = yield* AppConfig
+      const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(
+        Effect.provideService(ProjectsRepository, projects),
+        Effect.provideService(EventsRepository, events),
+        Effect.provideService(SettingsRepository, settings),
+        Effect.provideService(PushQueue, queue),
+        Effect.provideService(CredentialCrypto, crypto),
+        Effect.provideService(AppConfig, config)
+      )
 
       const handle = (request: Request): Effect.Effect<Response> =>
         Effect.gen(function*() {
@@ -550,7 +577,7 @@ export class SentryEndpoint extends Context.Service<SentryEndpoint, {
             )
           }
 
-          const authenticated = yield* projects.authenticate(key).pipe(
+          const authenticated = yield* provide(authenticateProject(key)).pipe(
             Effect.map((project) => ({ ok: true as const, project })),
             Effect.catch(() => Effect.succeed({ ok: false as const }))
           )
@@ -584,7 +611,9 @@ export class SentryEndpoint extends Context.Service<SentryEndpoint, {
             const mapped = mapSentryEvent(item.payload)
             if (!mapped) continue
 
-            const created = yield* events.create(authenticated.project, mapped.input).pipe(
+            const created = yield* provide(
+              enqueueEventForProject(authenticated.project, mapped.input)
+            ).pipe(
               Effect.map(() => ({ _tag: "Accepted" as const })),
               Effect.catch((error) =>
                 Effect.sync(() => {

@@ -1,22 +1,20 @@
 import { Effect } from "effect"
+import { base64UrlDecode, base64UrlEncode } from "./crypto.js"
 import {
   invalidProject,
   invalidProjectCredential,
-  projectDeletionConflict,
   projectNotFound,
   type CryptographyUnavailable,
   type InvalidProject,
   type InvalidProjectCredential,
-  type ProjectDeletionConflict,
   type ProjectNotFound,
   type RepositoryUnavailable
 } from "./errors.js"
-import { randomToken, sha256Hex } from "./crypto.js"
-import { newId, nowIso } from "./ids.js"
+import { clamp, newId, nowIso } from "./ids.js"
 import { isLevel } from "./levels.js"
-import { ProjectsRepository } from "./repositories.js"
-import { CredentialCrypto } from "./services.js"
-import type { Level, ProjectRow, ProjectView } from "./types.js"
+import { ProjectsRepository, type ProjectRow } from "./repositories.js"
+import { CredentialCrypto, randomToken, sha256Hex } from "./services.js"
+import type { Level, ProjectView } from "./types.js"
 
 export interface CreateProjectInput {
   readonly name: string
@@ -30,8 +28,18 @@ export interface UpdateProjectInput {
   readonly min_level?: Level | undefined
 }
 
+export interface ProjectListInput {
+  readonly before?: string | undefined
+  readonly limit?: string | undefined
+}
+
+export interface ProjectPage {
+  readonly projects: ReadonlyArray<ProjectView>
+  readonly next_cursor?: string
+}
+
 export type ProjectError = RepositoryUnavailable | CryptographyUnavailable |
-  ProjectNotFound | InvalidProjectCredential | InvalidProject | ProjectDeletionConflict
+  ProjectNotFound | InvalidProjectCredential | InvalidProject
 
 const toView = (row: ProjectRow): ProjectView => ({
   id: row.id,
@@ -44,6 +52,24 @@ const toView = (row: ProjectRow): ProjectView => ({
   updated_at: row.updated_at
 })
 
+const cursorEncoder = new TextEncoder()
+const cursorDecoder = new TextDecoder()
+
+const encodeCursor = (row: ProjectRow): string =>
+  base64UrlEncode(cursorEncoder.encode(JSON.stringify({ name: row.name, id: row.id })))
+
+const decodeCursor = (value: string): { readonly name: string; readonly id: string } | null => {
+  try {
+    const parsed = JSON.parse(cursorDecoder.decode(base64UrlDecode(value))) as Record<string, unknown>
+    return typeof parsed.name === "string" && parsed.name.length <= 120 &&
+      typeof parsed.id === "string" && parsed.id.length <= 160
+      ? { name: parsed.name, id: parsed.id }
+      : null
+  } catch {
+    return null
+  }
+}
+
 const slugify = (name: string): string => {
   const slug = name
     .normalize("NFKD")
@@ -55,11 +81,35 @@ const slugify = (name: string): string => {
   return slug || "project"
 }
 
-export const listProjects: Effect.Effect<ReadonlyArray<ProjectView>, RepositoryUnavailable, ProjectsRepository> =
+export const listProjects = (
+  input: ProjectListInput
+): Effect.Effect<ProjectPage, InvalidProject | RepositoryUnavailable, ProjectsRepository> =>
   Effect.gen(function*() {
     const projects = yield* ProjectsRepository
-    const rows = yield* projects.list
-    return rows.map(toView)
+    const cursor = input.before ? decodeCursor(input.before) : null
+    if (input.before && !cursor) return yield* Effect.fail(invalidProject("before cursor is invalid"))
+    const requestedLimit = Number.parseInt(input.limit ?? "100", 10)
+    const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 100, 1, 100)
+    const rows = yield* projects.list({ ...(cursor ? { cursor } : {}), limit: limit + 1 })
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+    const last = pageRows.at(-1)
+    return {
+      projects: pageRows.map(toView),
+      ...(hasMore && last ? { next_cursor: encodeCursor(last) } : {})
+    }
+  })
+
+export const listAllProjects: Effect.Effect<ReadonlyArray<ProjectView>, InvalidProject | RepositoryUnavailable, ProjectsRepository> =
+  Effect.gen(function*() {
+    const result: ProjectView[] = []
+    let before: string | undefined
+    do {
+      const page = yield* listProjects({ limit: "100", ...(before ? { before } : {}) })
+      result.push(...page.projects)
+      before = page.next_cursor
+    } while (before)
+    return result
   })
 
 export const findProjectRow = (id: string): Effect.Effect<ProjectRow, ProjectNotFound | RepositoryUnavailable, ProjectsRepository> =>
@@ -100,7 +150,7 @@ export const createProject = (
     let slug = baseSlug
     if (yield* projects.slugExists(slug)) slug = `${baseSlug.slice(0, 40)}-${id.slice(-6)}`
 
-    yield* projects.insert({ id, name, slug, icon: input.icon?.trim().slice(0, 16) ?? "", apiKeyHash, createdAt })
+    yield* projects.insert({ id, name, slug, icon: input.icon?.trim().slice(0, 32) ?? "", apiKeyHash, createdAt })
 
     const row = yield* findProjectRow(id)
     return { ...toView(row), api_key: apiKey }
@@ -119,7 +169,7 @@ export const updateProject = (
       return yield* Effect.fail(invalidProject("min_level is invalid"))
     }
 
-    const icon = patch.icon === undefined ? current.icon : patch.icon.trim().slice(0, 16)
+    const icon = patch.icon === undefined ? current.icon : patch.icon.trim().slice(0, 32)
     const notify = patch.notify === undefined ? current.notify : patch.notify ? 1 : 0
     const minLevel = patch.min_level ?? current.min_level
 
@@ -127,14 +177,10 @@ export const updateProject = (
     return yield* getProject(id)
   })
 
-export const deleteProject = (id: string): Effect.Effect<void, ProjectNotFound | ProjectDeletionConflict | RepositoryUnavailable, ProjectsRepository> =>
+export const deleteProject = (id: string): Effect.Effect<void, ProjectNotFound | RepositoryUnavailable, ProjectsRepository> =>
   Effect.gen(function*() {
     const projects = yield* ProjectsRepository
     yield* findProjectRow(id)
-    const count = yield* projects.count
-    if (count <= 1) {
-      return yield* Effect.fail(projectDeletionConflict("the last project cannot be deleted"))
-    }
     yield* projects.delete(id)
   })
 

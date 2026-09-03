@@ -6,17 +6,6 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { AdministratorIdentity } from "./access.js"
 import { ApiHandlers, OpsApi } from "./api.js"
-import {
-  Events,
-  EventIngestion,
-  Projects,
-  PushDelivery,
-  Retention,
-  Settings,
-  Silences,
-  Subscriptions,
-  System
-} from "./application.js"
 import { McpEndpoint } from "./mcp.js"
 import {
   AdminAuthorizationLive,
@@ -65,18 +54,7 @@ export const makeLayers = (env: Env) => {
   const identity = AdministratorIdentity.layer.pipe(
     Layer.provide(infrastructure)
   )
-
-  const domain = Layer.mergeAll(
-    Projects.layer,
-    Events.layer,
-    Subscriptions.layer,
-    Silences.layer,
-    Settings.layer
-  ).pipe(Layer.provide(infrastructure))
-
-  const base = Layer.mergeAll(infrastructure, identity, domain)
-  const system = System.layer.pipe(Layer.provide(base))
-  const application = Layer.mergeAll(domain, identity, system)
+  const base = Layer.mergeAll(infrastructure, identity)
 
   const middleware = Layer.mergeAll(
     AdminAuthorizationLive,
@@ -84,7 +62,7 @@ export const makeLayers = (env: Env) => {
     ProjectAuthorizationLive
   ).pipe(Layer.provide(base))
 
-  const handlerDependencies = Layer.mergeAll(application, middleware)
+  const handlerDependencies = Layer.mergeAll(base, middleware)
   const handlers = ApiHandlers.pipe(Layer.provide(handlerDependencies))
 
   const routes = HttpApiBuilder.layer(OpsApi, {
@@ -100,14 +78,15 @@ export const makeLayers = (env: Env) => {
 
   const webPush = WebPush.layer.pipe(Layer.provide(infrastructure))
   const pushRepository = PushDeliveryRepository.layer.pipe(Layer.provide(infrastructure))
-  const delivery = PushDelivery.layer.pipe(
-    Layer.provide(Layer.mergeAll(infrastructure, webPush, pushRepository))
-  )
-  const ingestion = EventIngestion.layer.pipe(Layer.provide(infrastructure))
-  const retention = Retention.layer.pipe(Layer.provide(infrastructure))
   const mcp = McpEndpoint.layer.pipe(Layer.provide(base))
-  const sentry = SentryEndpoint.layer.pipe(Layer.provide(base))
-  const programs = Layer.mergeAll(delivery, ingestion, retention, mcp, sentry).pipe(
+  const sentry = SentryEndpoint.layer.pipe(Layer.provide(infrastructure))
+  const programs = Layer.mergeAll(
+    infrastructure,
+    webPush,
+    pushRepository,
+    mcp,
+    sentry
+  ).pipe(
     Layer.provide(D1StructuredLoggerLive)
   )
 

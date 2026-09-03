@@ -56,7 +56,11 @@ describe("scheduled retention", () => {
     )
     expect(result).toEqual({
       prunedEvents: 1,
+      prunedPushJobs: 0,
+      prunedDeliveries: 0,
       batches: 1,
+      pushJobBatches: 0,
+      deliveryBatches: 0,
       continuationRequired: false
     })
     const ids = await env.DB.prepare("SELECT id FROM events ORDER BY id").all<{ id: string }>()
@@ -97,10 +101,93 @@ describe("scheduled retention", () => {
     )
     expect(result).toEqual({
       prunedEvents: 501,
+      prunedPushJobs: 0,
+      prunedDeliveries: 0,
       batches: 2,
+      pushJobBatches: 0,
+      deliveryBatches: 0,
       continuationRequired: false
     })
     const ids = await env.DB.prepare("SELECT id FROM events ORDER BY id").all<{ id: string }>()
     expect(ids.results).toEqual([{ id: "evt_current" }])
+  })
+
+  it("prunes old terminal push jobs without touching active or recent jobs", async () => {
+    const old = "2020-01-01T00:00:00.000Z"
+    const now = new Date().toISOString()
+    const subscriptions = ["sent_old", "dead_old", "retrying_old", "sent_current"] as const
+    const statement = env.DB.prepare(
+      `INSERT INTO push_subscriptions
+       (id, name, endpoint, p256dh, auth, user_agent, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, 'p256dh', 'auth', '', 1, ?, ?)`
+    )
+    await env.DB.batch(subscriptions.map((id) => statement.bind(
+      `sub_${id}`, id, `https://push.example/${id}`, now, now
+    )))
+    await env.DB.batch([
+      ["sub_sent_old", "sent", old, null],
+      ["sub_dead_old", "dead", old, old],
+      ["sub_retrying_old", "retrying", old, null],
+      ["sub_sent_current", "sent", now, null]
+    ].map(([subscriptionId, state, updatedAt, deadAt]) => env.DB.prepare(
+      `INSERT INTO push_jobs
+       (event_id, subscription_id, state, attempts, available_at, queued_at,
+        lease_until, dead_at, last_error, updated_at)
+       VALUES ('evt_current', ?, ?, 1, ?, NULL, NULL, ?, '', ?)`
+    ).bind(subscriptionId, state, updatedAt, deadAt, updatedAt)))
+
+    const result = await Effect.runPromise(runRetention.pipe(Effect.provide(layer())))
+    expect(result).toEqual({
+      prunedEvents: 1,
+      prunedPushJobs: 2,
+      prunedDeliveries: 0,
+      batches: 1,
+      pushJobBatches: 1,
+      deliveryBatches: 0,
+      continuationRequired: false
+    })
+    const jobs = await env.DB.prepare(
+      "SELECT state FROM push_jobs ORDER BY state"
+    ).all<{ state: string }>()
+    expect(jobs.results).toEqual([{ state: "retrying" }, { state: "sent" }])
+  })
+
+  it("prunes successful delivery history for old events but retains failures", async () => {
+    const now = new Date().toISOString()
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('retention_days', '0', ?)"
+      ).bind(now),
+      env.DB.prepare(
+        `INSERT INTO push_subscriptions
+         (id, name, endpoint, p256dh, auth, user_agent, enabled, created_at, updated_at)
+         VALUES ('sub_retention', 'Retention', 'https://push.example/retention',
+                 'p256dh', 'auth', '', 1, ?, ?)`
+      ).bind(now, now)
+    ])
+    await env.DB.batch([
+      ["evt_old", "sent"],
+      ["evt_old", "failed"],
+      ["evt_current", "sent"]
+    ].map(([eventId, status]) => env.DB.prepare(
+      `INSERT INTO deliveries
+       (event_id, subscription_id, status, response_status, error, attempted_at, created_at)
+       VALUES (?, 'sub_retention', ?, 201, '', ?, ?)`
+    ).bind(eventId, status, now, now)))
+
+    const result = await Effect.runPromise(runRetention.pipe(Effect.provide(layer())))
+    expect(result).toMatchObject({
+      prunedEvents: 0,
+      prunedDeliveries: 1,
+      deliveryBatches: 1,
+      continuationRequired: false
+    })
+    const rows = await env.DB.prepare(
+      "SELECT event_id, status FROM deliveries ORDER BY event_id, status"
+    ).all<{ event_id: string; status: string }>()
+    expect(rows.results).toEqual([
+      { event_id: "evt_current", status: "sent" },
+      { event_id: "evt_old", status: "failed" }
+    ])
   })
 })

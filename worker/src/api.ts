@@ -9,7 +9,6 @@ import {
   OpenApi
 } from "effect/unstable/httpapi"
 import {
-  AccessIdentity,
   BadRequestError,
   CommonErrors,
   CreateEventInput,
@@ -24,7 +23,7 @@ import {
   Health,
   Project,
   ProjectCreated,
-  ProjectIcons,
+  ProjectListQuery,
   Projects as ProjectsResponse,
   PushPublicKey,
   PushSubscription,
@@ -46,22 +45,59 @@ import {
   toApiFailure
 } from "./api-models.js"
 import {
-  Events,
-  Projects,
-  Settings,
-  Silences,
-  Subscriptions,
-  System
+  pushPublicKey,
+  rebuildEventGroups,
+  systemHealth,
+  systemStatus,
+  testNotification
 } from "./application.js"
 import { decodeCreateEventInput } from "./event-contract.js"
 import type { ApplicationError } from "./errors.js"
 import {
+  enqueueEventForProject,
+  eventDeliveries,
+  getEvent,
+  listEvents,
+  unsilenceEvent
+} from "./events.js"
+import {
   AdminAuthorization,
-  CurrentAdmin,
   CurrentProject,
   ProjectAuthorization,
   SameOrigin
 } from "./middleware.js"
+import {
+  createProject,
+  deleteProject,
+  getProject,
+  listProjects,
+  rotateProjectKey,
+  updateProject
+} from "./projects.js"
+import {
+  DeliveriesRepository,
+  EventsRepository,
+  ProjectsRepository,
+  SettingsRepository,
+  SilencesRepository,
+  SubscriptionsRepository,
+  SystemRepository
+} from "./repositories.js"
+import { AppConfig, CredentialCrypto, PushQueue } from "./services.js"
+import {
+  createSilence,
+  deleteSilence,
+  getSilence,
+  listSilences
+} from "./silences.js"
+import { getSettings, updateSettings } from "./settings.js"
+import {
+  deleteSubscription,
+  listSubscriptions,
+  registerSubscription,
+  renewSubscription,
+  updateSubscription
+} from "./subscriptions.js"
 
 const SchemaString = Schema.String
 
@@ -106,10 +142,6 @@ export class IngestApiGroup extends HttpApiGroup.make("ingest")
 
 export class AdminApiGroup extends HttpApiGroup.make("admin")
   .add(
-    HttpApiEndpoint.get("accessIdentity", "/access/me", {
-      success: AccessIdentity,
-      error: CommonErrors
-    }),
     HttpApiEndpoint.get("listEvents", "/events", {
       query: EventListQuery,
       success: EventPage,
@@ -132,11 +164,8 @@ export class AdminApiGroup extends HttpApiGroup.make("admin")
     }).middleware(SameOrigin),
 
     HttpApiEndpoint.get("listProjects", "/projects", {
+      query: ProjectListQuery,
       success: ProjectsResponse,
-      error: CommonErrors
-    }),
-    HttpApiEndpoint.get("projectIcons", "/projects/icons", {
-      success: ProjectIcons,
       error: CommonErrors
     }),
     HttpApiEndpoint.post("createProject", "/projects", {
@@ -257,8 +286,9 @@ export const HealthHandlers = HttpApiBuilder.group(
   OpsApi,
   "health",
   Effect.fn(function*(handlers) {
-    const system = yield* System
-    return handlers.handle("health", () => toHttpFailure(system.health))
+    const context = yield* Effect.context<SystemRepository>()
+    return handlers.handle("health", () =>
+      toHttpFailure(Effect.provide(systemHealth, context)))
   })
 )
 
@@ -266,22 +296,21 @@ export const PublicHandlers = HttpApiBuilder.group(
   OpsApi,
   "public",
   Effect.fn(function*(handlers) {
-    const system = yield* System
-    const subscriptions = yield* Subscriptions
+    const context = yield* Effect.context<AppConfig | SubscriptionsRepository | CredentialCrypto>()
     return handlers.handleAll({
-      pushPublicKey: () => toHttpFailure(system.publicKey),
+      pushPublicKey: () => toHttpFailure(Effect.provide(pushPublicKey, context)),
       renewSubscription: Effect.fn(function*({ params, payload }) {
         const request = yield* HttpServerRequest.HttpServerRequest
         const authorization = request.headers.authorization ?? ""
         const credential = authorization.startsWith("Bearer ")
           ? authorization.slice("Bearer ".length).trim()
           : ""
-        return yield* toHttpFailure(subscriptions.renew(
+        return yield* toHttpFailure(Effect.provide(renewSubscription(
           params.id,
           credential,
           payload.subscription,
           request.headers["user-agent"] ?? ""
-        ))
+        ), context))
       })
     })
   })
@@ -291,7 +320,9 @@ export const IngestHandlers = HttpApiBuilder.group(
   OpsApi,
   "ingest",
   Effect.fn(function*(handlers) {
-    const events = yield* Events
+    const context = yield* Effect.context<
+      EventsRepository | SettingsRepository | PushQueue | CredentialCrypto | AppConfig
+    >()
     return handlers.handleRaw("createEvent", () =>
       Effect.gen(function*() {
         const request = yield* HttpServerRequest.HttpServerRequest
@@ -305,7 +336,10 @@ export const IngestHandlers = HttpApiBuilder.group(
           )
         )
         const project = yield* CurrentProject
-        const event = yield* toHttpFailure(events.create(project, payload))
+        const event = yield* toHttpFailure(Effect.provide(
+          enqueueEventForProject(project, payload),
+          context
+        ))
         return event
       }))
   })
@@ -315,64 +349,63 @@ export const AdminHandlers = HttpApiBuilder.group(
   OpsApi,
   "admin",
   Effect.fn(function*(handlers) {
-    const events = yield* Events
-    const projects = yield* Projects
-    const subscriptions = yield* Subscriptions
-    const silences = yield* Silences
-    const settings = yield* Settings
-    const system = yield* System
-
+    const context = yield* Effect.context<
+      AppConfig | CredentialCrypto | PushQueue |
+      ProjectsRepository | EventsRepository | SubscriptionsRepository |
+      SilencesRepository | SettingsRepository | DeliveriesRepository | SystemRepository
+    >()
+    const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.provide(effect, context)
     return handlers.handleAll({
-      accessIdentity: Effect.fn(function*() {
-        const principal = yield* CurrentAdmin
-        return {
-          subject: principal.subject,
-          kind: principal.kind,
-          audience: principal.audience,
-          ...(principal.email ? { email: principal.email } : {}),
-          ...(principal.name ? { name: principal.name } : {})
-        }
-      }),
-      listEvents: ({ query }) => toHttpFailure(events.list(query)),
-      getEvent: ({ params }) => toHttpFailure(events.get(params.id)),
+      listEvents: ({ query }) => toHttpFailure(provide(listEvents(query))),
+      getEvent: ({ params }) => toHttpFailure(provide(getEvent(params.id))),
       eventDeliveries: ({ params }) =>
-        Effect.map(toHttpFailure(events.deliveries(params.id)), (deliveries) => ({ deliveries })),
-      unsilenceEvent: ({ params }) => toHttpFailure(events.unsilence(params.id)),
+        Effect.map(toHttpFailure(provide(eventDeliveries(params.id))), (deliveries) => ({ deliveries })),
+      unsilenceEvent: ({ params }) => toHttpFailure(provide(unsilenceEvent(params.id))),
 
-      listProjects: () => Effect.map(toHttpFailure(projects.list), (projects) => ({ projects })),
-      projectIcons: () => Effect.succeed({
-        icons: ["", "🚀", "🗄️", "💳", "🛡️", "📦", "⚙️", "🧪", "📈", "🔔"]
-      }),
-      createProject: ({ payload }) => toHttpFailure(projects.create(payload)),
-      getProject: ({ params }) => toHttpFailure(projects.get(params.id)),
-      updateProject: ({ params, payload }) => toHttpFailure(projects.update(params.id, payload)),
-      deleteProject: ({ params }) => toHttpFailure(projects.delete(params.id)),
-      rotateProjectKey: ({ params }) => toHttpFailure(projects.rotateKey(params.id)),
+      listProjects: ({ query }) => toHttpFailure(provide(listProjects(query))),
+      createProject: ({ payload }) => toHttpFailure(provide(createProject(payload))),
+      getProject: ({ params }) => toHttpFailure(provide(getProject(params.id))),
+      updateProject: ({ params, payload }) => toHttpFailure(provide(updateProject(params.id, payload))),
+      deleteProject: ({ params }) => toHttpFailure(provide(deleteProject(params.id))),
+      rotateProjectKey: ({ params }) => toHttpFailure(provide(rotateProjectKey(params.id))),
 
-      listSubscriptions: () => Effect.map(toHttpFailure(subscriptions.list), (subscriptions) => ({ subscriptions })),
+      listSubscriptions: () => Effect.map(toHttpFailure(provide(listSubscriptions)), (subscriptions) => ({ subscriptions })),
       registerSubscription: Effect.fn(function*({ payload }) {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* toHttpFailure(subscriptions.register(payload, request.headers["user-agent"] ?? ""))
+        return yield* toHttpFailure(provide(registerSubscription(payload, request.headers["user-agent"] ?? "")))
       }),
-      updateSubscription: ({ params, payload }) => toHttpFailure(subscriptions.update(params.id, {
+      updateSubscription: ({ params, payload }) => toHttpFailure(provide(updateSubscription(params.id, {
         ...(payload.name !== undefined ? { name: payload.name } : {}),
         ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {})
-      })),
-      deleteSubscription: ({ params }) => toHttpFailure(subscriptions.delete(params.id)),
+      }))),
+      deleteSubscription: ({ params }) => toHttpFailure(provide(deleteSubscription(params.id))),
 
-      listSilences: () => toHttpFailure(silences.listSummary),
-      createSilence: ({ payload }) => toHttpFailure(silences.create(payload)),
-      getSilence: ({ params }) => toHttpFailure(silences.get(params.id)),
-      deleteSilence: ({ params }) => toHttpFailure(silences.delete(params.id)),
+      listSilences: () => toHttpFailure(provide(Effect.gen(function*() {
+        const repository = yield* SilencesRepository
+        return {
+          silences: yield* listSilences,
+          fields: ["fingerprint", "title", "source"] as const,
+          silenced_events: yield* repository.countSilencedEvents
+        }
+      }))),
+      createSilence: ({ payload }) => toHttpFailure(provide(createSilence(payload))),
+      getSilence: ({ params }) => toHttpFailure(provide(getSilence(params.id))),
+      deleteSilence: ({ params }) => toHttpFailure(provide(deleteSilence(params.id))),
 
-      getSettings: () => toHttpFailure(settings.get),
-      updateSettings: ({ payload }) => toHttpFailure(settings.update(payload)),
+      getSettings: () => toHttpFailure(provide(getSettings)),
+      updateSettings: ({ payload }) => toHttpFailure(provide(updateSettings(payload))),
       status: Effect.fn(function*() {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* toHttpFailure(system.status(requestOrigin(request)))
+        return yield* toHttpFailure(provide(systemStatus(requestOrigin(request))))
       }),
-      rebuildEventGroups: () => toHttpFailure(system.rebuildEventGroups),
-      testNotification: ({ payload }) => toHttpFailure(system.testNotification(payload.project_id))
+      rebuildEventGroups: () => toHttpFailure(provide(rebuildEventGroups)),
+      testNotification: Effect.fn(function*({ payload }) {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* toHttpFailure(provide(
+          testNotification(requestOrigin(request), payload.project_id)
+        ))
+      })
     })
   })
 )

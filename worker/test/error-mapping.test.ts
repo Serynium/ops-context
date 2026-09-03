@@ -17,7 +17,6 @@ const failures: ReadonlyArray<ApplicationError> = [
   { _tag: "SilenceNotFound", message: "silence not found" },
   { _tag: "InvalidProjectCredential", message: "invalid project API key" },
   { _tag: "DuplicateExternalId", message: "duplicate external id" },
-  { _tag: "ProjectDeletionConflict", message: "last project" },
   { _tag: "PushNotConfigured", message: "Web Push is not configured" },
   { _tag: "RepositoryUnavailable", message: "database query failed" },
   { _tag: "QueueUnavailable", message: "queue failed" },
@@ -38,13 +37,13 @@ describe("adapter error mappings", () => {
     expect(mapped.map((failure) => failure._tag)).toEqual([
       "InvalidError", "InvalidError", "InvalidError", "InvalidError", "InvalidError",
       "InvalidError", "NotFoundError", "NotFoundError", "NotFoundError", "NotFoundError",
-      "NotFoundError", "ConflictError", "ConflictError", "ServiceUnavailableError",
+      "NotFoundError", "ConflictError", "ServiceUnavailableError",
       "InternalError", "InternalError", "InternalError", "ServiceUnavailableError"
     ])
     expect(mapped.map((failure) => failure.error)).toEqual([
       "validation_error", "invalid", "invalid", "invalid", "invalid", "invalid",
       "not_found", "not_found", "not_found", "not_found", "not_found", "conflict",
-      "conflict", "push_not_configured", "internal", "internal", "internal",
+      "push_not_configured", "internal", "internal", "internal",
       "service_unavailable"
     ])
   })
@@ -57,7 +56,7 @@ describe("adapter error mappings", () => {
     expect(failures.map((failure) => toMcpToolFailure(failure).code)).toEqual([
       "invalid_argument", "invalid_argument", "invalid_argument", "invalid_argument",
       "invalid_argument", "invalid_argument", "not_found", "not_found", "not_found",
-      "not_found", "not_found", "conflict", "conflict", "unavailable", "unavailable",
+      "not_found", "not_found", "conflict", "unavailable", "unavailable",
       "unavailable", "unavailable", "unavailable"
     ])
   })

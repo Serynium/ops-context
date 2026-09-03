@@ -1,13 +1,9 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import type {
-  CryptographyUnavailable,
-  RepositoryUnavailable
-} from "./errors.js"
-import { repositoryUnavailable } from "./errors.js"
+import type { RepositoryUnavailable } from "./errors.js"
 import { nowIso } from "./ids.js"
 import type { DeliverPushCommand } from "./queue-contract.js"
-import { CredentialCrypto, Database, type SqlStatement } from "./services.js"
-import type { EventRow, PushSubscriptionRow } from "./types.js"
+import { Database, type SqlStatement } from "./services.js"
+import type { EventRow, PushSubscriptionRow } from "./repositories.js"
 
 export type PushJobState =
   | "pending"
@@ -152,13 +148,7 @@ const PushContextRowSchema = Schema.Struct({
 const DeferredPushJobSchema = Schema.Struct({ state: PushJobStateSchema, available_at: Schema.String })
 const PushJobStateRowSchema = Schema.Struct({ state: PushJobStateSchema })
 
-const decodeRow = <A>(schema: Schema.Schema<A>, row: unknown): Effect.Effect<A, RepositoryUnavailable> =>
-  Schema.decodeUnknownEffect(schema)(row).pipe(
-    Effect.mapError(() => repositoryUnavailable("repository read failed"))
-  ) as Effect.Effect<A, RepositoryUnavailable>
-
 const deliveryInsert = (
-  id: string,
   claim: ClaimedPushJob,
   status: "sent" | "failed",
   responseStatus: number | null,
@@ -167,15 +157,14 @@ const deliveryInsert = (
 ): SqlStatement => ({
   name: "deliveries.create",
   sql: `INSERT INTO deliveries
-        (id, event_id, subscription_id, status, response_status, error, attempted_at, created_at)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+        (event_id, subscription_id, status, response_status, error, attempted_at, created_at)
+        SELECT ?, ?, ?, ?, ?, ?, ?
         WHERE EXISTS (
           SELECT 1 FROM push_jobs
           WHERE event_id = ? AND subscription_id = ?
             AND state = 'sending' AND lease_until = ?
         )`,
   params: [
-    id,
     claim.message.eventId,
     claim.message.subscriptionId,
     status,
@@ -252,26 +241,26 @@ export interface PushDeliveryRepositoryService {
   readonly finalizeSuccess: (
     claim: ClaimedPushJob,
     responseStatus: number
-  ) => Effect.Effect<void, RepositoryUnavailable | CryptographyUnavailable>
+  ) => Effect.Effect<void, RepositoryUnavailable>
   readonly finalizeRetry: (
     claim: ClaimedPushJob,
     responseStatus: number | null,
     error: string,
     availableAt: string
-  ) => Effect.Effect<void, RepositoryUnavailable | CryptographyUnavailable>
+  ) => Effect.Effect<void, RepositoryUnavailable>
   readonly finalizeDead: (
     claim: ClaimedPushJob,
     responseStatus: number | null,
     error: string,
     revokedEndpoint: string | null
-  ) => Effect.Effect<void, RepositoryUnavailable | CryptographyUnavailable>
+  ) => Effect.Effect<void, RepositoryUnavailable>
   readonly finalizeDeadLetter: (
     message: DeliverPushCommand,
     reason: string
-  ) => Effect.Effect<boolean, RepositoryUnavailable | CryptographyUnavailable>
+  ) => Effect.Effect<boolean, RepositoryUnavailable>
 }
 
-export type PushDeliveryRepositoryError = RepositoryUnavailable | CryptographyUnavailable
+export type PushDeliveryRepositoryError = RepositoryUnavailable
 
 export class PushDeliveryRepository extends Context.Service<
   PushDeliveryRepository,
@@ -281,14 +270,12 @@ export class PushDeliveryRepository extends Context.Service<
     PushDeliveryRepository,
     Effect.gen(function*() {
       const db = yield* Database
-      const crypto = yield* CredentialCrypto
 
       const claim: PushDeliveryRepositoryService["claim"] = (message) =>
         Effect.gen(function*() {
           const now = nowIso()
           const leaseUntil = new Date(Date.now() + 60_000).toISOString()
-          const result = yield* db.run(
-            "push_jobs.claim",
+          const changed = yield* db.run(
             `UPDATE push_jobs
              SET state = 'sending', attempts = attempts + 1, lease_until = ?, updated_at = ?
              WHERE event_id = ? AND subscription_id = ?
@@ -297,21 +284,21 @@ export class PushDeliveryRepository extends Context.Service<
                  OR (state = 'sending' AND (lease_until IS NULL OR lease_until < ?))
                )
                AND available_at <= ?`,
-            [leaseUntil, now, message.eventId, message.subscriptionId, now, now]
+            [leaseUntil, now, message.eventId, message.subscriptionId, now, now],
+            "push_jobs.claim"
           )
-          const changed = ((result.meta as { readonly changes?: number }).changes ?? 0) > 0
-          if (changed) return { message, leaseUntil }
+          if (changed > 0) return { message, leaseUntil }
 
           // A delayed Queue message should not normally arrive early, but acknowledging one
           // would orphan a retrying job because maintenance deliberately does not republish it.
           // Only the failed-claim path pays for this diagnostic read.
-          const deferredRaw = yield* db.first<Record<string, unknown>>(
-            "push_jobs.get_deferred",
+          const deferred = yield* db.first(
+            DeferredPushJobSchema,
             `SELECT state, available_at FROM push_jobs
              WHERE event_id = ? AND subscription_id = ?`,
-            [message.eventId, message.subscriptionId]
+            [message.eventId, message.subscriptionId],
+            "push_jobs.get_deferred"
           )
-          const deferred = deferredRaw === null ? null : yield* decodeRow(DeferredPushJobSchema, deferredRaw)
           return deferred &&
               (deferred.state === "pending" ||
                 deferred.state === "queued" ||
@@ -322,8 +309,8 @@ export class PushDeliveryRepository extends Context.Service<
         })
 
       const loadClaimedContext: PushDeliveryRepositoryService["loadClaimedContext"] = (claimed) =>
-        db.first<Record<string, unknown>>(
-          "push_jobs.get_claimed_context",
+        db.first(
+          PushContextRowSchema,
           `SELECT
              j.event_id AS job_event_id,
              j.subscription_id AS job_subscription_id,
@@ -375,34 +362,29 @@ export class PushDeliveryRepository extends Context.Service<
             AND s.enrollment_generation = j.subscription_generation
            WHERE j.event_id = ? AND j.subscription_id = ?
              AND j.state = 'sending' AND j.lease_until = ?`,
-          [claimed.message.eventId, claimed.message.subscriptionId, claimed.leaseUntil]
-        ).pipe(Effect.flatMap((row) => row === null
-          ? Effect.succeed(null)
-          : decodeRow(PushContextRowSchema, row).pipe(Effect.map(mapContext))))
+          [claimed.message.eventId, claimed.message.subscriptionId, claimed.leaseUntil],
+          "push_jobs.get_claimed_context"
+        ).pipe(Effect.map((row) => row === null ? null : mapContext(row)))
 
       const finalizeSuccess: PushDeliveryRepositoryService["finalizeSuccess"] = (
         claimed,
         responseStatus
       ) => Effect.gen(function*() {
         const now = nowIso()
-        const deliveryId = yield* crypto.newId("dlv")
-        yield* db.batch("push_jobs.finalize_success", [
-          deliveryInsert(deliveryId, claimed, "sent", responseStatus, "", now),
+        yield* db.batch([
+          deliveryInsert(claimed, "sent", responseStatus, "", now),
           {
-            name: "push_jobs.mark_sent",
-            sql: `UPDATE push_jobs
-                  SET state = 'sent', lease_until = NULL, dead_at = NULL,
-                      last_error = '', updated_at = ?
+            name: "push_jobs.delete_sent",
+            sql: `DELETE FROM push_jobs
                   WHERE event_id = ? AND subscription_id = ?
                     AND state = 'sending' AND lease_until = ?`,
             params: [
-              now,
               claimed.message.eventId,
               claimed.message.subscriptionId,
               claimed.leaseUntil
             ]
           }
-        ])
+        ], "push_jobs.finalize_success")
       })
 
       const finalizeRetry: PushDeliveryRepositoryService["finalizeRetry"] = (
@@ -412,9 +394,8 @@ export class PushDeliveryRepository extends Context.Service<
         availableAt
       ) => Effect.gen(function*() {
         const now = nowIso()
-        const deliveryId = yield* crypto.newId("dlv")
-        yield* db.batch("push_jobs.finalize_retry", [
-          deliveryInsert(deliveryId, claimed, "failed", responseStatus, error, now),
+        yield* db.batch([
+          deliveryInsert(claimed, "failed", responseStatus, error, now),
           {
             name: "push_jobs.mark_retrying",
             sql: `UPDATE push_jobs
@@ -432,7 +413,7 @@ export class PushDeliveryRepository extends Context.Service<
               claimed.leaseUntil
             ]
           }
-        ])
+        ], "push_jobs.finalize_retry")
       })
 
       const finalizeDead: PushDeliveryRepositoryService["finalizeDead"] = (
@@ -442,9 +423,8 @@ export class PushDeliveryRepository extends Context.Service<
         revokedEndpoint
       ) => Effect.gen(function*() {
         const now = nowIso()
-        const deliveryId = yield* crypto.newId("dlv")
         const statements: Array<SqlStatement> = [
-          deliveryInsert(deliveryId, claimed, "failed", responseStatus, error, now)
+          deliveryInsert(claimed, "failed", responseStatus, error, now)
         ]
         if (revokedEndpoint !== null) {
           statements.push({
@@ -488,38 +468,36 @@ export class PushDeliveryRepository extends Context.Service<
             claimed.leaseUntil
           ]
         })
-        yield* db.batch("push_jobs.finalize_dead", statements)
+        yield* db.batch(statements, "push_jobs.finalize_dead")
       })
 
       const finalizeDeadLetter: PushDeliveryRepositoryService["finalizeDeadLetter"] = (
         message,
         reason
       ) => Effect.gen(function*() {
-        const existingRaw = yield* db.first<Record<string, unknown>>(
-          "push_jobs.get_for_dead_letter",
+        const existing = yield* db.first(
+          PushJobStateRowSchema,
           `SELECT state FROM push_jobs
            WHERE event_id = ? AND subscription_id = ?`,
-          [message.eventId, message.subscriptionId]
+          [message.eventId, message.subscriptionId],
+          "push_jobs.get_for_dead_letter"
         )
-        const existing = existingRaw === null ? null : yield* decodeRow(PushJobStateRowSchema, existingRaw)
         if (!existing || existing.state === "sent" || existing.state === "dead") return false
 
         const now = nowIso()
-        const deliveryId = yield* crypto.newId("dlv")
-        yield* db.batch("push_jobs.finalize_dead_letter", [
+        yield* db.batch([
           {
             name: "deliveries.create",
             sql: `INSERT INTO deliveries
-                  (id, event_id, subscription_id, status, response_status, error,
+                  (event_id, subscription_id, status, response_status, error,
                    attempted_at, created_at)
-                  SELECT ?, ?, ?, 'failed', NULL, ?, ?, ?
+                  SELECT ?, ?, 'failed', NULL, ?, ?, ?
                   WHERE EXISTS (
                     SELECT 1 FROM push_jobs
                     WHERE event_id = ? AND subscription_id = ?
                       AND state NOT IN ('sent', 'dead')
                   )`,
             params: [
-              deliveryId,
               message.eventId,
               message.subscriptionId,
               reason.slice(0, 4_000),
@@ -544,7 +522,7 @@ export class PushDeliveryRepository extends Context.Service<
               message.subscriptionId
             ]
           }
-        ])
+        ], "push_jobs.finalize_dead_letter")
         return true
       })
 
