@@ -8,7 +8,7 @@ const styles = stylex.create({
     width: "fit-content",
     maxWidth: "100%",
     "--group-separator-color": "rgba(0, 0, 0, 0.1)",
-    ":focus-within": { "--group-separator-color": "#a3a3a3" },
+    ":focus-within": { "--group-separator-color": "#d6710e" },
   },
   horizontal: { flexDirection: "row" },
   vertical: { flexDirection: "column" },

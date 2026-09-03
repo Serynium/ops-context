@@ -25,24 +25,24 @@ const s = stylex.create({
     backgroundColor: "#fdfdfe",
     outline: "none",
     fontSize: 13,
-    ":focus": { borderColor: "#8b92ec" },
+    ":focus": { borderColor: "#d6710e" },
   },
   actions: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
   notice: {
     borderWidth: 1,
     borderStyle: "solid",
-    borderColor: "#dbdff8",
+    borderColor: "#ffd7b0",
     borderRadius: 10,
     paddingBlock: 12,
     paddingInline: 14,
-    backgroundColor: "#eef0fb",
-    color: "#5a62d4",
+    backgroundColor: "#fff3e8",
+    color: "#b45309",
     lineHeight: 1.5,
   },
   noticeBad: {
-    borderColor: "#c8b8ef",
-    backgroundColor: "#f5f0ff",
-    color: "#6a45c4",
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+    color: "#b91c1c",
   },
   badge: {
     display: "inline-flex",
@@ -65,7 +65,7 @@ const s = stylex.create({
   info: { color: "#8b90bd" },
   success: { color: "#5fbf9f" },
   warning: { color: "#e0912f" },
-  critical: { color: "#6a45c4" },
+  critical: { color: "#b91c1c" },
   muted: { color: "#9c9eab" },
   status: {
     display: "inline-flex",
@@ -96,7 +96,7 @@ const s = stylex.create({
     placeItems: "center",
     color: "#9c9eab",
   },
-  error: { color: "#8a63e0" },
+  error: { color: "#b91c1c" },
   toast: {
     position: "fixed",
     left: "50%",
@@ -231,7 +231,7 @@ const s = stylex.create({
   jsonColon: { color: "#c2c4ce" },
   jsonSummary: { color: "#9c9eab" },
   jsonValue: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
-  jsonAccent: { color: "#5a62d4" },
+  jsonAccent: { color: "#b45309" },
   icon: { display: "inline-block", verticalAlign: -3, flexShrink: 0 },
   iconPicker: {
     display: "flex",
@@ -259,7 +259,7 @@ const s = stylex.create({
     padding: 0,
     ":hover": { backgroundColor: "#fafafc" },
   },
-  iconButtonOn: { borderColor: "#7c83e8", backgroundColor: "#eef0fb" },
+  iconButtonOn: { borderColor: "#f48120", backgroundColor: "#fff3e8" },
   swatch: {
     width: 24,
     height: 24,
@@ -528,6 +528,7 @@ const ICON_SHAPES = [
   "blob",
 ] as const;
 const ICON_COLORS = {
+  orange: "#f48120",
   periwinkle: "#7c83e8",
   mint: "#5fbf9f",
   blush: "#e88cb0",
@@ -558,7 +559,7 @@ export function ProjectIcon({
 }) {
   const parsed = parseIcon(icon) ?? {
     shape: "circle" as const,
-    color: "periwinkle" as const,
+    color: "orange" as const,
   };
   const fill = ICON_COLORS[parsed.color];
   return (
@@ -636,7 +637,7 @@ export function IconPicker({
 }) {
   const current = parseIcon(value) ?? {
     shape: "circle" as const,
-    color: "periwinkle" as const,
+    color: "orange" as const,
   };
   return (
     <div {...stylex.props(s.iconPicker)}>

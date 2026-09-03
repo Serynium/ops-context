@@ -29,7 +29,7 @@ const styles = stylex.create({
     "@media (min-width: 640px)": { height: 32, fontSize: 14 },
     ":focus-visible": {
       zIndex: 1,
-      boxShadow: "0 0 0 1px #ffffff, 0 0 0 3px #a3a3a3",
+      boxShadow: "0 0 0 1px #ffffff, 0 0 0 3px #f48120",
     },
     ":disabled": {
       opacity: 0.64,
@@ -79,14 +79,14 @@ const styles = stylex.create({
     },
   },
   default: {
-    borderColor: "#262626",
-    backgroundColor: "#262626",
-    color: "#fafafa",
+    borderColor: "#d6710e",
+    backgroundColor: "#f48120",
+    color: "#17181f",
     boxShadow:
-      "0 1px 2px rgba(38, 38, 38, 0.24), inset 0 1px rgba(255, 255, 255, 0.16)",
-    ":hover": { backgroundColor: "rgba(38, 38, 38, 0.9)" },
+      "0 1px 2px rgba(214, 113, 14, 0.28), inset 0 1px rgba(255, 255, 255, 0.24)",
+    ":hover": { backgroundColor: "#e97712" },
     ":active": {
-      backgroundColor: "rgba(38, 38, 38, 0.9)",
+      backgroundColor: "#d6710e",
       boxShadow: "inset 0 1px rgba(0, 0, 0, 0.08)",
     },
   },
@@ -134,7 +134,7 @@ const styles = stylex.create({
     animationDuration: "700ms",
     animationIterationCount: "infinite",
   },
-  spinnerDefault: { color: "#fafafa" },
+  spinnerDefault: { color: "#17181f" },
   spinnerNeutral: { color: "#262626" },
 });
 

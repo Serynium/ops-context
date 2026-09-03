@@ -12,9 +12,9 @@ const styles = stylex.create({
     padding: 2,
     backgroundColor: "#e4e6ee",
     cursor: "pointer",
-    ":focus-within": { boxShadow: "0 0 0 3px #dbdff8" },
+    ":focus-within": { boxShadow: "0 0 0 3px #ffd7b0" },
   },
-  checked: { backgroundColor: "#7c83e8" },
+  checked: { backgroundColor: "#f48120" },
   disabled: { cursor: "default", opacity: 0.5 },
   input: { position: "absolute", inset: 0, opacity: 0, cursor: "inherit" },
   thumb: {

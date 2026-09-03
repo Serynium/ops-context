@@ -1,6 +1,7 @@
 <!-- Burst mark from https://spellsurf.com/logos/Burst.svg -->
-<svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g fill="#000">
+<svg viewBox="0 0 93 93" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="89" height="89" rx="20" fill="#fff"/>
+  <g transform="translate(22 22) scale(1.225)" fill="#000">
     <path d="M16.6584 40H15.3817C12.0653 40 10.07 39.9994 8.54578 39.7159L17.3668 28.0344L16.6584 40Z"/>
     <path d="M31.2482 39.7514C29.7502 39.9988 27.7875 40 24.6183 40H23.109L22.397 28.0309L31.2482 39.7514Z"/>
     <path d="M39.6714 31.6708C39.607 31.9773 39.5312 32.2655 39.4388 32.5426C38.8336 34.3567 37.7711 35.9522 36.3866 37.1982L26.4399 26.044L39.6714 31.6708Z"/>

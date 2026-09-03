@@ -102,7 +102,7 @@ const styles = stylex.create({
     borderRadius: 10,
     outline: "none",
     ":hover": { color: "#1a1b25", backgroundColor: "rgba(0, 0, 0, 0.04)" },
-    ":focus-visible": { boxShadow: "0 0 0 2px #a3a3a3" },
+    ":focus-visible": { boxShadow: "0 0 0 2px #f48120" },
   },
   closeIcon: { width: 16, height: 16 },
 });

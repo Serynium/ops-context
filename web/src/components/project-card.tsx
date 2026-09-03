@@ -37,7 +37,7 @@ export function ProjectCard({
         <TableCell>
           <div {...stylex.props(styles.projectHead)}>
             <ProjectIcon
-              icon={project.icon || "circle:periwinkle"}
+              icon={project.icon || "circle:orange"}
               size={20}
             />
             <div {...stylex.props(styles.projectText)}>
@@ -85,7 +85,7 @@ export function ProjectCard({
               hint="An abstract shape from the palette, shown next to the project name in the inbox and in notifications."
             >
               <IconPicker
-                value={project.icon || "circle:periwinkle"}
+                value={project.icon || "circle:orange"}
                 onChange={(icon) => onPatch({ icon })}
               />
             </SettingRow>

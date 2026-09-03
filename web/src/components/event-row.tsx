@@ -26,7 +26,7 @@ export function EventRow({
       {!grouped && (
         <div {...stylex.props(styles.eventProject)}>
           <ProjectIcon
-            icon={event.project_icon || "circle:periwinkle"}
+            icon={event.project_icon || "circle:orange"}
             size={14}
           />
           <span {...stylex.props(styles.truncate)}>{event.project_name}</span>

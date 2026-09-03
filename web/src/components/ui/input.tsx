@@ -24,8 +24,8 @@ const styles = stylex.create({
     "@media (min-width: 640px)": { fontSize: 14 },
     ":focus-within": {
       zIndex: 1,
-      borderColor: "#a3a3a3",
-      boxShadow: "0 0 0 3px rgba(163, 163, 163, 0.24)",
+      borderColor: "#d6710e",
+      boxShadow: "0 0 0 3px rgba(244, 129, 32, 0.22)",
     },
     ":has([aria-invalid='true'])": {
       borderColor: "rgba(239, 68, 68, 0.36)",

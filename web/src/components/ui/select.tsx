@@ -19,8 +19,8 @@ const styles = stylex.create({
 		cursor: "pointer",
 		":hover": { backgroundColor: "#fafafc" },
 		":focus-visible": {
-			borderColor: "#8b92ec",
-			boxShadow: "0 0 0 3px #dbdff8",
+			borderColor: "#d6710e",
+			boxShadow: "0 0 0 3px #ffd7b0",
 		},
 		":disabled": { cursor: "default", opacity: 0.64 },
 	},

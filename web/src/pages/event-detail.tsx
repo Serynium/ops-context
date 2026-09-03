@@ -232,7 +232,7 @@ export function EventDetailPage() {
 								<div {...stylex.props(styles.head)}>
 									<div {...stylex.props(styles.meta)}>
 										<ProjectIcon
-											icon={item.project_icon || "circle:periwinkle"}
+											icon={item.project_icon || "circle:orange"}
 											size={14}
 										/>
 										{item.project_name}

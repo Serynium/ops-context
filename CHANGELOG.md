@@ -33,6 +33,7 @@ All notable changes to Flarebox are recorded here.
 ### Changed
 
 - Renamed the project to Flarebox and replaced the application and PWA icons with the Burst mark.
+- Separated the compact app mark from the rounded README logo and replaced the violet primary UI accents with a bright orange palette.
 - Default grouped pages now scan materialized groups rather than all fingerprinted occurrences. Level, source, fingerprint, search, time, and silence filters continue to use the exact dynamic query.
 - Project-scoped event listing now uses an ordered `(project_id, created_at DESC, id DESC)` index in place of the redundant project-only index. Grouped reads use the existing fingerprint index while preserving distinct empty-fingerprint events.
 - Removed the five-minute D1 delivery-repair Cron and narrowed scheduled work to bounded retention every 15 minutes. Deployments with retention disabled can omit Cron entirely.

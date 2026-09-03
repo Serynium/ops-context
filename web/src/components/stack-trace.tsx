@@ -26,7 +26,7 @@ const styles = stylex.create({
 		backgroundColor: "transparent",
 		textAlign: "left",
 		":hover": { backgroundColor: "#fafafc" },
-		":focus-visible": { outline: "2px solid #aeb3ed", outlineOffset: -2 },
+		":focus-visible": { outline: "2px solid #f48120", outlineOffset: -2 },
 	},
 	warning: { color: "#b91c1c", flexShrink: 0, fontSize: 14 },
 	error: {
@@ -54,7 +54,7 @@ const styles = stylex.create({
 		backgroundColor: "transparent",
 		color: "#6b6d7c",
 		":hover": { backgroundColor: "#f0f1f5", color: "#1a1b25" },
-		":focus-visible": { outline: "2px solid #aeb3ed" },
+		":focus-visible": { outline: "2px solid #f48120" },
 	},
 	icon: { width: 14, height: 14, display: "block" },
 	chevron: {

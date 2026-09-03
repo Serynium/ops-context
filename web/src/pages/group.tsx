@@ -66,7 +66,7 @@ export function GroupPage() {
 						<div {...stylex.props(styles.head)}>
 							<div {...stylex.props(styles.meta)}>
 								<ProjectIcon
-									icon={first.project_icon || "circle:periwinkle"}
+									icon={first.project_icon || "circle:orange"}
 									size={14}
 								/>
 								{first.project_name}

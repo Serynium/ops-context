@@ -14,8 +14,8 @@ export const styles = stylex.create({
 		color: "#1a1b25",
 	},
 	mark: {
-		width: 22,
-		height: 22,
+		width: 28,
+		height: 28,
 	},
 	wordmark: {
 		fontSize: 20,
@@ -52,9 +52,9 @@ export const styles = stylex.create({
 		whiteSpace: "nowrap",
 		outline: "none",
 		":hover": { color: "#1a1b25" },
-		":focus-visible": { boxShadow: "0 0 0 3px #dbdff8" },
+		":focus-visible": { boxShadow: "0 0 0 3px #ffd7b0" },
 	},
-	navLinkActive: { borderBottomColor: "#7c83e8", color: "#1a1b25" },
+	navLinkActive: { borderBottomColor: "#f48120", color: "#1a1b25" },
 	footer: {
 		marginTop: 40,
 		paddingTop: 16,
@@ -191,8 +191,8 @@ export const styles = stylex.create({
 		whiteSpace: "nowrap",
 	},
 	count: {
-		color: "#5a62d4",
-		backgroundColor: "#eef0fb",
+		color: "#b45309",
+		backgroundColor: "#fff3e8",
 		borderRadius: 999,
 		paddingBlock: 1,
 		paddingInline: 8,
@@ -225,7 +225,7 @@ export const styles = stylex.create({
 		fontSize: 13,
 		minWidth: 0,
 	},
-	link: { color: "#7c83e8", ":hover": { color: "#5a62d4" } },
+	link: { color: "#b45309", ":hover": { color: "#92400e" } },
 	mono: {
 		fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 		overflowWrap: "anywhere",
@@ -343,7 +343,7 @@ export const styles = stylex.create({
 		fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 		fontSize: 12,
 	},
-	pillAccent: { color: "#5a62d4", backgroundColor: "#eef0fb" },
+	pillAccent: { color: "#b45309", backgroundColor: "#fff3e8" },
 	delivery: {
 		display: "grid",
 		gridTemplateColumns: "1fr auto 1fr auto",

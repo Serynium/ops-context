@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/public/logo.svg" width="160" alt="Flarebox logo">
+  <img src="docs/logo.svg" width="160" alt="Flarebox logo">
 </p>
 
 <h1 align="center">Flarebox</h1>

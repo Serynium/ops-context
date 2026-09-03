@@ -14,9 +14,9 @@ const styles = stylex.create({
     fontSize: 13,
   },
   info: {
-    borderColor: "#dbdff8",
-    backgroundColor: "#eef0fb",
-    color: "#5a62d4",
+    borderColor: "#ffd7b0",
+    backgroundColor: "#fff3e8",
+    color: "#b45309",
   },
   warning: {
     borderColor: "#f5b266",
@@ -24,9 +24,9 @@ const styles = stylex.create({
     color: "#9b5b12",
   },
   error: {
-    borderColor: "#c8b8ef",
-    backgroundColor: "#f5f0ff",
-    color: "#6a45c4",
+    borderColor: "#fecaca",
+    backgroundColor: "#fef2f2",
+    color: "#b91c1c",
   },
   success: {
     borderColor: "#bce5d7",
